@@ -50,6 +50,7 @@
     "./universal/async": "./universal/async.ts",
     "./universal/axis": "./universal/axis.ts",
     "./universal/bounded-integer": "./universal/bounded-integer.ts",
+    "./universal/color": "./universal/color.ts",
     "./universal/concurrency": "./universal/concurrency.ts",
     "./universal/constants": "./universal/constants.ts",
     "./universal/csv": "./universal/csv.ts",
