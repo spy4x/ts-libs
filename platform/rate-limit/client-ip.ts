@@ -136,26 +136,46 @@ export function clientIp(
   return peer ?? UNKNOWN_CLIENT_IP
 }
 
+/** Options for {@link clientIpBucket}. */
+export interface ClientIpBucketOptions {
+  /**
+   * The length of the IPv6 network one client is counted as, an integer from 0 to 128. Defaults
+   * to 64, one ordinary allocation. A budget that a stranger with a free tunnel broker's /48 must
+   * not be able to multiply, such as a sign-up code budget per address, passes 48. Any other
+   * value throws a `RangeError`, even for an IPv4 address, so a bad setting fails on the first
+   * request.
+   */
+  ipv6Prefix?: number
+}
+
 /**
  * The rate-limit identity of a client address: an IPv6 address reduced to its /64 network
- * (`2001:db8:1:2::/64`), anything else unchanged.
+ * (`2001:db8:1:2::/64`), or to the network `options.ipv6Prefix` names, anything else unchanged.
  *
  * One ordinary IPv6 allocation — a household, a phone, a rented server — is a whole /64, 2^64
  * addresses the holder can pick from freely. Keyed per address, such a client rotates through them
  * and is never limited, and every rotated address becomes a stored bucket (#219). Keyed per /64, it
- * gets one budget, the same as one IPv4 client. IPv4 addresses, and values that are not an address
- * (the placeholder, a Unix socket path), come back as they are. An IPv4-mapped IPv6 address comes
- * back as its IPv4 address.
+ * gets one budget, the same as one IPv4 client. A free tunnel broker hands out a /48, 65,536 /64s,
+ * so a budget a stranger must not multiply counts per /48 (`ipv6Prefix: 48`). IPv4 addresses, and
+ * values that are not an address (the placeholder, a Unix socket path), come back as they are. An
+ * IPv4-mapped IPv6 address comes back as its IPv4 address.
  */
-export function clientIpBucket(ip: string): string {
+export function clientIpBucket(ip: string, options: ClientIpBucketOptions = {}): string {
+  const prefix = options.ipv6Prefix ?? 64
+  if (!Number.isInteger(prefix) || prefix < 0 || prefix > 128) {
+    throw new RangeError(`ipv6Prefix must be an integer from 0 to 128, got ${prefix}`)
+  }
   const parsed = parseIp(ip)
   if (parsed === null) return ip
   if (parsed.version === 4) return parsed.address
   const groups: string[] = []
-  for (let i = 0; i < 8; i += 2) {
-    groups.push(((parsed.bytes[i] << 8) | parsed.bytes[i + 1]).toString(16))
+  for (let i = 0; i < 16; i += 2) {
+    // The bits of this 16-bit group that lie inside the prefix; the rest are cleared.
+    const kept = Math.min(16, Math.max(0, prefix - i * 8))
+    const mask = kept === 0 ? 0 : (0xffff << (16 - kept)) & 0xffff
+    groups.push((((parsed.bytes[i] << 8) | parsed.bytes[i + 1]) & mask).toString(16))
   }
-  return `${normalizeIp(`${groups.join(":")}::`)}/64`
+  return `${normalizeIp(groups.join(`:`))}/${prefix}`
 }
 
 /**

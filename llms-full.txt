@@ -3057,6 +3057,11 @@ import { clientIp, clientIpBucket, rateLimitKey, RateLimitKind } from "@spy4x/pl
 const key = rateLimitKey(RateLimitKind.Ip, clientIpBucket(clientIp(req, socketAddress)))
 ```
 
+A budget a stranger must not multiply, such as sign-up codes sent to one address, can count a wider
+network: a free tunnel broker hands out a /48, which holds 65,536 /64s.
+`clientIpBucket(ip, { ipv6Prefix: 48 })` answers `2001:db8:1::/48` for every address in it. The
+prefix is an integer from 0 to 128; any other value throws a `RangeError`.
+
 With `trustedProxy: false` (the default) only the transport peer address is used. With
 `trustedProxy: true` the order is `CF-Connecting-IP` > first `X-Forwarded-For` hop > `X-Real-IP` >
 peer address. `X-Forwarded-For` is read hop by hop, never as a whole string, because a client

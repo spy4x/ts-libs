@@ -1,4 +1,4 @@
-import { assertEquals } from "@std/assert"
+import { assertEquals, assertThrows } from "@std/assert"
 import { describe, it } from "@std/testing/bdd"
 
 import {
@@ -286,6 +286,34 @@ describe("clientIpBucket", () => {
   it("leaves a value that is not an address unchanged", () => {
     assertEquals(clientIpBucket(UNKNOWN_CLIENT_IP), UNKNOWN_CLIENT_IP)
     assertEquals(clientIpBucket("/run/app.sock"), "/run/app.sock")
+  })
+
+  it("gives every /64 of one IPv6 /48 one bucket with ipv6Prefix 48, and two /48s two", () => {
+    const per48 = { ipv6Prefix: 48 }
+    assertEquals(clientIpBucket("2001:db8:1:2::1", per48), "2001:db8:1::/48")
+    assertEquals(clientIpBucket("2001:db8:1:ffff:ffff::1", per48), "2001:db8:1::/48")
+    assertEquals(clientIpBucket("2001:db8:2::1", per48), "2001:db8:2::/48")
+  })
+
+  it("cuts inside a group with ipv6Prefix 56", () => {
+    const per56 = { ipv6Prefix: 56 }
+    assertEquals(clientIpBucket("2001:db8:1:2ff:ffff::1", per56), "2001:db8:1:200::/56")
+    assertEquals(clientIpBucket("2001:db8:1:200::1", per56), "2001:db8:1:200::/56")
+    assertEquals(clientIpBucket("2001:db8:1:300::1", per56), "2001:db8:1:300::/56")
+  })
+
+  it("leaves IPv4 and a mapped address as they are whatever the prefix", () => {
+    assertEquals(clientIpBucket("192.0.2.1", { ipv6Prefix: 48 }), "192.0.2.1")
+    assertEquals(clientIpBucket("::ffff:192.0.2.1", { ipv6Prefix: 48 }), "192.0.2.1")
+  })
+
+  it("rejects a prefix that is not an integer from 0 to 128", () => {
+    for (const ipv6Prefix of [-1, 129, 48.5, Number.NaN]) {
+      assertThrows(() => clientIpBucket("2001:db8::1", { ipv6Prefix }), RangeError)
+      assertThrows(() => clientIpBucket("192.0.2.1", { ipv6Prefix }), RangeError)
+    }
+    assertEquals(clientIpBucket("2001:db8::1", { ipv6Prefix: 0 }), "::/0")
+    assertEquals(clientIpBucket("2001:db8::1", { ipv6Prefix: 128 }), "2001:db8::1/128")
   })
 })
 
