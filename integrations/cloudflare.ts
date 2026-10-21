@@ -21,12 +21,7 @@
  */
 
 import { readBoundedJson } from "@spy4x/net/bounded-body"
-import {
-  DEFAULT_REQUEST_TIMEOUT_MS,
-  describeTransportError,
-  isRequestTimeout,
-  releaseResponseBody,
-} from "./retry.ts"
+import { DEFAULT_REQUEST_TIMEOUT_MS, describeTransportError, isRequestTimeout } from "./retry.ts"
 
 /** Cloudflare's purge-by-URL endpoint accepts at most this many files per call. */
 export const PURGE_BATCH_SIZE = 30
@@ -73,7 +68,7 @@ const readJson = async (response: Response): Promise<unknown> => {
   try {
     return await readBoundedJson(response, { maxBytes: MAX_RESPONSE_BYTES, timeoutMs: 5_000 })
   } catch {
-    await releaseResponseBody(response).catch(() => undefined)
+    // `readBoundedJson` cancels the body on every failure it throws for.
     return undefined
   }
 }

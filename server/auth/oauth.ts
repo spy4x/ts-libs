@@ -42,7 +42,7 @@ import { readBoundedJson } from "@spy4x/net/bounded-body"
 import { SecondFactorStatus, type SessionDevice } from "../sign-in/mod.ts"
 import { validate } from "@spy4x/validation"
 
-import { isStoreText, MAX_SUBJECT_LENGTH } from "./input.ts"
+import { isStoreText, MAX_SUBJECT_LENGTH, positiveInteger } from "./input.ts"
 import { AuthConflictError, type AuthKey, type AuthUser, normalizeEmail } from "./model.ts"
 import {
   createMemoryOAuthFlowStore,
@@ -419,10 +419,19 @@ export function createOAuthSignIn(
   const tokenEndpoint = requireUrl(provider.tokenEndpoint, "tokenEndpoint")
   const userInfoEndpoint = requireUrl(provider.userInfoEndpoint, "userInfoEndpoint")
   const redirectUri = requireRedirectUri(options.redirectUri)
-  const ttlMs =
-    positiveInteger(options.flowTtlSeconds ?? DEFAULT_FLOW_TTL_SECONDS, "flowTtlSeconds") *
+  const ttlMs = positiveInteger(
+    options.flowTtlSeconds ?? DEFAULT_FLOW_TTL_SECONDS,
+    "flowTtlSeconds",
+    undefined,
+    TypeError,
+  ) *
     1000
-  const timeoutMs = positiveInteger(options.timeoutMs ?? DEFAULT_TIMEOUT_MS, "timeoutMs")
+  const timeoutMs = positiveInteger(
+    options.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+    "timeoutMs",
+    undefined,
+    TypeError,
+  )
   const send = options.fetch ?? ((request: Request) => fetch(request))
   const clock = options.clock ?? systemClock
   const method = `oauth:${provider.id}`
@@ -807,11 +816,4 @@ function requireRedirectUri(value: unknown): string {
   // As given, not `url.href`: the provider compares it with the registered URI character by
   // character, and `href` can add a trailing slash.
   return value as string
-}
-
-function positiveInteger(value: unknown, name: string): number {
-  if (!Number.isSafeInteger(value) || (value as number) < 1) {
-    throw new TypeError(`${name} must be a positive integer`)
-  }
-  return value as number
 }

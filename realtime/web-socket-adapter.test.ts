@@ -132,9 +132,10 @@ describe("adaptWebSocket", () => {
     expect(opened).toBe(1)
   })
 
-  it("delivers only string message data to onMessage", () => {
+  it("delivers string data to onMessage and reports binary data to onBinaryFrame", () => {
     const native = new FakeNativeSocket()
-    const socket = adaptWebSocket(native)
+    const binary: unknown[] = []
+    const socket = adaptWebSocket(native, { onBinaryFrame: (data) => binary.push(data) })
     const received: string[] = []
     socket.onMessage((data) => received.push(data))
 
@@ -142,6 +143,7 @@ describe("adaptWebSocket", () => {
     native.emit("message", { data: new Uint8Array([1, 2, 3]) } as unknown as MessageEvent)
 
     expect(received).toEqual(["frame-1"])
+    expect(binary).toEqual([new Uint8Array([1, 2, 3])])
   })
 
   it("reports close info with the abnormal flag derived from wasClean", () => {

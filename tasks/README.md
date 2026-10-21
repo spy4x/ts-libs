@@ -1,19 +1,21 @@
 # `@spy4x/tasks`
 
-The to-do model that the CalDAV task apps share: the task a screen shows, the list views, the
-quick-add syntax and the runner that sends reminders. A domain model, not a general helper, which
-is why it has a package of its own instead of a general name in `@spy4x/platform` or `@spy4x/time`.
+The to-do model that the CalDAV task apps share: the task a screen shows, writing it back, which
+reminders are due, the list views, the quick-add syntax and the runner that sends reminders. A
+domain model, not a general helper, which is why it has a package of its own instead of a general
+name in `@spy4x/platform` or `@spy4x/time`.
 
 | Entry point                    | Exports                                                                                                                                                   |
 | ------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `@spy4x/tasks/model`           | The `Task` a screen shows, read from a CalDAV resource: `parseTask`, `priorityBand`, `PriorityBand`, `TaskStatus`, `isOpen`, `dateInstant`, `dateDay`     |
+| `@spy4x/tasks/edit`            | Writing a task back: `createTask`, `editTask`, `completeTask`, `reopenTask`, `rebaseEdit`, `keepMine`, `keepMineText`, `collisions`                       |
+| `@spy4x/tasks/reminders`       | `dueReminders`: the reminders of one task that fall in a time window                                                                                      |
 | `@spy4x/tasks/view`            | List screens for that `Task`: `SortMode`, `sortTasks`, `reorderTask`, `buildTree`, `flattenTree`, `searchTasks`, `todayView`, `upcomingView`, `isOverdue` |
 | `@spy4x/tasks/quick-add`       | `parseQuickAdd`: one task line to title, tags, contexts, due date, priority and token spans                                                               |
 | `@spy4x/tasks/reminder-runner` | `createReminderRunner`, `ReminderStatePort`, `ReminderRunnerState`, `ReminderNotifyResult`: sends the task reminders that came due since the last run     |
 
-Reading, patching and completing the iCalendar text of a task stays in `@spy4x/time`
-(`time/ical-tasks`, `time/ical-tasks-edit`, `time/ical-tasks-reminders`), and talking to the server
-in `@spy4x/caldav`.
+The low-level iCalendar reading and patching of a VTODO stays in `@spy4x/time/ical-tasks`, and
+talking to the server in `@spy4x/caldav`.
 
 ## Install
 
@@ -51,6 +53,22 @@ a throw: one odd resource must not take the whole list down. `priorityBand` turn
 `PRIORITY` (0 to 9) into the band a screen shows, `isOpen` says whether a task still needs doing,
 and `dateInstant` and `dateDay` turn a task's date into a moment or a `YYYY-MM-DD` day in the
 viewer's time zone.
+
+## Writing a task back
+
+`createTask` builds the text of a new task or subtask and the `href` to create it at; the caller
+passes the new `UID` and the clock. `editTask` applies what the editor changed as a patch of the
+original text, so lines another app wrote survive, and says where a task moved to another list
+goes. `completeTask` completes a task or moves a repeating one to its next occurrence, with the
+text to write back for an undo; `reopenTask` reopens a completed one. After a 412 on `If-Match`,
+`rebaseEdit`, `keepMine` and `keepMineText` re-apply the edit to the server's fresh copy.
+
+## Due reminders
+
+`dueReminders` reads one task's `VALARM`s and snooze and returns the reminders whose moment falls
+after `after` and up to `upTo`, each with a key that is the same on every read. It never throws for
+a task it cannot read; such a task has no reminders. `createReminderRunner` below calls it on a
+timer.
 
 ## The views
 
@@ -95,12 +113,14 @@ runner.start()
 
 ## The old import paths
 
-Before this package, the four entry points had general names. Those paths keep working until 2.0
+Before this package, these entry points had general names. Those paths keep working until 2.0
 and hand out the very same values, so an app can move one import at a time:
 
 | Old path, kept until 2.0                    | Import from                    |
 | ------------------------------------------- | ------------------------------ |
 | `@spy4x/time/ical-tasks-model`              | `@spy4x/tasks/model`           |
+| `@spy4x/time/ical-tasks-edit`               | `@spy4x/tasks/edit`            |
+| `@spy4x/time/ical-tasks-reminders`          | `@spy4x/tasks/reminders`       |
 | `@spy4x/platform/universal/ical-tasks-view` | `@spy4x/tasks/view`            |
 | `@spy4x/platform/universal/quick-add`       | `@spy4x/tasks/quick-add`       |
 | `@spy4x/platform/server/reminder-runner`    | `@spy4x/tasks/reminder-runner` |

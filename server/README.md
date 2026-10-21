@@ -708,8 +708,10 @@ address. `releaseKeyEmail` does the same without deleting the key: it takes the 
 keeps signing in, by its `subject`, while the old address stops naming the account. An unproven
 address is dropped too, since the next person to prove it would otherwise delete the key.
 
-**Addresses are compared in one form.** `normalizeEmail` trims and lower-cases, and accepts only
-what `@spy4x/email` will send to. The store refuses a key whose `email` is not already in that form.
+**Addresses are compared in one form.** `normalizeEmail` is `parseBareAddress` of `@spy4x/email`:
+it trims, checks the shape (a local part of at most 64 characters, no look-alike such as the Kelvin
+sign), then lower-cases, so it accepts only what `@spy4x/email` will send to. The store refuses a
+key whose `email` is not already in that form.
 
 **A challenge counts guesses.** `issueChallenge` stores the hash of a code for a
 `(purpose, subject)`. Asking for a new code replaces the hash and the expiry but keeps the guess
@@ -919,9 +921,12 @@ used by then, so the person asks for a new one.
   email-code provider's `proveAddress`, to keep it.
 - **It does not limit how often a verification code is asked for.** Every `requestVerification`
   call is a mail; rate-limit its route like the reset route.
-- **It does not cancel the address's other reset codes.** A successful reset leaves every other
-  unexpired reset code for that address working until it expires (`resetTtlMinutes`), so keep the
-  lifetime short.
+- **It cancels the address's other reset codes only with a store that can.** Once a code matches,
+  the provider deletes the address's other reset codes through the store's optional
+  `deleteChallenges`, which both stores of this package have. A store of your own without it leaves
+  every other unexpired code for that address working until it expires (`resetTtlMinutes`), so keep
+  the lifetime short. Codes issued by 1.82 or earlier still work after the upgrade, until they
+  expire, and are not cancelled.
 
 ## `server/auth/email-code`
 
@@ -2627,6 +2632,13 @@ one run. A correct secret gives back that one slot; it does not wipe the count, 
 guesser a fresh budget every time the owner signs in. While a lock runs, every check is refused, a
 correct one included, so someone who can reach the check can keep the owner out of it for up to the
 maximum lock.
+
+**Pass the pool.** On a pool each update runs in its own transaction and is committed at once.
+`createPostgresLockoutStore` also takes the `tx` of the app's own `sql.begin`; each update then runs
+in a savepoint, and the count commits or rolls back with the app's transaction. A rollback after a
+wrong guess erases that guess's count: an app that refuses a wrong code by throwing inside its
+transaction is never locked out, however many guesses it gets. A refused guess must commit, so pass
+a transaction handle only when that transaction commits whatever the guess was.
 
 **The Postgres store takes the caller's table.** Table, schema and column names must be lower-case
 identifiers; they are validated and sent through the driver's identifier quoting, never spliced

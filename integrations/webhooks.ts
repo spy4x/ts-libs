@@ -34,6 +34,8 @@
  * @module
  */
 
+import { decodeHex } from "@std/encoding"
+
 /** Why a delivery was rejected. Every value is a rejection. */
 export type WebhookRejectReason =
   | "invalid_secret"
@@ -137,14 +139,6 @@ const toArrayBuffer = (bytes: Uint8Array): Uint8Array<ArrayBuffer> => {
   const copy = new Uint8Array(new ArrayBuffer(bytes.length))
   copy.set(bytes)
   return copy
-}
-
-const hexToBytes = (hex: string): Uint8Array<ArrayBuffer> => {
-  const bytes = new Uint8Array(new ArrayBuffer(hex.length / 2))
-  for (let index = 0; index < bytes.length; index++) {
-    bytes[index] = Number.parseInt(hex.substring(index * 2, index * 2 + 2), 16)
-  }
-  return bytes
 }
 
 /** Reads a header case-insensitively from a `Headers` instance or a plain record. */
@@ -396,7 +390,7 @@ export const verifyWebhookRequest = async (
     const matches = await crypto.subtle.verify(
       "HMAC",
       key,
-      toArrayBuffer(hexToBytes(digest)),
+      decodeHex(digest),
       signedBuffer,
     )
     valid = valid || matches

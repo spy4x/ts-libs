@@ -6,10 +6,14 @@
 import { describe, it } from "@std/testing/bdd"
 import { expect } from "@std/expect"
 import * as model from "./model.ts"
+import * as edit from "./edit.ts"
+import * as reminders from "./reminders.ts"
 import * as view from "./view.ts"
 import * as quickAdd from "./quick-add.ts"
 import * as reminderRunner from "./reminder-runner.ts"
 import * as oldModel from "@spy4x/time/ical-tasks-model"
+import * as oldEdit from "@spy4x/time/ical-tasks-edit"
+import * as oldReminders from "@spy4x/time/ical-tasks-reminders"
 import * as oldView from "@spy4x/platform/universal/ical-tasks-view"
 import * as oldQuickAdd from "@spy4x/platform/universal/quick-add"
 import * as oldReminderRunner from "@spy4x/platform/server/reminder-runner"
@@ -18,6 +22,8 @@ type Names = Record<string, unknown>
 
 const PAIRS: [entry: string, now: Names, oldPath: string, old: Names][] = [
   ["model", model, "@spy4x/time/ical-tasks-model", oldModel],
+  ["edit", edit, "@spy4x/time/ical-tasks-edit", oldEdit],
+  ["reminders", reminders, "@spy4x/time/ical-tasks-reminders", oldReminders],
   ["view", view, "@spy4x/platform/universal/ical-tasks-view", oldView],
   ["quick-add", quickAdd, "@spy4x/platform/universal/quick-add", oldQuickAdd],
   [

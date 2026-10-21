@@ -18,7 +18,7 @@
  * extra key inside `keys` without affecting the parent, unlike intersecting one in with `.and()`.
  */
 import { type Type, type } from "arktype"
-import type { Default } from "arktype/internal/attributes.ts"
+import type { Default } from "./default.ts"
 
 import { hasUnstorableTextCharacters } from "../universal/text.ts"
 

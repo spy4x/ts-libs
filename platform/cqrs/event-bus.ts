@@ -102,7 +102,8 @@ export class EventBus {
    * runs, so a listener that subscribes or unsubscribes during dispatch affects only later `emit`
    * calls, never the one in progress. A synchronous throw or a rejected returned promise is caught
    * per listener and handed to the constructor's `onListenerError`, so it cannot stop a sibling
-   * listener in the same dispatch.
+   * listener in the same dispatch. An `onListenerError` that throws in turn is caught too, and both
+   * errors go to `console.error`.
    */
   emit<T extends Event<unknown>>(event: T): void {
     queueMicrotask(() => {
@@ -115,12 +116,22 @@ export class EventBus {
         try {
           const result = callback(event as Event<unknown>)
           if (result instanceof Promise) {
-            result.catch((error) => this.onListenerError(eventClass, error))
+            result.catch((error) => this.report(eventClass, error))
           }
         } catch (error) {
-          this.onListenerError(eventClass, error)
+          this.report(eventClass, error)
         }
       }
     })
+  }
+
+  /** Hand a listener's failure to `onListenerError`, and never let that handler's own throw escape. */
+  private report(eventClass: EventConstructor<Event<unknown>>, error: unknown): void {
+    try {
+      this.onListenerError(eventClass, error)
+    } catch (handlerError) {
+      defaultErrorHandler(eventClass, error)
+      console.error(`[event-bus] onListenerError for ${eventClass.name} failed`, handlerError)
+    }
   }
 }

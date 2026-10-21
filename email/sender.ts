@@ -78,8 +78,9 @@ export interface ConsoleSenderOptions {
  *
  * Ported from an earlier internal project's dev branch (`console.log` of the send
  * command), with the part it got wrong left behind: the source logs the whole
- * `SendEmailCommand` — `JSON.stringify`, inside the *production* branch too — which puts every message body and every recipient into the log,
- * while its credentials sit in the SESv2 client config and never print. This one
+ * `SendEmailCommand` — `JSON.stringify`, inside the *production* branch too —
+ * which puts every message body and every recipient into the log, while its
+ * credentials sit in the SESv2 client config and never print. This one
  * logs the envelope, the subject, an attachment count and a body preview, and has
  * no credential in scope to log.
  */

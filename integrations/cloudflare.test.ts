@@ -315,3 +315,22 @@ Deno.test("redacts a token that straddles the message length cap", async () => {
   assertEquals(result.success, false)
   assertEquals(result.error.includes(TOKEN.slice(0, 10)), false, result.error)
 })
+
+Deno.test("cancels an oversized answer body instead of leaving it open", async () => {
+  let cancelled = false
+  const chunk = new Uint8Array(16 * 1024).fill(0x20)
+  const { fetcher } = stub(() =>
+    new Response(
+      new ReadableStream<Uint8Array>({
+        pull: (controller) => controller.enqueue(chunk),
+        cancel: () => {
+          cancelled = true
+        },
+      }),
+      { status: 200 },
+    )
+  )
+  const result = await purgeUrls({ token: TOKEN, zoneId: "zone1", urls: urlsOf(1), fetch: fetcher })
+  assertEquals(result.success, false)
+  assert(cancelled, "the oversized body was left open")
+})
