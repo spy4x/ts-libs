@@ -22,7 +22,7 @@ import {
   icsUnescape,
   icsUnescapeParameter,
 } from "./ics-core.ts"
-import { vtimezoneInstant } from "./ical-timezone.ts"
+import { findTimezone, vtimezoneInstant } from "./ical-timezone.ts"
 import { isValidTimeZone, zonedDateTime } from "./tz.ts"
 import { WINDOWS_ZONES } from "./windows-zones.ts"
 
@@ -519,14 +519,6 @@ export function readDate(property: IcalProperty): IcalDateValue | undefined {
     : { kind: IcalDateKind.Floating, date, time }
 }
 
-/** Whether `root` (or any component under it) holds a VTIMEZONE whose TZID is `tzid`. */
-function hasTimezone(root: IcalComponent, tzid: string): boolean {
-  if (root.name.toUpperCase() === "VTIMEZONE" && getProperty(root, "TZID")?.value === tzid) {
-    return true
-  }
-  return root.components.some((child) => hasTimezone(child, tzid))
-}
-
 /** The sibling whose value type must match `name`'s, per RFC 5545 §3.6.1 and §3.6.2. */
 const PAIRED: Record<string, string[]> = {
   DTSTART: ["DUE", "DTEND"],
@@ -601,7 +593,7 @@ export function writeDate(
   }
   if (value.kind === IcalDateKind.Zoned) {
     const carried = existing && getParameter(existing, "TZID")?.values[0]
-    const defined = options.root && value.tzid && hasTimezone(options.root, value.tzid)
+    const defined = options.root && value.tzid && findTimezone(options.root, value.tzid)
     if (!value.tzid || (value.tzid !== carried && !defined)) {
       return fail(IcalErrorCode.UnknownTzid, `no VTIMEZONE defines ${JSON.stringify(value.tzid)}`)
     }
