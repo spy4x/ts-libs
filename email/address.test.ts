@@ -38,6 +38,21 @@ Deno.test("unquotes a display name that contains a comma", () => {
   })
 })
 
+Deno.test("accepts `<` and `>` inside a quoted display name", () => {
+  assertEquals(parseAddress('"Smith <Jr>" <j@example.com>'), {
+    address: "j@example.com",
+    name: "Smith <Jr>",
+  })
+  assertEquals(parseAddress('"a \\" <b" <j@example.com>'), {
+    address: "j@example.com",
+    name: 'a " <b',
+  })
+})
+
+Deno.test("still refuses `<` in an unquoted display name", () => {
+  assertThrows(() => parseAddress("Smith <Jr> <j@example.com>"), TypeError)
+})
+
 Deno.test("accepts an unquoted display name containing a comma", () => {
   assertEquals(parseAddress("Doe, Jane <jane@example.com>"), {
     address: "jane@example.com",

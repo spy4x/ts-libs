@@ -30,9 +30,10 @@
  * @module
  */
 
-import { backoffDelay } from "@spy4x/platform/universal/async"
+import { retryDelay } from "./backoff.ts"
 import { type Clock, createSystemClock, type TimerHandle } from "./clock.ts"
-import { watchPageResume } from "./page-lifecycle.ts"
+import { callListener } from "./listener-guard.ts"
+import { type PageLifecycleTarget, watchPageResume } from "./page-lifecycle.ts"
 
 /**
  * What a flush answers. Nothing (or any value) means it completed; `"unreachable"` means it could
@@ -41,12 +42,7 @@ import { watchPageResume } from "./page-lifecycle.ts"
 export type SyncFlushResult = "unreachable" | void | undefined
 
 /** The parts of `window` and `document` the runner listens to. The global `window` fits. */
-export interface SyncRunnerTarget {
-  document: {
-    readonly visibilityState: string
-    addEventListener(type: "visibilitychange", listener: () => void): void
-    removeEventListener(type: "visibilitychange", listener: () => void): void
-  }
+export interface SyncRunnerTarget extends PageLifecycleTarget {
   addEventListener(type: "online" | "pageshow" | "focus", listener: (event: Event) => void): void
   removeEventListener(type: "online" | "pageshow" | "focus", listener: (event: Event) => void): void
 }
@@ -154,13 +150,7 @@ export function createSyncRunner(options: SyncRunnerOptions): SyncRunner {
   function update(patch: Partial<SyncRunnerState>): void {
     state = { ...state, ...patch }
     // A listener that throws must not stop the run it was told about, or every later run.
-    for (const listener of [...listeners]) {
-      try {
-        listener(state)
-      } catch (error) {
-        console.error("sync runner: a state listener threw", error)
-      }
-    }
+    for (const listener of [...listeners]) callListener(`a sync runner subscribe`, listener, state)
   }
 
   function cancelRetry(): void {
@@ -188,11 +178,11 @@ export function createSyncRunner(options: SyncRunnerOptions): SyncRunner {
   }
 
   function scheduleRetry(): void {
-    const delay = backoffDelay({
-      rawMs: baseDelayMs * 2 ** Math.max(0, state.failures - 1),
+    const delay = retryDelay({
+      attempt: state.failures - 1,
+      baseMs: baseDelayMs,
       maxMs: maxDelayMs,
       jitterRatio: 0.2,
-      mode: "downward",
       random: options.random,
     })
     retry = clock.setTimeout(() => {

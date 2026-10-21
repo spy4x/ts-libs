@@ -64,9 +64,34 @@ export function nextBackoffDelay(options: BackoffOptions): number {
     ...DEFAULT_BACKOFF,
     ...options,
   }
-  const attempt = Math.max(0, Math.floor(options.attempt))
-  const random = options.random ?? Math.random
+  return retryDelay({ ...options, baseMs, factor, maxMs, jitterRatio })
+}
 
-  const rawMs = baseMs * factor ** attempt
-  return backoffDelay({ rawMs, maxMs, jitterRatio, mode: "downward", random })
+/** Inputs of {@link retryDelay}: every field but `factor` and `random` is required. */
+export interface RetryDelayOptions {
+  /** Zero-based retry index; a fraction is floored and a negative value counts as `0`. */
+  attempt: number
+  baseMs: number
+  /** Growth per retry. Default 2. */
+  factor?: number
+  maxMs: number
+  jitterRatio: number
+  random?: () => number
+}
+
+/**
+ * Internal to the package: the one growth formula every retry in `realtime` uses. The delay before
+ * retry `attempt` is `baseMs × factor ** attempt`, capped at `maxMs` and jittered downward by
+ * `backoffDelay`, so it is never longer than the plain schedule.
+ */
+export function retryDelay(options: RetryDelayOptions): number {
+  const attempt = Math.max(0, Math.floor(options.attempt))
+  const rawMs = options.baseMs * (options.factor ?? 2) ** attempt
+  return backoffDelay({
+    rawMs,
+    maxMs: options.maxMs,
+    jitterRatio: options.jitterRatio,
+    mode: "downward",
+    random: options.random ?? Math.random,
+  })
 }

@@ -150,8 +150,8 @@ SmtpTransportFactory	interface	@spy4x/email	Builds a transport from a connection
 TRANSIT_ADDED_HEADER_NAMES	constant	@spy4x/email	Header field names a relay is expected to add to a message in transit.
 assertNoControlCharacters	function	@spy4x/email	Reject a value that carries a control character — CR and LF above all.
 assertSendableMessage	function	@spy4x/email	Validate a message before any transport sees it.
-canonicalizeBody	function	@spy4x/email	Canonicalize a message body per RFC 6376 §3.4.3 (simple) / §3.4.4 (relaxed).
-canonicalizeHeader	function	@spy4x/email	Canonicalize one header field per RFC 6376 §3.4.1 (simple) / §3.4.2 (relaxed).
+canonicalizeBody	function	@spy4x/email	Deprecated: An internal step of `verifyDkim`, exported by mistake; it goes in 2.0. Canonicalize a message body per RFC 6376 §3.4.3 (simple) / §3.4.4 (relaxed).
+canonicalizeHeader	function	@spy4x/email	Deprecated: An internal step of `verifyDkim`, exported by mistake; it goes in 2.0. Canonicalize one header field per RFC 6376 §3.4.1 (simple) / §3.4.2 (relaxed).
 createConsoleSender	function	@spy4x/email	A sender that logs instead of sending, for local runs and for tests that need a port implementation without a mail server.
 createSmtpSender	function	@spy4x/email	Create a sender for one SMTP configuration.
 emailButton	function	@spy4x/email	A table-based "bulletproof" call-to-action button for the body of a mail.
@@ -162,7 +162,7 @@ frameInstantLong	function	@spy4x/email	Render an instant as the recipient's own 
 frameInstantShort	function	@spy4x/email	frameInstantLong without the zone name, for a subject line: `"Fri 28 Aug 04:00"`.
 frameWallClockLong	function	@spy4x/email	Frame a `YYYY-MM-DD` + `HH:MM` wall clock written in `sourceTz` for a recipient in `recipientTz`, falling back to the zone the wall clock was written in.
 frameWallClockShort	function	@spy4x/email	frameWallClockLong without the zone name, for a subject line.
-hasBody	function	@spy4x/email	True when a body field carries something worth sending.
+hasBody	function	@spy4x/email	Deprecated: An internal step of `assertSendableMessage` and the SMTP sender, exported by mistake; it goes in 2.0. True when a body field carries something worth sending.
 htmlWrap	function	@spy4x/email	Wrap a body in the shared letter-shaped shell.
 icalAttachment	function	@spy4x/email	Build the ICS attachment for an event.
 isAddress	function	@spy4x/email	True when `value` is an addr-spec this module will send to.
@@ -170,9 +170,9 @@ parseAddress	function	@spy4x/email	Parse `Name <addr>` or a bare addr-spec into 
 parseAddresses	function	@spy4x/email	Parse a recipient list, deduplicating case-insensitively.
 parseDkimPublicKey	function	@spy4x/email	Parse a DKIM TXT record's `p=` field into a public key.
 parseDkimSignature	function	@spy4x/email	Parse a `DKIM-Signature` header value (without the leading `DKIM-Signature:`) into structured form.
-refuseHeaderLineEndings	function	@spy4x/email	Refuse a header block whose line endings are not uniform, and say why.
-sha256Base64	function	@spy4x/email	Compute the base64 SHA-256 digest of a string or of raw octets.
-splitMessage	function	@spy4x/email	Split a raw RFC 5322 message into raw header lines and a raw body.
+refuseHeaderLineEndings	function	@spy4x/email	Deprecated: An internal step of `verifyDkim`, exported by mistake; it goes in 2.0. Refuse a header block whose line endings are not uniform, and say why.
+sha256Base64	function	@spy4x/email	Deprecated: An internal step of `verifyDkim`, exported by mistake; it goes in 2.0. Compute the base64 SHA-256 digest of a string or of raw octets.
+splitMessage	function	@spy4x/email	Deprecated: An internal step of `verifyDkim`, exported by mistake; it goes in 2.0. Split a raw RFC 5322 message into raw header lines and a raw body.
 verifyDkim	function	@spy4x/email	Verify a message's DKIM signatures and report one verdict.
 verifyDkimSignatures	function	@spy4x/email	Verify every `DKIM-Signature` field in the message and return one result each, in the order the fields appear.
 EmailAddress	interface	@spy4x/email/address	A parsed mailbox: the addr-spec, plus the display name that preceded it.
@@ -200,14 +200,14 @@ DkimVerifyOptions	interface	@spy4x/email/dkim-verify	Options for verifyDkim and 
 DnsTxtResolver	interface	@spy4x/email/dkim-verify	DNS TXT lookup contract, defaulting to `Deno.resolveDns(name, "TXT")`, which needs `--allow-net`.
 MIN_RSA_KEY_BITS	constant	@spy4x/email/dkim-verify	RFC 8301 §3.2: "Verifiers MUST NOT consider signatures using RSA keys of less than 1024 bits as valid."
 TRANSIT_ADDED_HEADER_NAMES	constant	@spy4x/email/dkim-verify	Header field names a relay is expected to add to a message in transit.
-canonicalizeBody	function	@spy4x/email/dkim-verify	Canonicalize a message body per RFC 6376 §3.4.3 (simple) / §3.4.4 (relaxed).
-canonicalizeHeader	function	@spy4x/email/dkim-verify	Canonicalize one header field per RFC 6376 §3.4.1 (simple) / §3.4.2 (relaxed).
+canonicalizeBody	function	@spy4x/email/dkim-verify	Deprecated: An internal step of `verifyDkim`, exported by mistake; it goes in 2.0. Canonicalize a message body per RFC 6376 §3.4.3 (simple) / §3.4.4 (relaxed).
+canonicalizeHeader	function	@spy4x/email/dkim-verify	Deprecated: An internal step of `verifyDkim`, exported by mistake; it goes in 2.0. Canonicalize one header field per RFC 6376 §3.4.1 (simple) / §3.4.2 (relaxed).
 fetchDkimPublicKey	function	@spy4x/email/dkim-verify	Fetch and parse a DKIM public key from DNS, from `<selector>._domainkey.<domain>`.
 parseDkimPublicKey	function	@spy4x/email/dkim-verify	Parse a DKIM TXT record's `p=` field into a public key.
 parseDkimSignature	function	@spy4x/email/dkim-verify	Parse a `DKIM-Signature` header value (without the leading `DKIM-Signature:`) into structured form.
-refuseHeaderLineEndings	function	@spy4x/email/dkim-verify	Refuse a header block whose line endings are not uniform, and say why.
-sha256Base64	function	@spy4x/email/dkim-verify	Compute the base64 SHA-256 digest of a string or of raw octets.
-splitMessage	function	@spy4x/email/dkim-verify	Split a raw RFC 5322 message into raw header lines and a raw body.
+refuseHeaderLineEndings	function	@spy4x/email/dkim-verify	Deprecated: An internal step of `verifyDkim`, exported by mistake; it goes in 2.0. Refuse a header block whose line endings are not uniform, and say why.
+sha256Base64	function	@spy4x/email/dkim-verify	Deprecated: An internal step of `verifyDkim`, exported by mistake; it goes in 2.0. Compute the base64 SHA-256 digest of a string or of raw octets.
+splitMessage	function	@spy4x/email/dkim-verify	Deprecated: An internal step of `verifyDkim`, exported by mistake; it goes in 2.0. Split a raw RFC 5322 message into raw header lines and a raw body.
 verifyDkim	function	@spy4x/email/dkim-verify	Verify a message's DKIM signatures and report one verdict.
 verifyDkimSignatures	function	@spy4x/email/dkim-verify	Verify every `DKIM-Signature` field in the message and return one result each, in the order the fields appear.
 DARK_HTML_SHELL_THEME	constant	@spy4x/email/html	The look `htmlWrap` had before HtmlShellOptions.theme existed: a dark navy body with light text and an orange brand link, ported as-is from `mig`.
@@ -236,9 +236,9 @@ frameInstantLong	function	@spy4x/email/message	Render an instant as the recipien
 frameInstantShort	function	@spy4x/email/message	frameInstantLong without the zone name, for a subject line: `"Fri 28 Aug 04:00"`.
 frameWallClockLong	function	@spy4x/email/message	Frame a `YYYY-MM-DD` + `HH:MM` wall clock written in `sourceTz` for a recipient in `recipientTz`, falling back to the zone the wall clock was written in.
 frameWallClockShort	function	@spy4x/email/message	frameWallClockLong without the zone name, for a subject line.
-hasBody	function	@spy4x/email/message	True when a body field carries something worth sending.
+hasBody	function	@spy4x/email/message	Deprecated: An internal step of `assertSendableMessage` and the SMTP sender, exported by mistake; it goes in 2.0. True when a body field carries something worth sending.
 icalAttachment	function	@spy4x/email/message	Build the ICS attachment for an event.
-listUnsubscribeHeaders	function	@spy4x/email/message	The `List-Unsubscribe` and `List-Unsubscribe-Post` header values for a validated ListUnsubscribe, ready for the transport's `headers` option.
+listUnsubscribeHeaders	function	@spy4x/email/message	The `List-Unsubscribe` and `List-Unsubscribe-Post` header values for a ListUnsubscribe, ready for the transport's `headers` option.
 EmailSender	interface	@spy4x/email/sender	The port every transport implements, and the only thing callers depend on.
 SendFailure	interface	@spy4x/email/sender	No mail was sent, or some recipient was refused.
 SendResult	type	@spy4x/email/sender	Outcome of one send attempt.
@@ -369,7 +369,7 @@ EXPLICIT_SCHEME	constant	@spy4x/net	Any `scheme:` prefix, with or without `//`, 
 Fetcher	interface	@spy4x/net	The seam that keeps this module off the network in tests.
 INVALID_CHARACTERS	constant	@spy4x/net	Whitespace and control characters that make a URL input invalid.
 NormalizeUrlShapeResult	type	@spy4x/net	Outcome of normalizeUrlShape.
-PLAIN_HOSTNAME	constant	@spy4x/net	A hostname that is a plain DNS label run: no `:`, no brackets, no dots.
+PLAIN_HOSTNAME	constant	@spy4x/net	Deprecated: Nothing in this library uses it; write the pattern where it is needed. A hostname that is a plain DNS label run: no `:`, no brackets, no dots.
 ParsedIp	interface	@spy4x/net	An address that parseIp accepted.
 PayloadTooLargeError	class	@spy4x/net	Body exceeded the byte cap.
 SafeFetchMethod	enum	@spy4x/net	Request methods a redirect is allowed to carry unchanged.
@@ -392,7 +392,7 @@ isLoopbackHost	function	@spy4x/net	True when `host` names the machine itself the
 isPublicAddress	function	@spy4x/net	True if `addr` is a globally routable IPv4 or IPv6 address.
 isPublicIpv4	function	@spy4x/net	True if `addr` is a globally routable IPv4 address.
 isPublicIpv6	function	@spy4x/net	True if the IPv6 address (with optional embedded IPv4) is globally routable.
-isUrlShapeOk	function	@spy4x/net	Narrow a `normalizeUrlShape` result to its success branch.
+isUrlShapeOk	function	@spy4x/net	Deprecated: Read `result.ok` instead: it narrows the result the same way. Narrow a `normalizeUrlShape` result to its success branch.
 normalizeIp	function	@spy4x/net	The canonical spelling of `input` (parseIp), or `null` when it is not an address.
 normalizeUrlShape	function	@spy4x/net	Normalise the shape of a user-entered URL.
 parseBoundedFormData	function	@spy4x/net	Parse a `multipart/form-data` (or url-encoded) request body under the same cap and stall budget as `readBoundedBody`.
@@ -458,13 +458,13 @@ INVALID_CHARACTERS	constant	@spy4x/net/url-shape	Whitespace and control characte
 INVALID_CHARACTERS_MESSAGE	constant	@spy4x/net/url-shape	Message for the control-character case of UrlShapeErrorCode `"invalid_format"`.
 INVALID_FORMAT_MESSAGE	constant	@spy4x/net/url-shape	Message for UrlShapeErrorCode `"invalid_format"`.
 NormalizeUrlShapeResult	type	@spy4x/net/url-shape	Outcome of normalizeUrlShape.
-PLAIN_HOSTNAME	constant	@spy4x/net/url-shape	A hostname that is a plain DNS label run: no `:`, no brackets, no dots.
+PLAIN_HOSTNAME	constant	@spy4x/net/url-shape	Deprecated: Nothing in this library uses it; write the pattern where it is needed. A hostname that is a plain DNS label run: no `:`, no brackets, no dots.
 UNSUPPORTED_PROTOCOL_MESSAGE	constant	@spy4x/net/url-shape	Message for UrlShapeErrorCode `"unsupported_protocol"`.
 UrlShapeError	interface	@spy4x/net/url-shape	Rejected input, with the reason a caller can branch on.
 UrlShapeErrorCode	type	@spy4x/net/url-shape	Machine-readable rejection reason.
 UrlShapeOk	interface	@spy4x/net/url-shape	Accepted input, normalised.
 detectScheme	function	@spy4x/net/url-shape	Split an explicit `scheme:` prefix off the raw input.
-isUrlShapeOk	function	@spy4x/net/url-shape	Narrow a `normalizeUrlShape` result to its success branch.
+isUrlShapeOk	function	@spy4x/net/url-shape	Deprecated: Read `result.ok` instead: it narrows the result the same way. Narrow a `normalizeUrlShape` result to its success branch.
 normalizeUrlShape	function	@spy4x/net/url-shape	Normalise the shape of a user-entered URL.
 UNKNOWN_DEVICE	constant	@spy4x/net/user-agent	The name of a device whose user agent says nothing this module recognises.
 deviceName	function	@spy4x/net/user-agent	A short name a person recognises their device by, such as "Firefox on Linux" or "Safari on iPhone".
@@ -927,6 +927,7 @@ DEFAULT_FILE_LOCK_WAIT_MS	constant	@spy4x/platform/server	How long a FileLock.ru
 DEFAULT_REMINDER_CATCH_UP_MS	constant	@spy4x/platform/server	How far back the runner catches up unless `catchUpMs` says otherwise: one hour.
 DEFAULT_REMINDER_INTERVAL_MS	constant	@spy4x/platform/server	How often the runner ticks unless `intervalMs` says otherwise: once a minute.
 DEFAULT_REMINDER_TICK_TIMEOUT_MS	constant	@spy4x/platform/server	How long one tick may take unless `tickTimeoutMs` says otherwise: two minutes.
+EnvReader	interface	@spy4x/platform/server	Reads environment values.
 FileLock	class	@spy4x/platform/server	One held lock.
 FileLockWaitError	class	@spy4x/platform/server	Raised when a FileLock.runExclusive call waited FileLockOptions.waitMs for an earlier `runExclusive` on the same instance and gave up.
 FileSystemPort	interface	@spy4x/platform/server	Storage primitives a server helper needs.
@@ -936,6 +937,7 @@ LockHandle	interface	@spy4x/platform/server	A held file lock.
 LockState	enum	@spy4x/platform/server	Lock state, so a check can distinguish "held" from "held by me".
 LockUnavailableError	class	@spy4x/platform/server	Raised when another holder owns the lock.
 LogRecord	type	@spy4x/platform/server	One log record: the caller's event plus a timestamp.
+ReadJsonOptions	interface	@spy4x/platform/server	Options of readJsonFile.
 ReadJsonResult	type	@spy4x/platform/server	Result of reading a JSON document.
 ReminderNotifyResult	type	@spy4x/platform/server	What `notify` says about one reminder:
 ReminderRunner	interface	@spy4x/platform/server	A runner built by createReminderRunner.
@@ -951,13 +953,16 @@ TempPathOptions	interface	@spy4x/platform/server	Where a temporary file should l
 ThrottledJsonSaver	class	@spy4x/platform/server	Coalescing writer for one JSON document.
 TimerPort	interface	@spy4x/platform/server	Scheduling primitives a ThrottledJsonSaver needs.
 WalkEntry	interface	@spy4x/platform/server	A single directory entry, as returned by a directory listing.
-WriteTextOptions	interface	@spy4x/platform/server	Options of FileSystemPort.writeText.
+WriteTextOptions	interface	@spy4x/platform/server	Options of FileSystemPort.writeText, `writeBytes` and `writeStream`.
 atomicWriteJson	function	@spy4x/platform/server	Serialise `value` and replace `path` with it atomically.
 createReminderRunner	function	@spy4x/platform/server	Builds a runner; nothing runs until ReminderRunner.start or ReminderRunner.tick.
 denoByteReader	function	@spy4x/platform/server	ByteReader over one file, read in chunks so a large file never lands in memory at once.
 denoFileSystem	constant	@spy4x/platform/server	FileSystemPort backed by Deno's filesystem APIs.
 formatLogLine	function	@spy4x/platform/server	Serialise a log record to one line, stamped with the clock at append time.
 parseLogLines	function	@spy4x/platform/server	Parse JSONL text, skipping blank lines and reporting the lines that do not parse.
+processEnv	constant	@spy4x/platform/server	The process environment, read through `Deno.env` on Deno and `process.env` on Node and Bun.
+processId	function	@spy4x/platform/server	The id of the running process: `Deno.pid` on Deno, `process.pid` on Node and Bun, `undefined` where there is none (a browser).
+readEnvRecord	function	@spy4x/platform/server	Read the named variables into a record, for a parser that takes one, such as `parseStorageEnv` in `@spy4x/server/storage`.
 readJsonFile	function	@spy4x/platform/server	Read and parse a JSON document.
 runCommand	function	@spy4x/platform/server	Run `command` (the program, then its arguments) and resolve with its outcome.
 shutdownSignal	function	@spy4x/platform/server	Return an `AbortSignal` that aborts on the first of `options.signals` (default `SIGINT` and `SIGTERM`).
@@ -965,6 +970,7 @@ startIntervalRunner	function	@spy4x/platform/server	Runs `task` every `intervalM
 systemClockPort	constant	@spy4x/platform/server	Deprecated: Use `systemClock` from `@spy4x/platform/universal/time`. The host clock.
 systemTimerPort	constant	@spy4x/platform/server	Real timers.
 tempPathFor	function	@spy4x/platform/server	Build the temp path for an atomic write: `<path>.<pid>.<sequence>.tmp`.
+ReadJsonOptions	interface	@spy4x/platform/server/atomic-json	Options of readJsonFile.
 ReadJsonResult	type	@spy4x/platform/server/atomic-json	Result of reading a JSON document.
 TempPathOptions	interface	@spy4x/platform/server/atomic-json	Where a temporary file should live, given the document it will replace.
 atomicWriteJson	function	@spy4x/platform/server/atomic-json	Serialise `value` and replace `path` with it atomically.
@@ -988,8 +994,12 @@ ClockPort	type	@spy4x/platform/server/ports	Deprecated: Identical shape to `Cloc
 FileSystemPort	interface	@spy4x/platform/server/ports	Storage primitives a server helper needs.
 LockHandle	interface	@spy4x/platform/server/ports	A held file lock.
 WalkEntry	interface	@spy4x/platform/server/ports	A single directory entry, as returned by a directory listing.
-WriteTextOptions	interface	@spy4x/platform/server/ports	Options of FileSystemPort.writeText.
+WriteTextOptions	interface	@spy4x/platform/server/ports	Options of FileSystemPort.writeText, `writeBytes` and `writeStream`.
 systemClockPort	constant	@spy4x/platform/server/ports	Deprecated: Use `systemClock` from `@spy4x/platform/universal/time`. The host clock.
+EnvReader	interface	@spy4x/platform/server/process	Reads environment values.
+processEnv	constant	@spy4x/platform/server/process	The process environment, read through `Deno.env` on Deno and `process.env` on Node and Bun.
+processId	function	@spy4x/platform/server/process	The id of the running process: `Deno.pid` on Deno, `process.pid` on Node and Bun, `undefined` where there is none (a browser).
+readEnvRecord	function	@spy4x/platform/server/process	Read the named variables into a record, for a parser that takes one, such as `parseStorageEnv` in `@spy4x/server/storage`.
 DEFAULT_REMINDER_CATCH_UP_MS	constant	@spy4x/platform/server/reminder-runner	Deprecated: Import from `@spy4x/tasks/reminder-runner`. How far back the runner catches up unless `catchUpMs` says otherwise: one hour.
 DEFAULT_REMINDER_INTERVAL_MS	constant	@spy4x/platform/server/reminder-runner	Deprecated: Import from `@spy4x/tasks/reminder-runner`. How often the runner ticks unless `intervalMs` says otherwise: once a minute.
 DEFAULT_REMINDER_TICK_TIMEOUT_MS	constant	@spy4x/platform/server/reminder-runner	Deprecated: Import from `@spy4x/tasks/reminder-runner`. How long one tick may take unless `tickTimeoutMs` says otherwise: two minutes.
@@ -1025,7 +1035,7 @@ ULID_LENGTH	constant	@spy4x/platform/tokens	Length of a ULID string: 26 Crockfor
 constantTimeEquals	function	@spy4x/platform/tokens	Compares two hex digests in constant time.
 constantTimeEqualsText	function	@spy4x/platform/tokens	Compares two arbitrary strings in constant time.
 deriveSecret	function	@spy4x/platform/tokens	A subordinate secret derived from a master secret: HKDF-SHA-256 (RFC 5869) with `secret` as the input key material, the fixed salt `spy4x.derive-secret.v1` and `label` as `info`, 32 bytes as lower-case hex, 64 characters.
-monotonicUlid	function	@spy4x/platform/tokens	Generate a ULID that monotonically increases even for the same millisecond, optionally passing the current time.
+monotonicUlid	function	@spy4x/platform/tokens	Deprecated: Every new id is a version 7 UUID: use `uuidV7` from `@spy4x/platform/universal/uuid`. Monotonic ULID generator, the one from `@std/ulid`.
 newOpaqueToken	function	@spy4x/platform/tokens	Mints an opaque token: `raw` goes to the caller, `hash` is what the server stores.
 randomBase64Url	function	@spy4x/platform/tokens	Cryptographically random bytes, base64url, unpadded.
 sha256Hex	function	@spy4x/platform/tokens	SHA-256 digest of one UTF-8 string, as lower-case hex, 64 characters.
@@ -1241,7 +1251,7 @@ hasHeaderControlCharacters	function	@spy4x/platform/validation/predicates	True w
 hasTextControlCharacters	function	@spy4x/platform/validation/predicates	True when `value` contains a code point ≤ 31 other than TAB/LF/CR, or 127 — unsafe in stored free text.
 headerSafeString	constant	@spy4x/platform/validation/predicates	`string` that is safe to place in a header value (no control characters at all).
 honeypotField	constant	@spy4x/platform/validation/predicates	The honeypot field: present and an empty string.
-isEmailAddress	function	@spy4x/platform/validation/predicates	True when `value` is a bare email address (`jane@example.com`, no display name) that `@spy4x/email` would send to: a dot-atom local part and a dotted domain of at least two labels (`user@localhost` is refused), at most `MAX_ADDR_SPEC_LENGTH` (254) characters, the limit `@spy4x/email/address` exports.
+isEmailAddress	function	@spy4x/platform/validation/predicates	True when `value` is a bare email address (`jane@example.com`, no display name) that `@spy4x/email` would send to: a dot-atom local part and a dotted domain of at least two labels (`user@localhost` is refused), a local part of at most 64 characters, and at most `MAX_ADDR_SPEC_LENGTH` (254) characters in all, the limit `@spy4x/email/address` exports.
 isHoneypotFilled	function	@spy4x/platform/validation/predicates	True when a honeypot field was filled in, i.e. the submission is very likely automated.
 isValidTimeZoneName	function	@spy4x/platform/validation/predicates	Deprecated: Use `isValidTimeZone` from `@spy4x/time/tz`. True when `Intl.DateTimeFormat` accepts `value` as a time zone.
 textSafeString	constant	@spy4x/platform/validation/predicates	`string` that is safe as free text: TAB, LF and CR are allowed.
@@ -1283,6 +1293,7 @@ CursorTracker	class	@spy4x/realtime	In-memory per-group cursor arithmetic.
 DEFAULT_BACKOFF	constant	@spy4x/realtime	Defaults used when a caller does not override them.
 DEFAULT_MAX_CALL_BYTES	constant	@spy4x/realtime	The default cap on a call's body, the same as the socket's default frame cap.
 DecodeResult	type	@spy4x/realtime	Outcome of decoding one text frame.
+EncodeFailure	interface	@spy4x/realtime	The frame ConnectionRegistryOptions.onEncodeError is told about.
 FrameContext	interface	@spy4x/realtime	A client frame the registry does not own, handed to the application.
 FrameHandler	type	@spy4x/realtime	
 GapReport	interface	@spy4x/realtime	A non-contiguous sequence, with the cursor a pull must resume from.
@@ -1497,6 +1508,7 @@ CloseHandler	type	@spy4x/realtime/registry
 CloseReason	enum	@spy4x/realtime/registry	Why a connection left the registry.
 ConnectionHandle	interface	@spy4x/realtime/registry	Identifies one socket of one user.
 ConnectionRegistry	class	@spy4x/realtime/registry	Every live socket, indexed by user and by socket id.
+EncodeFailure	interface	@spy4x/realtime/registry	The frame ConnectionRegistryOptions.onEncodeError is told about.
 FrameContext	interface	@spy4x/realtime/registry	A client frame the registry does not own, handed to the application.
 FrameHandler	type	@spy4x/realtime/registry	
 MalformedFrame	interface	@spy4x/realtime/registry	A frame that could not be decoded, or arrived in the wrong direction.
@@ -1524,7 +1536,7 @@ NativeSocketLike	interface	@spy4x/realtime/web-socket	The subset of the platform
 adaptWebSocket	function	@spy4x/realtime/web-socket	Wraps a platform `WebSocket` (or anything shaped like one) so it satisfies ManagedSocket.
 createWebSocketFactory	function	@spy4x/realtime/web-socket	SocketFactory over the platform `WebSocket` constructor.
 mapReadyState	function	@spy4x/realtime/web-socket	Maps one native `readyState` value to this package's SocketState.
-AUTH_STORE_METHODS	constant	@spy4x/server/auth	The method names of AuthStore, sorted.
+AUTH_STORE_METHODS	constant	@spy4x/server/auth	Deprecated: No app needs it: the `AuthStore` interface is the list, and TypeScript checks a store against it. The names of the required methods of AuthStore, sorted.
 AttemptChallengeInput	interface	@spy4x/server/auth	Input of AuthStore.attemptChallenge.
 AuthConflictError	class	@spy4x/server/auth	Thrown by the store when a write would break a uniqueness rule.
 AuthConflictReason	type	@spy4x/server/auth	Which uniqueness rule a refused write would have broken.
@@ -1538,7 +1550,7 @@ MAX_EMAIL_LENGTH	constant	@spy4x/server/auth	Longest address normalizeEmail acce
 NewAuthKey	interface	@spy4x/server/auth	The fields a caller supplies for a new key.
 ProviderDeps	interface	@spy4x/server/auth	What every provider needs, injected by the app.
 SignInResult	interface	@spy4x/server/auth	What a provider returns after a successful sign-up or sign-in.
-normalizeEmail	function	@spy4x/server/auth	Lower-cases and trims an address and checks its shape; null when it is not an address.
+normalizeEmail	function	@spy4x/server/auth	Trims an address, checks its shape, then lower-cases it; null when it is not an address.
 DEFAULT_CODE_MAX_ATTEMPTS	constant	@spy4x/server/auth/email-code	Default number of guesses one challenge allows.
 DEFAULT_CODE_TTL_MINUTES	constant	@spy4x/server/auth/email-code	Default lifetime of a code.
 EMAIL_CODE_BYTES	constant	@spy4x/server/auth/email-code	Random bytes in a code: 48 bits, rendered as 8 base64url characters.
@@ -2460,4 +2472,4 @@ firstIssueMessage	function	@spy4x/validation/validate	First issue message in a v
 isArkErrors	function	@spy4x/validation/validate	Whether a value is an arktype rejection, without relying on `instanceof`.
 toValidationError	function	@spy4x/validation/validate	Build a ValidationError from arktype's issues.
 validate	function	@spy4x/validation/validate	Parse `value` with an arktype schema exactly once.
-# export surface: sha256 3a3476b6168e9daf20f00c9970d069f20b1b893d1f1af159bbd5b47d2db8468e
+# export surface: sha256 aac222af3a3100c986406a11c1aef48dac776f6e96a22efeaf43fce920836f55

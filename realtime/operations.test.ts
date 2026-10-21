@@ -1095,6 +1095,19 @@ describe("parsePayload", () => {
     expect((error as RealtimeRequestError).code).toBe("bad_request")
     expect((error as RealtimeRequestError).message).toContain("name")
   })
+
+  it("puts each field's issues in the bad_request details, so a form can mark the field", () => {
+    const error = (() => {
+      try {
+        parsePayload(type({ name: "string", age: "number" }), { name: 1, age: "x" })
+      } catch (error) {
+        return error
+      }
+    })() as RealtimeRequestError
+    const { errors } = error.details as { errors: Record<string, { code: string }[]> }
+    expect(Object.keys(errors).sort()).toEqual(["age", "name"])
+    expect(errors.name[0].code).toBe("domain")
+  })
 })
 
 describe("expectNoPayload", () => {

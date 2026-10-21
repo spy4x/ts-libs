@@ -16,6 +16,7 @@ import {
   frameWallClockShort,
   hasBody,
   icalAttachment,
+  listUnsubscribeHeaders,
 } from "./message.ts"
 
 const PRODID = "-//ts-libs//email//EN"
@@ -230,4 +231,29 @@ Deno.test("keeps a multi-byte filename unchanged — encoding is the transport's
     filename: "Einladung – Besprechung.ics",
   })
   assertEquals(attachment.filename, "Einladung – Besprechung.ics")
+})
+
+Deno.test("listUnsubscribeHeaders refuses a mailto that would inject a header", () => {
+  for (const mailto of ["a@example.com\r\nBcc: v@example.com", "a@example.com>, <x", "nonsense"]) {
+    assertThrows(
+      () => listUnsubscribeHeaders({ url: "https://example.com/u", mailto }),
+      TypeError,
+      "mailto must be a bare address",
+      `expected a throw for ${JSON.stringify(mailto)}`,
+    )
+  }
+})
+
+Deno.test("listUnsubscribeHeaders builds both headers for a valid value", () => {
+  assertEquals(
+    listUnsubscribeHeaders({
+      url: "https://example.com/u",
+      mailto: "u@example.com",
+      oneClick: true,
+    }),
+    {
+      "List-Unsubscribe": "<https://example.com/u>, <mailto:u@example.com>",
+      "List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
+    },
+  )
 })

@@ -1,6 +1,6 @@
 {
   "name": "@spy4x/tasks",
-  "version": "1.82.0",
+  "version": "1.83.0",
   "exports": {
     "./model": "./model.ts",
     "./view": "./view.ts",
