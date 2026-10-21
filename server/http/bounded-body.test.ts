@@ -477,6 +477,7 @@ Deno.test("readJsonBody answers 413 when the body is over the cap", async () => 
 
   assertEquals(response.status, 413)
   assertEquals(await response.text(), JSON_BODY_TOO_LARGE)
+  assertEquals(response.headers.get("connection"), "close")
 })
 
 Deno.test("readJsonBody answers 413 on a declared content-length over the cap", async () => {
@@ -729,6 +730,16 @@ Deno.test("readFormBody answers 413 when the form is over the cap", async () => 
   assertEquals(error.status, 413)
   assertEquals(error.message, FORM_BODY_TOO_LARGE)
   assertStrictEquals(error.cause instanceof NetPayloadTooLargeError, true)
+})
+
+Deno.test("readFormBody's 413 asks the client to close the connection", async () => {
+  const request = new Request(ORIGIN, { method: "POST", headers: URLENCODED, body: "a=123456789" })
+
+  const response = (await formRejection(request, { maxBytes: 4 })).getResponse()
+
+  assertEquals(response.status, 413)
+  assertEquals(response.headers.get("connection"), "close")
+  assertEquals(await response.text(), FORM_BODY_TOO_LARGE)
 })
 
 Deno.test("readFormBody answers 408 when the form stalls", async () => {

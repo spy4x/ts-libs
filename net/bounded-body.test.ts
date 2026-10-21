@@ -556,15 +556,14 @@ describe("parseBoundedFormData", () => {
     )
   })
 
-  it("refuses a request without a content-type", async () => {
+  it("refuses a request without a content-type and cancels its body", async () => {
     // A string body would get a default `text/plain` content-type from `Request`,
     // and the parse would then fail for that reason instead; a stream body gets none.
-    const body = new ReadableStream<Uint8Array>({
-      start(controller) {
-        controller.enqueue(new TextEncoder().encode("email=user%40example.com"))
-        controller.close()
-      },
-    })
+    let cancelled = 0
+    const body = stalledStream(
+      new TextEncoder().encode("email=user%40example.com"),
+      () => cancelled++,
+    )
     const request = new Request(FORM_ORIGIN, {
       method: "POST",
       body,
@@ -577,5 +576,6 @@ describe("parseBoundedFormData", () => {
       TypeError,
       "requires a content-type header",
     )
+    assertEquals(cancelled, 1, "a refused body must not keep its connection open")
   })
 })

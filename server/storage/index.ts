@@ -5,6 +5,7 @@
  * @module
  */
 
+import { readEnvRecord } from "@spy4x/platform/server/process"
 import { StorageError } from "./errors.ts"
 import { type StorageConfig, StorageEnvName } from "./env.ts"
 import type { FileStorage, PresignOptions, UploadBody } from "./ports.ts"
@@ -155,9 +156,13 @@ export async function createStorageFrom(
  * `parseStorageEnv` takes a record, and every provider takes its configuration
  * as a constructor argument. Nothing is read at import time, so importing the
  * module cannot fail on a missing variable.
+ *
+ * By default it reads only the variables {@link storageEnvNames} lists, through
+ * `readEnvRecord` of `@spy4x/platform/server/process`, so on Deno `--allow-env`
+ * can name exactly those, and Node and Bun work too.
  */
 export async function createStorage(
-  environment: Record<string, string | undefined> = Deno.env.toObject(),
+  environment: Record<string, string | undefined> = readEnvRecord(storageEnvNames()),
 ): Promise<BucketStorage | undefined> {
   const { parseStorageEnv } = await import("./env.ts")
   return await createStorageFrom(parseStorageEnv(environment))

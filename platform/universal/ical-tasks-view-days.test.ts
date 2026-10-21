@@ -15,6 +15,7 @@ const UTC = `UTC`
 const HO_CHI_MINH = `Asia/Ho_Chi_Minh`
 const AUCKLAND = `Pacific/Auckland`
 const LOS_ANGELES = `America/Los_Angeles`
+const BERLIN = `Europe/Berlin`
 
 /** A zone Outlook names itself and defines in the document: +09:00 all year. */
 const HEAD_OFFICE_TIME = [
@@ -178,4 +179,32 @@ Deno.test("a due in a zone its own VTIMEZONE defines is overdue by that zone", (
   const view = todayView([due], new Date(`2026-10-08T01:00:00Z`), UTC)
   expect(uids(view.overdue)).toEqual([`custom`])
   expect(uids(view.today)).toEqual([])
+})
+
+Deno.test("a due in a zone its own VTIMEZONE defines lands on the viewer's day of its instant", () => {
+  // 00:30 on the 9th at +09:00 is 15:30Z on the 8th: 17:30 on the 8th in Berlin.
+  const due = fixtureTask(vtodo([
+    `DTSTAMP:20261001T080000Z`,
+    `UID:custom`,
+    `SUMMARY:Call head office`,
+    `DUE;TZID=Head Office Time:20261009T003000`,
+  ], HEAD_OFFICE_TIME))
+  const today = todayView([due], new Date(`2026-10-08T08:00:00Z`), BERLIN)
+  expect(uids(today.today)).toEqual([`custom`])
+  const days = upcomingView([due], new Date(`2026-10-07T08:00:00Z`), BERLIN)
+  expect(days.map((day) => day.date)).toEqual([`2026-10-08`])
+})
+
+Deno.test("a task whose text no longer parses is read in the viewer's zone instead of throwing", () => {
+  const parsed = fixtureTask(vtodo([
+    `DTSTAMP:20261001T080000Z`,
+    `UID:broken`,
+    `SUMMARY:Call head office`,
+    `DUE;TZID=Head Office Time:20261008T100000`,
+  ], HEAD_OFFICE_TIME))
+  const broken: Task = { ...parsed, ics: `not an iCalendar text` }
+  // Read in UTC, 10:00 on the 8th has not passed at 09:00Z; by +09:00 it passed at 01:00Z.
+  const view = todayView([broken], new Date(`2026-10-08T09:00:00Z`), UTC)
+  expect(uids(view.today)).toEqual([`broken`])
+  expect(upcomingView([broken], new Date(`2026-10-07T09:00:00Z`), UTC)[0].date).toBe(`2026-10-08`)
 })

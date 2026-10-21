@@ -4,12 +4,12 @@
 // whether the message's DKIM-Signature verifies against that key. It fetches
 // nothing on its own unless a caller injects a DNS TXT resolver.
 //
-// Zero external imports on purpose — Web Crypto (`crypto.subtle`) and
-// platform primitives (`atob`/`btoa`, `TextEncoder`, `Deno.resolveDns`) only.
-// Anything this file "needs" from `@std/*` is a smell, not a dependency to
-// add. The one import below, of `./dkim-body-hash.ts`, is a sibling module of
-// this same package rather than a dependency — see that file's module note.
+// Web Crypto (`crypto.subtle`), platform primitives (`TextEncoder`,
+// `Deno.resolveDns`) and `@std/encoding` for base64 only (#674). The import of
+// `./dkim-body-hash.ts` is a sibling module of this same package rather than a
+// dependency — see that file's module note.
 
+import { decodeBase64, decodeBase64Url, encodeBase64 } from "@std/encoding"
 import { type BodyHashCache, createBodyHashCache } from "./dkim-body-hash.ts"
 
 /** Which canonicalization RFC 6376 §3.4 applies to a header or a body. */
@@ -377,13 +377,11 @@ function parseDkimSignatureHeader(raw: string, requireB = true): ParsedDkimSigna
       )
     }
   }
-  // §3.5: the field "MUST NOT include the DKIM-Signature header field that is
-  // being created or verified", and §3.7 adds that field to the header hash
-  // unconditionally as its own step. Every standard signer omits it, so
-  // demanding it rejected all of them.
-  if (signedHeaders.includes("dkim-signature")) {
-    throw new DkimParseError("DKIM-Signature h= tag must not name dkim-signature")
-  }
+  // §3.5: h= "MUST NOT include the DKIM-Signature header field that is being
+  // created or verified", but it may name *other* DKIM-Signature fields: a
+  // mailing list that re-signs covers the author's signature that way. The
+  // field being verified is kept out of the selection in `verifyOneSignature`,
+  // and §3.7 adds it to the hash as its own step.
 
   const domain = tags.get("d")!.value.toLowerCase()
   const selector = tags.get("s")!.value.toLowerCase()
@@ -491,6 +489,9 @@ function parseAlgorithm(value: string): DkimAlgorithm {
  * canonical line — `name: value CRLF` relaxed, `name:value CRLF` simple —
  * because the separator is part of what is hashed. Bare LF is normalised to
  * CRLF: RFC 6376 hashes the CRLF form even when storage kept LF endings.
+ *
+ * @deprecated An internal step of `verifyDkim`, exported by mistake; it goes in 2.0.
+ * Call `verifyDkim` or `verifyDkimSignatures` instead.
  */
 export function canonicalizeHeader(
   name: string,
@@ -542,6 +543,9 @@ function trimWsp(value: string): string {
  *
  * An `l=` bound is applied afterwards, to these canonical octets, by
  * {@link verifyDkim} — the bound is counted in octets, not in characters.
+ *
+ * @deprecated An internal step of `verifyDkim`, exported by mistake; it goes in 2.0.
+ * Call `verifyDkim` or `verifyDkimSignatures` instead.
  */
 export function canonicalizeBody(body: string, algorithm: Canonicalization): string {
   // One pass to split, one pass per line, one join: the cost grows with the body,
@@ -779,16 +783,11 @@ async function defaultResolveTxt(name: string): Promise<string[][]> {
 function base64Decode(input: string): Uint8Array {
   // Strip WSP: a folded b=/bh= and a TXT record split across quoted strings
   // both leave whitespace inside the base64.
-  const cleaned = input.replace(/\s+/g, "")
-  let binary: string
   try {
-    binary = atob(cleaned)
+    return decodeBase64(input.replace(/\s+/g, ""))
   } catch {
     throw new DkimParseError("value is not valid base64")
   }
-  const out = new Uint8Array(binary.length)
-  for (let i = 0; i < binary.length; i++) out[i] = binary.charCodeAt(i)
-  return out
 }
 
 /**
@@ -808,6 +807,9 @@ function base64Decode(input: string): Uint8Array {
  * character after the empty line to be non-WSP swallowed every body beginning
  * with SP or HTAB into the header region, where it was never hashed — and
  * RFC 6376 §3.4.5 Example 1's own body begins with a space.
+ *
+ * @deprecated An internal step of `verifyDkim`, exported by mistake; it goes in 2.0.
+ * Call `verifyDkim` or `verifyDkimSignatures` instead.
  */
 export function splitMessage(raw: string): { headers: string[]; body: string } {
   const { headerEnd, sepLen } = locateHeaderEnd(raw)
@@ -1115,6 +1117,9 @@ function scanForbiddenHeaderBytes(raw: string, end: number): string | undefined 
  * of these ten code points is refused unconditionally, with no exemption for
  * a byte or sequence that merely looks like part of a longer, legitimate
  * UTF-8 character.
+ *
+ * @deprecated An internal step of `verifyDkim`, exported by mistake; it goes in 2.0.
+ * Call `verifyDkim` or `verifyDkimSignatures` instead.
  */
 export function refuseHeaderLineEndings(raw: string): string | undefined {
   const { headerEnd, sepLen } = locateHeaderEnd(raw)
@@ -1495,17 +1500,14 @@ function selectSignedHeaders(
  * Passing `Uint8Array` is what lets a caller bound *octets* — an `l=` bound can
  * land inside a multi-octet character, and decoding the sliced bytes back to a
  * string would hash the replacement character instead of the declared bytes.
+ *
+ * @deprecated An internal step of `verifyDkim`, exported by mistake; it goes in 2.0.
+ * Call `verifyDkim` or `verifyDkimSignatures` instead.
  */
 export async function sha256Base64(input: string | Uint8Array): Promise<string> {
   const bytes = typeof input === "string" ? new TextEncoder().encode(input) : input
   const digest = await crypto.subtle.digest("SHA-256", asBytes(bytes))
-  return base64Encode(new Uint8Array(digest))
-}
-
-function base64Encode(bytes: Uint8Array): string {
-  let bin = ""
-  for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i])
-  return btoa(bin)
+  return encodeBase64(digest)
 }
 
 /**
@@ -1646,7 +1648,14 @@ export async function verifyDkimSignatures(
   // one used to condemn the whole message, and a valid one an attacker put on top
   // used to decide it. Each field's value keeps its exact bytes, so the canonical
   // form reconstructed for hashing matches what that signer saw.
-  const fields = headers.filter((line) => line.toLowerCase().startsWith("dkim-signature:"))
+  // The name is compared trimmed, as `selectSignedHeaders` compares it: RFC 5322's
+  // obsolete syntax allows WSP before the colon, so `DKIM-Signature :` is a field.
+  const fields: number[] = []
+  headers.forEach((line, index) => {
+    const colon = line.indexOf(":")
+    if (colon === -1) return
+    if (trimHeaderName(line.slice(0, colon)).toLowerCase() === "dkim-signature") fields.push(index)
+  })
   if (fields.length === 0) {
     return [{ valid: false, reason: "no DKIM-Signature header found" }]
   }
@@ -1664,7 +1673,7 @@ export async function verifyDkimSignatures(
 
   const maxSignatures = options.maxSignatures ?? DEFAULT_MAX_SIGNATURES
   const results: DkimVerificationResult[] = []
-  for (const [index, field] of fields.entries()) {
+  for (const [index, at] of fields.entries()) {
     // §6.1: a verifier may limit how many signatures it tries. Without a limit,
     // every extra field buys an attacker one key lookup and one public-key
     // operation.
@@ -1676,7 +1685,10 @@ export async function verifyDkimSignatures(
       })
       continue
     }
-    results.push(await verifyOneSignature(field, headers, publicKey, options, bodyHashCache))
+    // §3.5: the field being verified is never one of the headers h= selects, so
+    // an h= that names `dkim-signature` reaches only the other signatures.
+    const others = headers.filter((_, i) => i !== at)
+    results.push(await verifyOneSignature(headers[at], others, publicKey, options, bodyHashCache))
   }
   return results
 }
@@ -2095,8 +2107,11 @@ function bitLength(bytes: Uint8Array): number {
 
 /** Decode base64url, which is what JWK uses: `-_` for `+/`, and no padding. */
 function base64UrlDecode(value: string): Uint8Array {
-  const standard = value.replaceAll("-", "+").replaceAll("_", "/")
-  return base64Decode(standard + "=".repeat((4 - (standard.length % 4)) % 4))
+  try {
+    return decodeBase64Url(value)
+  } catch {
+    throw new DkimParseError("value is not valid base64url")
+  }
 }
 
 /**

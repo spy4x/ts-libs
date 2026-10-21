@@ -20,6 +20,7 @@
 
 import type { ManagedSocket, SocketCloseInfo, SocketFactory, Unsubscribe } from "./socket-port.ts"
 import { SocketState } from "./socket-port.ts"
+import { callListener } from "./listener-guard.ts"
 
 /**
  * The subset of the platform `WebSocket` this adapter needs.
@@ -67,6 +68,15 @@ export function mapReadyState(readyState: number): SocketState {
   return READY_STATE_MAP[readyState] ?? SocketState.Closed
 }
 
+/** Options of {@link adaptWebSocket} and {@link createWebSocketFactory}. */
+export interface AdaptWebSocketOptions {
+  /**
+   * Called with the data of every binary frame, which the adapter drops: the protocol is text
+   * only, so a binary frame is a peer's mistake worth seeing. Defaults to `console.warn`.
+   */
+  onBinaryFrame?: (data: unknown) => void
+}
+
 /**
  * Wraps a platform `WebSocket` (or anything shaped like one) so it satisfies {@link ManagedSocket}.
  *
@@ -76,7 +86,12 @@ export function mapReadyState(readyState: number): SocketState {
  * inconsistent: a real `WebSocket.send` throws while `CONNECTING` but silently discards the frame
  * while `CLOSING` or `CLOSED`.
  */
-export function adaptWebSocket(ws: NativeSocketLike): ManagedSocket {
+export function adaptWebSocket(
+  ws: NativeSocketLike,
+  options: AdaptWebSocketOptions = {},
+): ManagedSocket {
+  const onBinaryFrame = options.onBinaryFrame ??
+    (() => console.warn("realtime: dropped a binary frame; this protocol is text only"))
   return {
     get state(): SocketState {
       return mapReadyState(ws.readyState)
@@ -101,6 +116,7 @@ export function adaptWebSocket(ws: NativeSocketLike): ManagedSocket {
     onMessage(handler: (data: string) => void): Unsubscribe {
       const listener = (event: MessageEvent) => {
         if (typeof event.data === "string") handler(event.data)
+        else callListener(`the onBinaryFrame`, onBinaryFrame, event.data)
       }
       ws.addEventListener("message", listener)
       return () => ws.removeEventListener("message", listener)
@@ -116,6 +132,6 @@ export function adaptWebSocket(ws: NativeSocketLike): ManagedSocket {
 }
 
 /** {@link SocketFactory} over the platform `WebSocket` constructor. The only place one is created. */
-export function createWebSocketFactory(): SocketFactory {
-  return (url: string) => adaptWebSocket(new WebSocket(url))
+export function createWebSocketFactory(options: AdaptWebSocketOptions = {}): SocketFactory {
+  return (url: string) => adaptWebSocket(new WebSocket(url), options)
 }

@@ -22,6 +22,7 @@
  */
 
 import { createHint, type ServerMessage } from "./codec.ts"
+import { callListener } from "./listener-guard.ts"
 
 /** A committed, group-scoped change, reduced to what a hint needs. */
 export interface AggregateChange {
@@ -74,7 +75,7 @@ export interface AggregateNotifierOptions {
   resolvers?: ReadonlyMap<string, RecipientResolver>
   /** Called with an unknown aggregate, so a host can alert instead of silently not notifying. */
   onUnknownAggregate?: (change: AggregateChange) => void
-  /** Called when a resolver throws. */
+  /** Called when a resolver or the fan-out throws. A throw of this hook is logged, not raised. */
   onError?: (change: AggregateChange, error: Error) => void
 }
 
@@ -132,26 +133,25 @@ export class AggregateNotifier {
     }
 
     if (!resolver) {
-      this.#onUnknownAggregate?.(change)
+      if (this.#onUnknownAggregate) {
+        callListener(`the onUnknownAggregate`, this.#onUnknownAggregate, change)
+      }
       return { ...base, status: NotifyStatus.UnknownAggregate }
     }
 
-    let userIds: readonly string[]
     try {
-      userIds = await resolver(change)
+      const userIds = await resolver(change)
+      const recipients = [...new Set(userIds)].filter((userId) => userId.length > 0)
+      if (recipients.length === 0) {
+        return { ...base, status: NotifyStatus.NoRecipients }
+      }
+      const delivered = this.#fanout.sendToUsers(recipients, createHint(change))
+      return { ...base, status: NotifyStatus.Sent, recipients: delivered }
     } catch (error) {
       const failure = toError(error)
-      this.#onError?.(change, failure)
+      if (this.#onError) callListener(`the onError`, this.#onError, change, failure)
       return { ...base, status: NotifyStatus.Failed, error: failure.message }
     }
-
-    const recipients = [...new Set(userIds)].filter((userId) => userId.length > 0)
-    if (recipients.length === 0) {
-      return { ...base, status: NotifyStatus.NoRecipients }
-    }
-
-    const delivered = this.#fanout.sendToUsers(recipients, createHint(change))
-    return { ...base, status: NotifyStatus.Sent, recipients: delivered }
   }
 }
 

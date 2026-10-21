@@ -31,10 +31,21 @@ describe("normalizeEmail", () => {
   })
 
   it("accepts an address of the maximum length and refuses a longer one", () => {
-    const domain = "@example.com"
-    const longest = "a".repeat(MAX_EMAIL_LENGTH - domain.length) + domain
+    const local = "a".repeat(64)
+    const domain = `${"b".repeat(63)}.${"c".repeat(63)}.${"d".repeat(57)}.com`
+    const longest = `${local}@${domain}`
+    expect(longest.length).toBe(MAX_EMAIL_LENGTH)
     expect(normalizeEmail(longest)).toBe(longest)
-    expect(normalizeEmail("a" + longest)).toBeNull()
+    expect(normalizeEmail(`${local}@e${domain}`)).toBeNull()
+  })
+
+  it("refuses a local part over 64 characters, which no relay delivers", () => {
+    expect(normalizeEmail(`${"a".repeat(64)}@example.com`)).toBe(`${"a".repeat(64)}@example.com`)
+    expect(normalizeEmail(`${"a".repeat(70)}@example.com`)).toBeNull()
+  })
+
+  it("refuses the Kelvin sign instead of lower-casing it into an ASCII k", () => {
+    expect(normalizeEmail("\u212Aate@example.com")).toBeNull()
   })
 })
 

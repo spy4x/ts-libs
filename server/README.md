@@ -112,8 +112,11 @@ stall rejects with the canonical `BodyReadTimeoutError`, importable from
 `c.req.raw` through the canonical `readBoundedJson` and throws Hono's `HTTPException`: 413 for a
 body over the cap, 408 for a stalled body and 400 for a body that is not JSON, the empty body
 included. A route without `onError` answers with that status on its own; a route with its own error
-shape catches the exception and reads `status`, and the reader's error is kept as `cause`. Any other
-error is rethrown unchanged.
+shape catches the exception and reads `status`, and the reader's error is kept as `cause`. The 413's
+response carries `connection: close`, because once the unread body is cancelled `Deno.serve` no longer
+closes the connection by itself. Any other error is rethrown unchanged, including the `RangeError`
+for a `maxBytes` that is not a positive finite number (`0` among them), which a route answers with
+500, not 413.
 
 Two options go beyond the reader's `maxBytes` and `timeoutMs`. `requireJsonContentType: true`
 refuses, before the body is read, a request that is not declared as `application/json`: 415 with
@@ -357,7 +360,9 @@ absolute path, a NUL byte and an encoded separator are all refused **before any 
 adapter then compares the realpath of the resolved file against the realpath of the root, because only
 the realpath can reveal a symlink that points outside. A path ending in `/` serves that directory's
 `index.html`. An SPA fallback is one flag, not a list of route paths: with `spaFallback`, a missing
-path, or one refused for an encoded separator such as `/tasks/a%2Fb`, gets `<root>/index.html`.
+path, or one refused for an encoded separator such as `/tasks/a%2Fb`, gets `<root>/index.html`. Every
+other refused path gets no response, with or without the flag: a traversal, a backslash, a control
+character, a malformed escape such as `%zz`, and an empty segment such as `/docs//`.
 
 A file is streamed, not read whole: `StaticFs.open` returns the file's size and a `ReadableStream`, so
 serving a large file costs the same per-request memory as serving a small one. `Content-Length` comes
@@ -456,7 +461,7 @@ development. Use `upload`/`download` with a local provider.
 ```ts
 import { createStorage } from "@spy4x/server/storage"
 
-const storage = await createStorage() // reads Deno.env, returns undefined if unconfigured
+const storage = await createStorage() // reads the storage variables, undefined if unconfigured
 await storage?.upload("media/photo.png", bytes)
 ```
 
@@ -465,8 +470,8 @@ await storage?.upload("media/photo.png", bytes)
 provider. The key is an **argument**, not a module-scope `$env` read, so
 importing the package has no environment dependency and cannot fail on a missing
 variable. `createStorage()` is the only function that reads real environment
-variables, and it uses the same `parseStorageEnv(record)` helper that a test
-drives with a literal object.
+variables, only the ones `storageEnvNames()` lists, and it uses the same
+`parseStorageEnv(record)` helper that a test drives with a literal object.
 
 ### Injecting configuration
 
@@ -533,16 +538,22 @@ URL, and an ACL outside the canned set is rejected. `getDownloadURL` ignores
 
 `ObjectFs` (`readObject`, `writeObject`, `existsObject`) is the filesystem
 dependency of both providers, and is what lets the local provider be exercised
-without disk access. `createDenoObjectFs()` is the real adapter and
-`createMemoryObjectFs()` is exported for callers that want the same substitute in
-their own tests.
+without disk access. `createDenoObjectFs()` is the real adapter: it reads and
+writes through the platform's `denoFileSystem` port
+(`@spy4x/platform/server/deno-fs`) and its `readBytes`, `writeBytes` and
+`writeStream` methods. `createMemoryObjectFs()` is exported for callers that want
+the same substitute in their own tests.
 
 `writeObject` returns the byte count it wrote and accepts a `Uint8Array` or a
 `ReadableStream<Uint8Array>`, which is how `download` streams a response body
-straight to disk without buffering the whole object.
+straight to disk without buffering the whole object. It writes to a temporary
+file beside the target and renames it into place, so a download cut off midway
+keeps the file that was there, and the temporary file is removed. Creating the
+parent folder ignores only `AlreadyExists`; any other failure, such as a denied
+permission, is thrown.
 
 The write path is split so its logic is reachable without disk access:
-`writeToFile(path, data, open?)` owns the byte counting, the open flags contract
+`writeToFile(path, data, open?, makeDirectory?)` owns the byte counting, the open flags contract
 and the closer-on-error path, and takes `open` as an injectable opener.
 `parentDirectory(filePath)` decides which directory must exist first and returns
 `undefined` when none does — a bare filename like `"out.png"` creates no
@@ -555,15 +566,13 @@ through `createMemoryObjectFs()`, the S3 provider through an injected `fetch`,
 `writeToFile` through an injected opener, and the whole `Deno` surface through an
 injected `DenoFsHost`.
 
-**Disclosed, measured gap.** `server/storage/fs.ts` is the one module below full
-statement coverage: **93.75% (75/80)**, with every other module at 100%
-(`env`, `errors`, `index`, `local`, `memory-fs`, `paths`, `s3`, `sigv4`). The
-five uncovered statements are all platform calls behind `--allow-write`:
-`Deno.open(path, { create: true, write: true, truncate: true })` and the
-`denoFsHost.open` binding that reaches it. Nothing in that module's own logic is
-uncovered: the stat-to-boolean branch, both write branches, the byte count, the
-closer-on-error path (buffer _and_ stream) and the directory decision all have
-direct tests.
+**Disclosed gap.** In the unit tier, `server/storage/fs.ts` leaves only its
+platform calls behind `--allow-write` uncovered: `Deno.open`, `Deno.mkdir`,
+`Deno.rename` and `Deno.remove` in `denoFsHost` and the default opener. Nothing
+in that module's own logic is uncovered: the stat-to-boolean branch, both write
+branches, the byte count, the closer-on-error path (buffer _and_ stream), the
+rename into place and the directory decision all have direct tests, and the
+integration tier runs the `ObjectFs` contract on real disk.
 
 `Deno.makeTempDir` does **not** make that gap closable here. On this box it fails
 under the task's exact grants, and under no grants at all:
@@ -699,8 +708,10 @@ address. `releaseKeyEmail` does the same without deleting the key: it takes the 
 keeps signing in, by its `subject`, while the old address stops naming the account. An unproven
 address is dropped too, since the next person to prove it would otherwise delete the key.
 
-**Addresses are compared in one form.** `normalizeEmail` trims and lower-cases, and accepts only
-what `@spy4x/email` will send to. The store refuses a key whose `email` is not already in that form.
+**Addresses are compared in one form.** `normalizeEmail` is `parseBareAddress` of `@spy4x/email`:
+it trims, checks the shape (a local part of at most 64 characters, no look-alike such as the Kelvin
+sign), then lower-cases, so it accepts only what `@spy4x/email` will send to. The store refuses a
+key whose `email` is not already in that form.
 
 **A challenge counts guesses.** `issueChallenge` stores the hash of a code for a
 `(purpose, subject)`. Asking for a new code replaces the hash and the expiry but keeps the guess
@@ -910,9 +921,12 @@ used by then, so the person asks for a new one.
   email-code provider's `proveAddress`, to keep it.
 - **It does not limit how often a verification code is asked for.** Every `requestVerification`
   call is a mail; rate-limit its route like the reset route.
-- **It does not cancel the address's other reset codes.** A successful reset leaves every other
-  unexpired reset code for that address working until it expires (`resetTtlMinutes`), so keep the
-  lifetime short.
+- **It cancels the address's other reset codes only with a store that can.** Once a code matches,
+  the provider deletes the address's other reset codes through the store's optional
+  `deleteChallenges`, which both stores of this package have. A store of your own without it leaves
+  every other unexpired code for that address working until it expires (`resetTtlMinutes`), so keep
+  the lifetime short. Codes issued by 1.82 or earlier still work after the upgrade, until they
+  expire, and are not cancelled.
 
 ## `server/auth/email-code`
 
@@ -2627,6 +2641,13 @@ one run. A correct secret gives back that one slot; it does not wipe the count, 
 guesser a fresh budget every time the owner signs in. While a lock runs, every check is refused, a
 correct one included, so someone who can reach the check can keep the owner out of it for up to the
 maximum lock.
+
+**Pass the pool.** On a pool each update runs in its own transaction and is committed at once.
+`createPostgresLockoutStore` also takes the `tx` of the app's own `sql.begin`; each update then runs
+in a savepoint, and the count commits or rolls back with the app's transaction. A rollback after a
+wrong guess erases that guess's count: an app that refuses a wrong code by throwing inside its
+transaction is never locked out, however many guesses it gets. A refused guess must commit, so pass
+a transaction handle only when that transaction commits whatever the guess was.
 
 **The Postgres store takes the caller's table.** Table, schema and column names must be lower-case
 identifiers; they are validated and sent through the driver's identifier quoting, never spliced

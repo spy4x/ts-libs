@@ -82,6 +82,25 @@ const clientFor = (
   return { client, transport, timer }
 }
 
+/**
+ * Runs `fn` with the globals Node and Bun have and Deno's hidden, so the default env reader has to
+ * take the `process.env` path. Restored before returning, even when `fn` throws.
+ */
+const withNodeLikeHost = <T>(env: Record<string, string>, fn: () => T): T => {
+  const saved = ["Deno", "process"].map((name) =>
+    [name, Object.getOwnPropertyDescriptor(globalThis, name)] as const
+  )
+  Object.defineProperty(globalThis, "Deno", { value: undefined, configurable: true })
+  Object.defineProperty(globalThis, "process", { value: { env }, configurable: true })
+  try {
+    return fn()
+  } finally {
+    for (const [name, descriptor] of saved) {
+      if (descriptor) Object.defineProperty(globalThis, name, descriptor)
+    }
+  }
+}
+
 describe("ntfyConfigFromEnv", () => {
   it("reads URL, topic and token", () => {
     const env: Record<string, string> = { NTFY_URL: BASE_URL, NTFY_TOPIC: TOPIC, NTFY_TOKEN: TOKEN }
@@ -100,6 +119,12 @@ describe("ntfyConfigFromEnv", () => {
   it("returns null when the URL or topic is missing", () => {
     expect(ntfyConfigFromEnv(() => undefined)).toBeNull()
     expect(ntfyConfigFromEnv((name) => (name === "NTFY_URL" ? BASE_URL : undefined))).toBeNull()
+  })
+
+  it("reads process.env by default on a runtime without Deno", () => {
+    const env = { NTFY_URL: BASE_URL, NTFY_TOPIC: TOPIC, NTFY_TOKEN: TOKEN }
+    const config = withNodeLikeHost(env, () => ntfyConfigFromEnv())
+    expect(config).toEqual({ baseUrl: BASE_URL, topic: TOPIC, token: TOKEN })
   })
 })
 
@@ -331,6 +356,21 @@ describe("NtfyClient.push", () => {
     expect(transport.requests.length).toBe(5)
   })
 
+  it("keeps the default policy when a retry override is undefined", async () => {
+    const transport = fakeTransport([{ status: 500 }])
+    const timer = recordingTimer()
+    const client = new NtfyClient({ baseUrl: BASE_URL, topic: TOPIC }, {
+      fetcher: transport.fetcher,
+      sleep: timer.sleep,
+      clock: timer.clock,
+      random: () => 0.5,
+      retry: { maxAttempts: undefined, baseDelayMs: undefined },
+    })
+    const result = await client.notifyFailure("backup failed", "detail")
+    expect(result.ok === false && result.attempts).toBe(5)
+    expect(timer.delays[0]).toBe(3000)
+  })
+
   it("asks the injected timer for Retry-After seconds, not the 3s default", async () => {
     const { client, timer } = clientFor([
       { status: 429, headers: { "Retry-After": "2" } },
@@ -435,6 +475,25 @@ describe("NtfyClient.push", () => {
     })
     await client.push({ title: "t", message: "m", severity: NotificationSeverity.Failure })
     expect(captured?.bodyUsed).toBe(true)
+  })
+
+  it("does not send a push again when releasing its 2xx body fails", async () => {
+    let calls = 0
+    const client = new NtfyClient({ baseUrl: BASE_URL, topic: TOPIC }, {
+      fetcher: () => {
+        calls++
+        const body = new ReadableStream<Uint8Array>({
+          cancel: () => {
+            throw new TypeError("connection reset")
+          },
+        })
+        return Promise.resolve(new Response(body, { status: 200 }))
+      },
+      sleep: () => Promise.resolve(),
+    })
+    const result = await client.notifyFailure("backup failed", "detail")
+    expect(result.ok && result.status === "pushed" && result.httpStatus).toBe(200)
+    expect(calls).toBe(1)
   })
 
   it("releases the response body on an HTTP error too", async () => {

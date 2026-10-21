@@ -15,7 +15,7 @@
  * @module
  */
 
-import { isAddress, MAX_ADDR_SPEC_LENGTH } from "@spy4x/email/address"
+import { MAX_ADDR_SPEC_LENGTH, parseBareAddress } from "@spy4x/email/address"
 import type { SessionRecord } from "../sign-in/mod.ts"
 
 /** A signed-in person. Minimal on purpose: the app keeps its profile in its own table keyed by `id`. */
@@ -76,17 +76,16 @@ export interface AuthSessionRecord extends SessionRecord {
 export const MAX_EMAIL_LENGTH: 254 = MAX_ADDR_SPEC_LENGTH
 
 /**
- * Lower-cases and trims an address and checks its shape; null when it is not an address.
+ * Trims an address, checks its shape, then lower-cases it; null when it is not an address.
  * "A@X.com" and "a@x.com" normalise to the same value.
  *
- * The shape check is `isAddress` from `@spy4x/email/address`, so every address this accepts is
- * one the email package will send to.
+ * It is `parseBareAddress` from `@spy4x/email/address`, so every address this accepts is one the
+ * email package will send to: at most {@link MAX_EMAIL_LENGTH} characters, a local part of at most
+ * 64, and the shape checked before lower-casing, so a look-alike such as the Kelvin sign (U+212A)
+ * never turns into the ASCII `k` of someone else's mailbox.
  */
 export function normalizeEmail(raw: unknown): string | null {
-  if (typeof raw !== "string") return null
-  const email = raw.trim().toLowerCase()
-  if (email.length === 0 || email.length > MAX_EMAIL_LENGTH) return null
-  return isAddress(email) ? email : null
+  return parseBareAddress(raw)
 }
 
 /** What {@link AuthStore.attemptChallenge} found. Numbered from 1 so no outcome is falsy. */

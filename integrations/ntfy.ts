@@ -28,18 +28,13 @@
 
 import { createAsciiHeaders } from "./header-safety.ts"
 import {
-  type BackoffFn,
-  createExponentialBackoff,
-  DEFAULT_REQUEST_TIMEOUT_MS,
-  describeTransportError,
-  isRequestTimeout,
-  isTransientStatus,
-  parseRetryAfterMs,
-  releaseResponseBody,
-  type RetryPolicy,
-  runWithRetry,
-  type Sleeper,
-} from "./retry.ts"
+  createPostTransport,
+  type PostOutcome,
+  type PostTransport,
+  postWithRetry,
+} from "./_post.ts"
+import { type BackoffFn, releaseResponseBody, type RetryPolicy, type Sleeper } from "./retry.ts"
+import { processEnv } from "@spy4x/platform/server/process"
 import type { RandomSource } from "@spy4x/platform/universal/async"
 import type { NowFn } from "@spy4x/platform/universal/time"
 
@@ -253,10 +248,12 @@ const describeUrlShape = (value: string): string => {
  * because a self-hosted ntfy on a private network may not use auth. `null`
  * when incomplete, so "not configured" stays a caller decision — `mig`
  * collapsed it into a silent no-op, which means a typo'd variable name looks
- * exactly like a deliberate disable.
+ * exactly like a deliberate disable. The default reader is `processEnv` from
+ * `@spy4x/platform/server/process`, so it works on Deno, Node and Bun; on Deno
+ * it needs `--allow-env`.
  */
 export const ntfyConfigFromEnv = (
-  read: (name: string) => string | undefined = (name) => Deno.env.get(name),
+  read: (name: string) => string | undefined = (name) => processEnv.get(name),
 ): NtfyClientConfig | null => {
   const baseUrl = read("NTFY_URL")?.trim()
   const topic = read("NTFY_TOPIC")?.trim()
@@ -277,13 +274,8 @@ export const ntfyConfigFromEnv = (
  */
 export class NtfyClient {
   private readonly config: NtfyClientConfig
-  private readonly fetcher: typeof fetch
-  private readonly sleep: Sleeper
-  private readonly clock: NowFn
-  private readonly policy: RetryPolicy
-  private readonly backoff: BackoffFn
+  private readonly transport: PostTransport
   private readonly gate: NotificationSeverity
-  private readonly requestTimeoutMs: number
 
   /**
    * Throws when `config.baseUrl` is empty or unparseable, `config.topic` is
@@ -331,13 +323,8 @@ export class NtfyClient {
       )
     }
     this.config = { ...config, baseUrl, topic, token: token === "" ? undefined : token }
-    this.fetcher = options.fetcher ?? ((input, init) => fetch(input, init))
-    this.sleep = options.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)))
-    this.clock = options.clock ?? (() => Date.now())
     this.gate = options.gate ?? NotificationSeverity.Failure
-    this.policy = { ...DEFAULT_RETRY, ...options.retry, onDelay: options.onDelay }
-    this.backoff = options.backoff ?? createExponentialBackoff(this.policy, options.random)
-    this.requestTimeoutMs = options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS
+    this.transport = createPostTransport(DEFAULT_RETRY, options)
   }
 
   /** The topic endpoint, without the token. */
@@ -373,29 +360,22 @@ export class NtfyClient {
     }
     const headers = createAsciiHeaders(headerValues)
 
-    let last: PostOutcome | undefined
-    const run = await runWithRetry<PostOutcome>({
-      policy: this.policy,
-      sleep: this.sleep,
-      clock: this.clock,
-      backoff: this.backoff,
-      attempt: async (attempt, remainingBudgetMs) => {
-        const outcome = await this.post(headers, push.message, attempt, remainingBudgetMs)
-        last = outcome
-        return {
-          failed: !outcome.ok && outcome.retryable,
-          retryAfterMs: outcome.ok ? undefined : outcome.retryAfterMs,
-          value: outcome,
-        }
-      },
+    // The body is re-encoded from the string by the platform, so UTF-8 survives; only the header
+    // values were transliterated above.
+    const { settled, attempts } = await postWithRetry(this.transport, {
+      service: "ntfy",
+      urlSetting: "base URL",
+      url: this.endpoint,
+      headers,
+      body: push.message,
+      accepted: releaseAccepted,
     })
-    const settled = last ?? run.result
     if (settled.ok) {
       return {
         ok: true,
         status: "pushed",
         httpStatus: settled.httpStatus,
-        attempts: run.attempts,
+        attempts,
         title: headers.get("Title") ?? "",
         tags: headers.get("Tags"),
       }
@@ -405,7 +385,7 @@ export class NtfyClient {
       code: settled.code,
       message: settled.message,
       status: settled.status,
-      attempts: run.attempts,
+      attempts,
     }
   }
 
@@ -428,98 +408,13 @@ export class NtfyClient {
       severity: NotificationSeverity.Failure,
     })
   }
-
-  /** Issues one HTTP attempt, bounded by whichever is smaller of the request timeout or budget. */
-  private async post(
-    headers: Headers,
-    body: string,
-    attempt: number,
-    remainingBudgetMs: number,
-  ): Promise<PostOutcome> {
-    // Never longer than what `totalBudgetMs` has left: a per-request timeout
-    // alone bounds one request, but not the operation `push` promises to bound.
-    const timeoutMs = Math.max(Math.min(this.requestTimeoutMs, remainingBudgetMs), 0)
-    try {
-      // The body is re-encoded from the string by the platform, so UTF-8
-      // survives; only the header values were transliterated above.
-      const response = await this.fetcher(this.endpoint, {
-        method: "POST",
-        headers,
-        body,
-        // Following a 301/302/303 re-sends the POST as a bodiless GET, which
-        // ntfy answers with its web app and a 200: a lost push reported as
-        // pushed. Following it with the method kept would carry the token to
-        // wherever `Location` points. So a redirect is a failure.
-        redirect: "manual",
-        signal: AbortSignal.timeout(timeoutMs),
-      })
-      if (response.type === "opaqueredirect" || (response.status >= 300 && response.status < 400)) {
-        await releaseResponseBody(response)
-        // Neither `Location` nor the base URL goes into the message: the base
-        // URL can carry a token in its path.
-        return {
-          ok: false,
-          code: "redirected",
-          message: `ntfy answered with a redirect (${response.status}); ` +
-            "set the base URL to its final address",
-          status: response.status,
-          attempts: attempt,
-          retryable: false,
-        }
-      }
-      if (response.ok) {
-        await releaseResponseBody(response)
-        return { ok: true, httpStatus: response.status, attempts: attempt }
-      }
-      const outcome: PostFailure = {
-        ok: false,
-        code: "http_error",
-        message: `${response.status} ${response.statusText}`.trim(),
-        status: response.status,
-        attempts: attempt,
-        retryable: isTransientStatus(response.status),
-        retryAfterMs: parseRetryAfterMs(response.headers.get("Retry-After")),
-      }
-      await releaseResponseBody(response)
-      return outcome
-    } catch (cause) {
-      if (isRequestTimeout(cause)) {
-        return {
-          ok: false,
-          code: "timeout",
-          message: `ntfy request timed out after ${timeoutMs}ms`,
-          attempts: attempt,
-          retryable: true,
-        }
-      }
-      return {
-        ok: false,
-        code: "network_error",
-        // The base URL can carry a token in its path, and `fetch` puts the whole
-        // URL in its error text. Same defect as Slack's and healthchecks', and
-        // the same helper closes it.
-        message: describeTransportError(cause),
-        attempts: attempt,
-        retryable: true,
-      }
-    }
-  }
 }
 
-type PostOutcome = PostSuccess | PostFailure
-
-interface PostSuccess {
-  ok: true
-  httpStatus: number
-  attempts: number
-}
-
-interface PostFailure {
-  ok: false
-  code: NtfyErrorCode
-  message: string
-  attempts: number
-  retryable: boolean
-  status?: number
-  retryAfterMs?: number
+/**
+ * A 2xx from ntfy is a delivered push; its body is never read. A failure to release that body is
+ * ignored: reporting it as a network error retried a push ntfy had already delivered.
+ */
+const releaseAccepted = async (response: Response): Promise<PostOutcome<NtfyErrorCode>> => {
+  await releaseResponseBody(response).catch(() => undefined)
+  return { ok: true, httpStatus: response.status }
 }
