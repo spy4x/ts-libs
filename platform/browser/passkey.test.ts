@@ -117,6 +117,13 @@ describe("getPasskey", () => {
     expect(calls).toEqual([{ publicKey: { parsed: REQUEST }, signal: undefined }])
   })
 
+  it("passes the caller's signal, so an autofill request can be cancelled", async () => {
+    const calls: unknown[] = []
+    const signal = new AbortController().signal
+    await getPasskey(REQUEST, { browser: fakeBrowser(calls), autofill: true, signal })
+    expect(calls).toEqual([{ publicKey: { parsed: REQUEST }, signal, mediation: "conditional" }])
+  })
+
   it("asks for conditional mediation when autofill is on", async () => {
     const calls: unknown[] = []
     await getPasskey(REQUEST, { browser: fakeBrowser(calls), autofill: true })
@@ -141,7 +148,7 @@ describe("signalUnknownPasskey", () => {
     expect(seen).toEqual([{ rpId: "example.com", credentialId: "abc" }])
   })
 
-  it("does nothing where the browser lacks it, and never throws", async () => {
+  it("never throws, neither where the browser lacks it nor when the provider rejects it", async () => {
     await signalUnknownPasskey("example.com", "abc", fakeBrowser([]))
     const rejecting = fakeBrowser([], {
       statics: { signalUnknownCredential: () => Promise.reject(new Error("no")) },
