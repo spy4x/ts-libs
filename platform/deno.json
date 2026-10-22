@@ -62,6 +62,7 @@
     "./universal/ical-tasks-view": "./universal/ical-tasks-view.ts",
     "./universal/is-record": "./universal/is-record.ts",
     "./universal/key-value-store": "./universal/key-value-store.ts",
+    "./universal/markdown": "./universal/markdown.ts",
     "./universal/metrics": "./universal/metrics.ts",
     "./universal/money": "./universal/money.ts",
     "./universal/quick-add": "./universal/quick-add.ts",
