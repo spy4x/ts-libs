@@ -30,7 +30,7 @@ the browser and the API.
 ### `.` → `universal.ts`
 
 Runs in Deno, a browser, a worker and an SSR pass. The only host APIs touched are `Date`, `Intl`,
-`Math`, `TextEncoder`, `URL`, `FormData`, `fetch`, `crypto.getRandomValues` (only `universal/uuid`, through `@std/uuid`), and the `setTimeout` / `clearTimeout` pair that `universal/async` uses (it
+`Math`, `TextEncoder`, `URL`, `FormData`, `fetch`, `crypto.getRandomValues` (only `universal/uuid`, through `@std/uuid`), `crypto.subtle.digest` (only the catalog locks of `universal/i18n`), and the `setTimeout` / `clearTimeout` pair that `universal/async` uses (it
 `unref`s the handle where the runtime provides one). No other `crypto` calls and no DOM global: the
 browser- and server-only halves are the other two subpaths.
 
@@ -47,6 +47,7 @@ browser- and server-only halves are the other two subpaths.
 | `universal/errors`          | `ErrType`, `Err`, `ValidationError`, `ConnectionError`, `ServerError`, `PayloadError`, `StoreError`, `RequestError`, `ResponseError`, `connectionError`, `responseError`, `isSilentError`, `OperationState`, `OperationResult`                                                                                                                                                                                                                                                                                                                                                                                                                |
 | `universal/format-number`   | `round`, `formatDecimal`, `formatPct`, `formatBytes`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
 | `universal/honeypot`        | `HONEYPOT_FIELD_NAME`, `honeypotFilled` — the server half of a honeypot form field                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| `universal/i18n`            | `createTranslator`, `negotiateLanguage`, `parseAcceptLanguage`, `textDirection`, `pseudoLocalize`, `checkCatalogs`, `findUnusedKeys`, `stampLocks` — translations from flat JSON catalogs with `Intl` plurals, language choice, text direction and the catalog checks; see below                                                                                                                                                                                                                                                                                                                                                              |
 | `universal/is-record`       | `isRecord` — type guard for a parsed JSON object (not `null`, not an array)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
 | `universal/key-value-store` | `KeyValueStore` — a dependency-free port, the one home for it and for `browser/storage`'s deprecated `StorageLike` and `@spy4x/realtime`'s deprecated `KeyValueStore` alias (#71)                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 | `universal/metrics`         | `Counter`, `MetricLabels`, `createCounter`, `renderPrometheus` — a labelled counter and its Prometheus text exposition; no registry, no histograms                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
@@ -105,6 +106,45 @@ same rule, so the first and last tick are exactly the bounds. It exists so `prea
 `niceScale` can drop its own copy of the tick loop (#201). The same release fixed tick rounding for
 a step with more than one significant digit: `ticks(0, 10, 4)` returned `[0, 3, 5, 8, 10]` and now
 returns `[0, 2.5, 5, 7.5, 10]`.
+
+#### `universal/i18n` — translations from JSON catalogs
+
+One JSON file per language, English as the source. `{name}` inserts a value, a plural message is an
+object keyed by CLDR category (`zero`, `one`, `two`, `few`, `many`, `other`), and `<tag>…</tag>`
+marks a span the caller renders; `parts()` returns those spans, and nothing becomes HTML. A missing
+key falls back to English and calls `onMissing`. `negotiateLanguage` only ever returns a member of
+the supported list, so its result is safe as an import key. The loop, from catalog to lock:
+
+```ts
+// i18n/app/en.json: { "notes.count": { "one": "{count} note", "other": "{count} notes" } }
+import en from "./i18n/app/en.json" with { type: "json" }
+import de from "./i18n/app/de.json" with { type: "json" }
+const language = negotiateLanguage(parseAcceptLanguage(header), ["en", "de"], "en")
+const { t, dir } = createTranslator<keyof typeof en>({
+  language,
+  catalogs: [{ source: en, translation: de }],
+})
+t("notes.count", { count: 3 }) // "3 Notizen"; dir is "ltr"
+
+// i18n.test.ts: every problem names the command that fixes it.
+const locks = { de: await Deno.readTextFile("i18n/app/de.lock") }
+expect(await checkCatalogs({ source: en, languages: { de }, locks })).toEqual([])
+// The `i18n:stamp` task, once the translations match the English:
+for (const [lang, text] of Object.entries(await stampLocks(en, { de }))) {
+  await Deno.writeTextFile(`i18n/app/${lang}.lock`, text)
+}
+```
+
+`checkCatalogs` reports a missing, extra or empty message, a stale one (its English changed after
+the lock was stamped), placeholders or tags that differ from English, and plural forms that differ
+from what `Intl.PluralRules` lists for the language. `findUnusedKeys` lists keys no source file
+names, and `pseudoLocalize` makes the `en-XA` pseudo-language that finds text which skipped the
+catalog. Problems name `deno task i18n:stamp` as the fix, so an app names its stamp task that.
+
+Whether a `.json` export of a published JSR package builds in Vite through `@deno/vite-plugin` is
+proven in two halves only (#364): a linked package's `.json` export resolved and built with one
+chunk per language, and a `.json` file served by jsr.io loaded through the plugin. It holds end to
+end once the first consumer ships one.
 
 #### `universal/uuid` — version 7 ids and UUID validators
 

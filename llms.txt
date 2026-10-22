@@ -1161,6 +1161,25 @@ formatPct	function	@spy4x/platform/universal/format-number	Format a fraction in 
 round	function	@spy4x/platform/universal/format-number	Round to the nearest 10^-`decimals`.
 HONEYPOT_FIELD_NAME	constant	@spy4x/platform/universal/honeypot	Default `name` of the honeypot field.
 honeypotFilled	function	@spy4x/platform/universal/honeypot	Whether a submitted honeypot field carries a value — a person never types into a field they cannot see, so any value here means whatever posted the form was not one.
+Catalog	type	@spy4x/platform/universal/i18n	A flat catalog: message key to message.
+CatalogPair	interface	@spy4x/platform/universal/i18n	One namespace of messages: its English source and, for any other language, its translation.
+CatalogProblem	interface	@spy4x/platform/universal/i18n	One problem checkCatalogs found.
+CatalogProblemKind	type	@spy4x/platform/universal/i18n	What is wrong with one key in one language.
+Message	type	@spy4x/platform/universal/i18n	One catalog entry: plain text, or text per plural category.
+MessagePart	type	@spy4x/platform/universal/i18n	A span of a rich message: plain text, or text the caller wraps in the element named `tag`.
+MessageValues	type	@spy4x/platform/universal/i18n	Values for a message's `{name}` placeholders.
+PluralCategory	type	@spy4x/platform/universal/i18n	A CLDR plural category, as `Intl.PluralRules` names it.
+PluralMessage	type	@spy4x/platform/universal/i18n	A message with one text per plural category the language uses.
+TextDirection	type	@spy4x/platform/universal/i18n	Text direction of a language.
+Translator	interface	@spy4x/platform/universal/i18n	What createTranslator returns.
+checkCatalogs	function	@spy4x/platform/universal/i18n	Check translated catalogs against the English source and its locks.
+createTranslator	function	@spy4x/platform/universal/i18n	Make a translator for one interface language.
+findUnusedKeys	function	@spy4x/platform/universal/i18n	The keys of `catalog` that appear in none of `sourceTexts` as a quoted literal (`"key"`, `'key'` or a backtick string).
+negotiateLanguage	function	@spy4x/platform/universal/i18n	Pick the supported language that best matches the requested ones, taken in order: for each, an exact tag wins, then a supported tag of the same language (`pt-PT` → `pt-BR`, `en-US` → `en`).
+parseAcceptLanguage	function	@spy4x/platform/universal/i18n	The language tags of an `Accept-Language` header, most preferred first.
+pseudoLocalize	function	@spy4x/platform/universal/i18n	The `en-XA` pseudo-language of a catalog: letters accented, every message wrapped in `⟦ ⟧` and about 40 % longer, placeholders and tags kept.
+stampLocks	function	@spy4x/platform/universal/i18n	The new lock text of every language: one `key<TAB>hash` line per key the language translates, sorted by key, where the hash is a SHA-256 prefix of the English message.
+textDirection	function	@spy4x/platform/universal/i18n	`rtl` for a language written right to left (Arabic, Hebrew, Thaana, Syriac, N'Ko or Adlam script), `ltr` for any other, including a tag `Intl` cannot parse.
 SortMode	enum	@spy4x/platform/universal/ical-tasks-view	Deprecated: Import from `@spy4x/tasks/view`. How a list shows its tasks.
 SortOrderChange	interface	@spy4x/platform/universal/ical-tasks-view	Deprecated: Import from `@spy4x/tasks/view`. A new `X-APPLE-SORT-ORDER` to write for one task.
 TodayView	interface	@spy4x/platform/universal/ical-tasks-view	Deprecated: Import from `@spy4x/tasks/view`. The Today view.
@@ -2604,4 +2623,4 @@ firstIssueMessage	function	@spy4x/validation/validate	First issue message in a v
 isArkErrors	function	@spy4x/validation/validate	Whether a value is an arktype rejection, without relying on `instanceof`.
 toValidationError	function	@spy4x/validation/validate	Build a ValidationError from arktype's issues.
 validate	function	@spy4x/validation/validate	Parse `value` with an arktype schema exactly once.
-# export surface: sha256 8ddb8be0a0f9176f2a3b8ddba0e34d30f7d921d543e7840eb2b472d06b24aaf1
+# export surface: sha256 e78513561ba0a3d09822878bbce0bc9e430c85567e4e50cdf95148cce3edc323
