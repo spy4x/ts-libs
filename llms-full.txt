@@ -4860,6 +4860,18 @@ const url = await provider.presignPut("uploads", `${userId}/${fileId}`, {
 // the browser: fetch(url, { method: "PUT", body: file, headers: { "content-type": "image/png" } })
 ```
 
+Before trusting a browser upload, read its first bytes and check them against the
+type it claimed: a signed URL holds the upload to a name, not to what the file is.
+
+```ts
+const head = await provider.getRange("uploads", key, 0, SNIFF_BYTES - 1)
+if (!matchesContentType(head, "image/png")) await provider.delete("uploads", key)
+```
+
+`matchesContentType` knows PNG, JPEG, GIF, WebP, PDF and ZIP by their signature,
+and plain text, CSV and JSON as UTF-8 without a NUL byte (`SNIFFABLE_CONTENT_TYPES`).
+An empty file and any other type never match.
+
 A failed request throws a `StorageError` whose message carries only the store's
 error code and message, never the rest of its error body, which can echo the
 access key id and the signature.
