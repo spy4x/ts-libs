@@ -54,7 +54,16 @@ export interface PresignRequest {
   acl?: string
   /** Extra query parameters, e.g. `{"response-content-type": "image/png"}`. */
   query?: Record<string, string | undefined>
+  /**
+   * Headers to sign besides `host`, e.g. `{"content-type": "image/png"}`. The
+   * request must then send each one with exactly this value, or the store
+   * refuses it: this is how a presigned PUT fixes the type and the size.
+   */
+  headers?: Record<string, string>
 }
+
+/** A lowercase header name: what SigV4's canonical header list needs. */
+const HEADER_NAME = /^[a-z0-9-]+$/
 
 async function hmacSha256(key: Uint8Array | string, message: string): Promise<Uint8Array> {
   const raw = typeof key === "string" ? new TextEncoder().encode(key) : key
@@ -82,7 +91,7 @@ export function formatAmzDate(date: Date): string {
  * region, service and the `aws4_request` terminator. Pure Web Crypto, so no AWS
  * SDK dependency is needed to presign.
  */
-async function deriveSigningKey(
+export async function deriveSigningKey(
   secretAccessKey: string,
   date: string,
   region: string,
@@ -117,15 +126,46 @@ function assertPresignRequest(request: PresignRequest): void {
   if (endpoint.protocol !== "http:" && endpoint.protocol !== "https:") {
     throw new StorageError("invalid_config", `Endpoint must be http or https: ${request.endpoint}`)
   }
+  for (const [name, value] of Object.entries(request.headers ?? {})) {
+    if (!HEADER_NAME.test(name) || name === "host" || hasControlCharacter(value)) {
+      throw new StorageError("invalid_config", `Invalid header to sign: ${JSON.stringify(name)}`)
+    }
+  }
+}
+
+/** True when `value` holds a control character, such as a line break. */
+function hasControlCharacter(value: string): boolean {
+  return [...value].some((character) => {
+    const code = character.charCodeAt(0)
+    return code < 0x20 || code === 0x7f
+  })
+}
+
+/**
+ * The canonical header lines and the signed-header list, `host` plus any
+ * extra headers, sorted by name. Values are trimmed and inner runs of spaces
+ * collapsed, as SigV4 specifies.
+ */
+function canonicalHeaders(
+  host: string,
+  extra: Record<string, string> = {},
+): { lines: string; names: string } {
+  const entries = Object.entries({ ...extra, host })
+    .map(([name, value]) => [name, value.trim().replace(/ +/g, " ")] as const)
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+  return {
+    lines: entries.map(([name, value]) => `${name}:${value}\n`).join(""),
+    names: entries.map(([name]) => name).join(";"),
+  }
 }
 
 /**
  * Build a SigV4 query-string presigned URL for one S3 request.
  *
  * Zero dependencies: the signature is computed with Web Crypto. The request
- * always carries `UNSIGNED-PAYLOAD`, which is what every S3 presign uses, and
- * the canonical signed-header list is `host` alone unless an `acl` was
- * explicitly requested — so by default the returned URL grants no ACL at all.
+ * always carries `UNSIGNED-PAYLOAD`, which is what every S3 presign uses. The
+ * signed headers are `host` plus `request.headers`, and no ACL is signed unless
+ * `acl` is set, so by default the returned URL grants no ACL at all.
  */
 export async function signS3Request(request: PresignRequest): Promise<string> {
   assertPresignRequest(request)
@@ -137,14 +177,16 @@ export async function signS3Request(request: PresignRequest): Promise<string> {
   const date = amzDate.slice(0, 8)
   const scope = `${date}/${request.region}/${service}/aws4_request`
 
-  // The ACL rides the canonical query string. The only signed header is `host`.
+  // The ACL rides the canonical query string. `host` is always signed; a
+  // presigned PUT adds the headers that fix its type and size.
+  const headers = canonicalHeaders(host, request.headers)
   const parameters: Record<string, string | undefined> = {
     ...request.query,
     "X-Amz-Algorithm": ALGORITHM,
     "X-Amz-Credential": `${request.credentials.accessKeyId}/${scope}`,
     "X-Amz-Date": amzDate,
     "X-Amz-Expires": String(request.expiresIn),
-    "X-Amz-SignedHeaders": "host",
+    "X-Amz-SignedHeaders": headers.names,
   }
   if (request.acl !== undefined) {
     if (!CANNED_ACLS.has(request.acl)) {
@@ -164,9 +206,8 @@ export async function signS3Request(request: PresignRequest): Promise<string> {
     request.method,
     `/${encodeS3Path(request.key)}`,
     canonicalQuery,
-    `host:${host}`,
-    "",
-    "host",
+    headers.lines,
+    headers.names,
     UNSIGNED_PAYLOAD,
   ].join("\n")
 
