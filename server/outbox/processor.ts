@@ -10,6 +10,7 @@
  * state, which keeps the outbox out of the correctness path.
  */
 import { backoffDelay } from "@spy4x/platform/universal/async"
+import { type CronSchedule, nextCronRun, parseCron } from "@spy4x/time/cron"
 
 /**
  * One outbox row.
@@ -37,13 +38,23 @@ export interface OutboxPublisher {
   publish(event: OutboxEvent): Promise<void>
 }
 
+/**
+ * When a repeating event runs next: a number of seconds from the database's now, or a moment.
+ * `OutboxProcessorOptions.repeatEveryMs` asks for the first, `repeatCron` for the second.
+ */
+export type OutboxNextRun = number | { at: Date }
+
 export interface OutboxRepository {
   claimBatch(limit: number, maxAttempts: number, leaseSeconds: number): Promise<OutboxEvent[]>
   /**
-   * Marks the event done. With `repeatInSeconds`, also writes the event's next run, that many
-   * seconds from now, in the same atomic step, so a crash can leave neither no next run nor two.
+   * Marks the event done. With `repeat`, also writes the event's next run, in the same atomic
+   * step, so a crash can leave neither no next run nor two: a number is that many seconds from
+   * now, `{ at }` is that moment.
+   *
+   * A repository written before `{ at }` existed takes only a number; it still works with every
+   * processor option except `repeatCron`, the one that passes `{ at }`.
    */
-  markProcessed(id: string, repeatInSeconds?: number): Promise<void>
+  markProcessed(id: string, repeat?: OutboxNextRun): Promise<void>
   scheduleRetry(
     id: string,
     delaySeconds: number,
@@ -66,8 +77,8 @@ export interface OutboxRepository {
    * claim, `release` or `findLost` ever returns it again) and stores `errorCode` on it. A closed
    * event with an error code is one that was given up; `markProcessed` clears the code.
    *
-   * With `repeatInSeconds`, also writes the event's next run, that many seconds from now, in the
-   * same atomic step, unless another unprocessed event of the same kind and aggregate already
+   * With `repeat`, also writes the event's next run (a number of seconds from now, or `{ at }` a
+   * moment, as for `markProcessed`), in the same atomic step, unless another unprocessed event of the same kind and aggregate already
    * waits. Closing and a repeating `markProcessed` must exclude each other on the row, so that a
    * worker that outlived its lease and then succeeds writes no second next run.
    *
@@ -77,7 +88,7 @@ export interface OutboxRepository {
    * Optional, and called only by a processor with `onAttemptFailed` or `repeatAfterGiveUp`. Without
    * it the processor ends a last attempt with `scheduleRetry`, as it always has.
    */
-  giveUp?(id: string, errorCode: string, repeatInSeconds?: number): Promise<boolean>
+  giveUp?(id: string, errorCode: string, repeat?: OutboxNextRun): Promise<boolean>
   /**
    * Returns up to `limit` unprocessed events that used up `maxAttempts` and whose last claim ran
    * out at least one more lease length ago, with the error code stored on each: nobody reported
@@ -209,9 +220,23 @@ export interface OutboxProcessorOptions {
    */
   repeatEveryMs?: Readonly<Record<string, number>>
   /**
+   * Event kinds that repeat on a cron schedule in UTC (`0 3 * * *`, `@daily`; the syntax is
+   * `parseCron` of `@spy4x/time/cron`). They behave as under `repeatEveryMs`, except that the next
+   * run is the schedule's next minute after the moment the run finished, by the `now` clock, and
+   * reaches the repository as `{ at }`. Start a chain with {@link ensureScheduledOutboxEvent} and
+   * `{ at: nextCronRun(expression, new Date()) }`.
+   *
+   * Needs a repository whose `markProcessed` (and `giveUp`, with `repeatAfterGiveUp`) accept
+   * `{ at }`, such as `PostgresOutboxRepository`.
+   *
+   * @throws RangeError at construction when an expression is invalid (the message names the kind
+   * and the field), or a kind is in `repeatEveryMs` as well.
+   */
+  repeatCron?: Readonly<Record<string, string>>
+  /**
    * Keeps a repeating event's chain alive when a run is given up. Off by default: the chain ends,
    * as described under `repeatEveryMs`. With `true`, giving up an event whose kind is in
-   * `repeatEveryMs` also writes its next run one interval later, in the same atomic step, whether
+   * `repeatEveryMs` or `repeatCron` also writes its next run, in the same atomic step, whether
    * the last attempt failed in this processor or was lost with its worker. One bad night then
    * costs one run. The given-up event is closed with its error code kept, as described under
    * `onAttemptFailed`.
@@ -258,8 +283,8 @@ export interface OutboxProcessorOptions {
    */
   onAttemptFailed?: (failure: OutboxAttemptFailure) => void | Promise<void>
   /**
-   * Milliseconds clock used to measure a batch against its lease. Defaults to
-   * `Date.now`; tests pass a fake one.
+   * Milliseconds clock used to measure a batch against its lease, and the moment a `repeatCron`
+   * schedule counts its next run from. Defaults to `Date.now`; tests pass a fake one.
    */
   now?: () => number
 }
@@ -336,6 +361,7 @@ export class OutboxProcessor {
   readonly #leaseSeconds: number
   readonly #now: () => number
   readonly #repeatEveryMs: Readonly<Record<string, number>>
+  readonly #repeatCron: ReadonlyMap<string, CronSchedule>
   readonly #slowestPublishMs: number
   readonly #onAttemptFailed: OutboxProcessorOptions["onAttemptFailed"]
   readonly #repeatAfterGiveUp: boolean
@@ -361,6 +387,18 @@ export class OutboxProcessor {
         throw new RangeError(`repeatEveryMs for ${kind} must be a finite number above 0, got ${ms}`)
       }
     }
+    const crons = new Map<string, CronSchedule>()
+    for (const [kind, expression] of Object.entries(options.repeatCron ?? {})) {
+      if (Object.hasOwn(this.#repeatEveryMs, kind)) {
+        throw new RangeError(`${kind} is in both repeatEveryMs and repeatCron`)
+      }
+      try {
+        crons.set(kind, parseCron(expression))
+      } catch (error) {
+        throw new RangeError(`repeatCron for ${kind}: ${(error as Error).message}`)
+      }
+    }
+    this.#repeatCron = crons
     const floor = options.slowestPublishMs ?? 0
     if (!Number.isFinite(floor) || floor < 0) {
       throw new RangeError(
@@ -419,9 +457,9 @@ export class OutboxProcessor {
       try {
         await this.publisher.publish(event)
         stage = "markProcessed"
-        const repeatMs = this.#repeatEveryMs[event.eventKind]
-        if (repeatMs === undefined) await this.repository.markProcessed(event.id)
-        else await this.repository.markProcessed(event.id, repeatMs / 1000)
+        const repeat = this.#nextRun(event.eventKind)
+        if (repeat === undefined) await this.repository.markProcessed(event.id)
+        else await this.repository.markProcessed(event.id, repeat)
         published++
       } catch (error) {
         failed++
@@ -463,9 +501,17 @@ export class OutboxProcessor {
 
   /** Gives the event up and, for a repeating kind with `repeatAfterGiveUp`, writes its next run. */
   async #giveUp(event: OutboxEvent, errorCode: string): Promise<boolean> {
-    const repeatMs = this.#repeatAfterGiveUp ? this.#repeatEveryMs[event.eventKind] : undefined
-    if (repeatMs === undefined) return await this.repository.giveUp!(event.id, errorCode)
-    return await this.repository.giveUp!(event.id, errorCode, repeatMs / 1000)
+    const repeat = this.#repeatAfterGiveUp ? this.#nextRun(event.eventKind) : undefined
+    if (repeat === undefined) return await this.repository.giveUp!(event.id, errorCode)
+    return await this.repository.giveUp!(event.id, errorCode, repeat)
+  }
+
+  /** The next run of a repeating kind, as the repository takes it; `undefined` for any other. */
+  #nextRun(kind: string): OutboxNextRun | undefined {
+    const cron = this.#repeatCron.get(kind)
+    if (cron !== undefined) return { at: nextCronRun(cron, new Date(this.#now())) }
+    const ms = this.#repeatEveryMs[kind]
+    return ms === undefined ? undefined : ms / 1000
   }
 
   /**

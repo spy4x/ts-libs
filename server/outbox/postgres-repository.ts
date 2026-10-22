@@ -43,7 +43,7 @@
  * never creates or migrates the table.
  */
 import type { Sql } from "../db/index.ts"
-import type { LostOutboxEvent, OutboxEvent, OutboxRepository } from "./processor.ts"
+import type { LostOutboxEvent, OutboxEvent, OutboxNextRun, OutboxRepository } from "./processor.ts"
 import { uuidV7 } from "@spy4x/platform/universal/uuid"
 
 export class PostgresOutboxRepository implements OutboxRepository {
@@ -106,8 +106,8 @@ export class PostgresOutboxRepository implements OutboxRepository {
     `
   }
 
-  async markProcessed(id: string, repeatInSeconds?: number): Promise<void> {
-    if (repeatInSeconds === undefined) {
+  async markProcessed(id: string, repeat?: OutboxNextRun): Promise<void> {
+    if (repeat === undefined) {
       await this.sql`
         UPDATE outbox_events
         SET processed_at = now(),
@@ -128,8 +128,7 @@ export class PostgresOutboxRepository implements OutboxRepository {
             last_error_code = NULL
         WHERE id = ${id}
           AND processed_at IS NULL
-        RETURNING event_kind, aggregate_type, aggregate_id,
-          now() + (${repeatInSeconds}::double precision * INTERVAL '1 second') AS next_at
+        RETURNING event_kind, aggregate_type, aggregate_id, ${this.#nextAt(repeat)} AS next_at
       )
       INSERT INTO outbox_events (
         id, event_kind, aggregate_type, aggregate_id, aggregate_version, available_at
@@ -164,8 +163,8 @@ export class PostgresOutboxRepository implements OutboxRepository {
    * next run is shaped as in `markProcessed`. It is left out while another unprocessed row of the
    * same kind and aggregate waits, so a chain that was started again meanwhile stays one chain.
    */
-  async giveUp(id: string, errorCode: string, repeatInSeconds?: number): Promise<boolean> {
-    if (repeatInSeconds === undefined) {
+  async giveUp(id: string, errorCode: string, repeat?: OutboxNextRun): Promise<boolean> {
+    if (repeat === undefined) {
       const closed = await this.sql`
         UPDATE outbox_events
         SET processed_at = now(),
@@ -185,8 +184,7 @@ export class PostgresOutboxRepository implements OutboxRepository {
             last_error_code = ${errorCode}
         WHERE id = ${id}
           AND processed_at IS NULL
-        RETURNING id, event_kind, aggregate_type, aggregate_id,
-          now() + (${repeatInSeconds}::double precision * INTERVAL '1 second') AS next_at
+        RETURNING id, event_kind, aggregate_type, aggregate_id, ${this.#nextAt(repeat)} AS next_at
       ), next AS (
         INSERT INTO outbox_events (
           id, event_kind, aggregate_type, aggregate_id, aggregate_version, available_at
@@ -206,6 +204,21 @@ export class PostgresOutboxRepository implements OutboxRepository {
       SELECT 1 FROM gone
     `
     return closed.length > 0
+  }
+
+  /**
+   * The next run's time as SQL: seconds from the database's now, or the moment given.
+   *
+   * @throws RangeError when `at` is not a valid date.
+   */
+  #nextAt(repeat: OutboxNextRun) {
+    if (typeof repeat === `number`) {
+      return this.sql`now() + (${repeat}::double precision * INTERVAL '1 second')`
+    }
+    if (!(repeat.at instanceof Date) || Number.isNaN(repeat.at.getTime())) {
+      throw new RangeError(`the next run's at must be a valid Date`)
+    }
+    return this.sql`${repeat.at}::timestamptz`
   }
 
   /**

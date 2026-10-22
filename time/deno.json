@@ -10,6 +10,7 @@
     "./ics-core": "./ics-core.ts",
     "./ical": "./ical.ts",
     "./rrule": "./rrule.ts",
+    "./cron": "./cron.ts",
     "./ical-tasks": "./ical-tasks.ts",
     "./ical-tasks-model": "./ical-tasks-model.ts",
     "./ical-tasks-edit": "./ical-tasks-edit.ts",

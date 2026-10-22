@@ -440,6 +440,42 @@ describe("delayed and repeating jobs against a real server", () => {
     })
   })
 
+  it("writes the next run of a cron job at the schedule's next time when its run succeeds, once", async () => {
+    await withOutboxSchema(async (sql) => {
+      await scheduleOutboxEvent(
+        sql,
+        { eventKind: "nightly.cleanup", aggregateType: "job", aggregateId: JOB_SUBJECT },
+        { inMs: 0 },
+      )
+      const repository = new PostgresOutboxRepository(sql)
+      const finishedAt = Date.parse("2026-10-23T05:00:00Z")
+      const processor = new OutboxProcessor(repository, { publish: () => Promise.resolve() }, {
+        repeatCron: { "nightly.cleanup": "0 3 * * *" },
+        now: () => finishedAt,
+      })
+
+      assertEquals((await processor.drainOnce()).published, 1)
+
+      const next = await sql<{ at: Date; version: string }[]>`
+        SELECT available_at AS at, aggregate_version::text AS version
+        FROM outbox_events WHERE processed_at IS NULL
+      `
+      assertEquals(next.length, 1)
+      assertEquals(next[0].at.toISOString(), "2026-10-24T03:00:00.000Z")
+      assertEquals(next[0].version, String(Date.parse("2026-10-24T03:00:00Z")))
+
+      // A redelivery of the finished run must not start a second chain.
+      const [done] = await sql<{ id: string }[]>`
+        SELECT id FROM outbox_events WHERE processed_at IS NOT NULL
+      `
+      await repository.markProcessed(done.id, { at: new Date("2026-10-25T03:00:00Z") })
+      const [{ count }] = await sql<{ count: number }[]>`
+        SELECT count(*)::int AS count FROM outbox_events
+      `
+      assertEquals(count, 2)
+    })
+  })
+
   it("retries a failing job with backoff, then stops with its error stored", async () => {
     await withOutboxSchema(async (sql) => {
       await scheduleOutboxEvent(
@@ -1020,6 +1056,33 @@ describe("given-up events against a real server", () => {
         rows.map((row) => [row.attempts, row.done, row.error, row.hours]),
         [[2, true, "TypeError", 0], [0, false, null, 24]],
       )
+    })
+  })
+
+  it("with repeatAfterGiveUp, a cron job that fails its last attempt runs again at its next cron time", async () => {
+    await withOutboxSchema(async (sql) => {
+      await scheduleOutboxEvent(sql, NIGHTLY, { inMs: 0 })
+      const processor = new OutboxProcessor(
+        new PostgresOutboxRepository(sql),
+        { publish: () => Promise.reject(new TypeError("boom")) },
+        {
+          maxAttempts: 1,
+          repeatCron: { "nightly.cleanup": "30 2 * * MON" },
+          repeatAfterGiveUp: true,
+          now: () => Date.parse("2026-10-23T05:00:00Z"),
+        },
+      )
+
+      assertEquals((await processor.drainOnce()).failed, 1)
+
+      const rows = await sql<{ done: boolean; error: string | null; at: Date }[]>`
+        SELECT processed_at IS NOT NULL AS done, last_error_code AS error, available_at AS at
+        FROM outbox_events ORDER BY created_at, processed_at NULLS LAST
+      `
+      assertEquals(rows.length, 2)
+      assertEquals([rows[0].done, rows[0].error], [true, "TypeError"])
+      // 2026-10-23 is a Friday; the next Monday at 02:30 UTC is the 26th.
+      assertEquals([rows[1].done, rows[1].at.toISOString()], [false, "2026-10-26T02:30:00.000Z"])
     })
   })
 
