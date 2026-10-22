@@ -14,7 +14,7 @@ when:
   - event: tag
     ref: refs/tags/v*
 
-# The integration tier's dependencies (#74). Same seven services as
+# The integration tier's dependencies (#74). Same eight services as
 # `infra/compose.integration.yml`, same exact version pins; only the addresses
 # differ, because Woodpecker publishes a service under its own name as hostname on
 # the container's own port. The credentials are the same obviously fake literal, and
@@ -47,6 +47,27 @@ services:
       MINIO_ROOT_PASSWORD: integration-test-only
     commands:
       - minio server /data --address :9000 --console-address :9001
+
+  # Garage (#738). Its image has no shell, and a Woodpecker service takes no config
+  # file, so this one starts from Alpine, fetches the same binary the
+  # `dxflrs/garage:v2.4.1` image carries, checks its SHA-256, writes the config and
+  # runs it. The key, the bucket and the all-zero secrets are the ones
+  # `infra/compose.integration.yml` gives the image.
+  garage:
+    image: alpine:3.22.7@sha256:e9f2de928efcc1b53d0948e684b4f490315f280de6044844ec0ff26c0b44d3cf
+    environment:
+      GARAGE_RPC_SECRET: "0000000000000000000000000000000000000000000000000000000000000000"
+      GARAGE_DEFAULT_ACCESS_KEY: GK000000000000000000000000
+      GARAGE_DEFAULT_SECRET_KEY: "0000000000000000000000000000000000000000000000000000000000000000"
+      GARAGE_DEFAULT_BUCKET: ts-libs-integration
+    commands:
+      - |
+          set -eu
+          wget -q -O /usr/local/bin/garage https://garagehq.deuxfleurs.fr/_releases/v2.4.1/x86_64-unknown-linux-musl/garage
+          echo "ae49f8de4aaee6b5ca305f7cbdccc8cd8a29b2804aac074649f18bfb83d0a2b6  /usr/local/bin/garage" | sha256sum -c -
+          chmod +x /usr/local/bin/garage
+          printf '%s\n' 'metadata_dir = "/var/lib/garage/meta"' 'data_dir = "/var/lib/garage/data"' 'db_engine = "sqlite"' 'replication_factor = 1' 'rpc_bind_addr = "[::]:3901"' 'rpc_public_addr = "127.0.0.1:3901"' '[s3_api]' 's3_region = "garage"' 'api_bind_addr = "[::]:3900"' > /etc/garage.toml
+          exec garage server --single-node --default-bucket
 
   mailpit:
     image: axllent/mailpit:v1.31.2
@@ -107,6 +128,7 @@ steps:
     environment:
       TS_LIBS_IT_POSTGRES_URL: postgres://integration-test-only:integration-test-only@postgres:5432/integration-test-only
       TS_LIBS_IT_S3_ENDPOINT: http://minio:9000
+      TS_LIBS_IT_GARAGE_ENDPOINT: http://garage:3900
       TS_LIBS_IT_SMTP_HOST: mailpit
       TS_LIBS_IT_SMTP_PORT: "1025"
       TS_LIBS_IT_MAILPIT_URL: http://mailpit:8025
@@ -126,6 +148,7 @@ steps:
     environment:
       TS_LIBS_IT_POSTGRES_URL: postgres://integration-test-only:integration-test-only@postgres-17:5432/integration-test-only
       TS_LIBS_IT_S3_ENDPOINT: http://minio:9000
+      TS_LIBS_IT_GARAGE_ENDPOINT: http://garage:3900
       TS_LIBS_IT_SMTP_HOST: mailpit
       TS_LIBS_IT_SMTP_PORT: "1025"
       TS_LIBS_IT_MAILPIT_URL: http://mailpit:8025
