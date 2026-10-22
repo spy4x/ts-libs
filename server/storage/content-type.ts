@@ -59,8 +59,9 @@ export function matchesContentType(bytes: Uint8Array, contentType: string): bool
   if (head.length === 0) return false
   const type = bareType(contentType)
   if (TEXT_TYPES.has(type)) return isText(head)
+  // Own keys only: `constructor` and `__proto__` are inherited, not signatures.
+  if (!Object.hasOwn(SIGNATURES, type)) return false
   const signatures = SIGNATURES[type]
-  if (signatures === undefined) return false
   return signatures.some((parts) =>
     parts.every(([offset, expected]) =>
       expected.every((byte, index) => head[offset + index] === byte)

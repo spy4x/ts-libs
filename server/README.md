@@ -533,6 +533,10 @@ if (!matchesContentType(head, "image/png")) await provider.delete("uploads", key
 and plain text, CSV and JSON as UTF-8 without a NUL byte (`SNIFFABLE_CONTENT_TYPES`).
 An empty file and any other type never match.
 
+The check cannot catch a file that is two types at once, such as a PNG with HTML
+after its signature, or markup sent as plain text. Serve stored files with their
+checked type and `X-Content-Type-Options: nosniff`, so a browser never runs them.
+
 A failed request throws a `StorageError` whose message carries only the store's
 error code and message, never the rest of its error body, which can echo the
 access key id and the signature.

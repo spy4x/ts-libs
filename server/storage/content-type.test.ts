@@ -75,5 +75,8 @@ describe("matchesContentType", () => {
     assertEquals(matchesContentType(new Uint8Array(0), "text/plain"), false)
     assertEquals(matchesContentType(SAMPLES["text/plain"], "text/html"), false)
     assertEquals(matchesContentType(SAMPLES["image/png"], "image/svg+xml"), false)
+    assertEquals(matchesContentType(SAMPLES["image/png"], "constructor"), false)
+    assertEquals(matchesContentType(SAMPLES["image/png"], "__proto__"), false)
+    assertEquals(matchesContentType(bytes([0xff, 0xd8, 0x00]), "image/jpeg"), false)
   })
 })
