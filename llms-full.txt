@@ -4784,17 +4784,17 @@ provider that could not be tested this way would be a design defect.
 ### Browser uploads and object management (S3 only)
 
 `S3Storage` has six more methods that the port does not, because a local folder
-cannot honour them. They work against AWS, MinIO and Garage, and the integration
-tier runs them against MinIO and Garage.
+cannot honour them. The integration tier runs them against MinIO and Garage; they should work
+against AWS too, but no test runs there.
 
-| Method                                                        | Does                                                                                                            |
-| ------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
-| `presignPut(bucket, path, { contentType, contentLength })`    | URL for one browser PUT. Both headers are signed, so the store refuses another type or another size.            |
-| `presignGet(bucket, path, { responseContentDisposition, … })` | URL for one GET; `responseContentType` and `responseContentDisposition` set the headers the store answers with. |
-| `head(bucket, path)`                                          | `{ size, contentType, etag, lastModified }`, or `null` when the object is missing.                              |
-| `getRange(bucket, path, start, end)`                          | Bytes `start` to `end`, inclusive, to check an upload's real type. Never reads more than the range.             |
-| `delete(bucket, path)`                                        | Deletes one object; a missing one is not an error.                                                              |
-| `list(bucket, prefix, { maxKeys, continuationToken })`        | One page of keys under `prefix`, with the token for the next page.                                              |
+| Method                                                        | Does                                                                                                                                                                                          |
+| ------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `presignPut(bucket, path, { contentType, contentLength })`    | URL for one browser PUT. Both headers are signed, so the store refuses another type or another size.                                                                                          |
+| `presignGet(bucket, path, { responseContentDisposition, … })` | URL for one GET; `responseContentType` and `responseContentDisposition` set the headers the store answers with.                                                                               |
+| `head(bucket, path)`                                          | `{ size, contentType, etag, lastModified }`, or `null` when the object is missing.                                                                                                            |
+| `getRange(bucket, path, start, end)`                          | Bytes `start` to `end`, inclusive, to check an upload's real type. Keeps only the range; a store that ignores `Range` sends bytes up to `end`, and those before `start` are read and dropped. |
+| `delete(bucket, path)`                                        | Deletes one object; a missing one is not an error.                                                                                                                                            |
+| `list(bucket, prefix, { maxKeys, continuationToken })`        | One page of keys under `prefix`, with the token for the next page.                                                                                                                            |
 
 ```ts
 const url = await provider.presignPut("uploads", `${userId}/${fileId}`, {
