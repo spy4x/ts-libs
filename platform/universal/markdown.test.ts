@@ -19,11 +19,12 @@ describe("renderMarkdown: raw HTML", () => {
     expect(out).not.toContain("<img")
   })
 
-  it("escapes the text after an inline code tag that marked would print raw", () => {
-    // Without the escape, the unclosed `<img` would swallow the next real `>` and run onerror.
-    const out = html("a <code>x</code><img src=x onerror=alert(1) b")
+  it("escapes the text inside an inline code tag, which marked would print raw", () => {
+    // Printed raw, the unclosed `<img` would take the next real `>` (from `</p>`) as its end and
+    // become a live element whose onerror runs.
+    const out = html("a <code>x <img src=x onerror=alert(1)//\n\nnext</code>")
     expect(out).not.toContain("<img")
-    expect(out).toContain("&lt;img src=x onerror=alert(1) b")
+    expect(out).toContain("x &lt;img src=x onerror=alert(1)//</p>")
   })
 
   it("shows an HTML block as text in a paragraph", () => {
@@ -131,6 +132,10 @@ describe("renderMarkdown: headings", () => {
     const { html: out, headings } = renderMarkdown("## Tom & <b>Jerry</b>")
     expect(headings[0].text).toBe("Tom & <b>Jerry</b>")
     expect(out).toContain("Tom &amp; &lt;b&gt;Jerry&lt;/b&gt;</h2>")
+  })
+
+  it("decodes entities in the returned heading text", () => {
+    expect(renderMarkdown("## Fish &amp; chips").headings[0].text).toBe("Fish & chips")
   })
 
   it("starts ids over on every call", () => {
