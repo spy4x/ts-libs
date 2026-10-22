@@ -121,6 +121,36 @@ export function convertToKebabCase(str: string): string {
     .toLowerCase()
 }
 
+/**
+ * A URL- and `id`-safe slug of a title or heading, in any script.
+ *
+ * `"Why Deno? (and not Node)"` is `"why-deno-and-not-node"` and `"Привет, мир"` is
+ * `"привет-мир"`. The text is folded like {@link fold} (accents off, lower case), then every run of
+ * characters that is not a letter, a combining mark or a digit becomes one dash, and dashes at
+ * either end are dropped. Text with no letter or digit gives `""`; the caller picks a fallback.
+ */
+export function slugify(text: string): string {
+  return fold(text).replace(/[^\p{L}\p{M}\p{N}]+/gu, "-").replace(/^-+|-+$/g, "")
+}
+
+/**
+ * Whole minutes a reader needs for `text`, at least 1.
+ *
+ * Words are runs of non-whitespace, so Markdown syntax (`##`, `-`, a link's address) counts the
+ * same as a word; that error is small next to how much reading speeds differ. The count is
+ * rounded to the nearest minute, as "5 min read" labels are.
+ *
+ * @param wordsPerMinute Reading speed; 230 is the usual figure for adults reading on a screen.
+ * @throws When `wordsPerMinute` is not a positive finite number.
+ */
+export function readingMinutes(text: string, wordsPerMinute = 230): number {
+  if (!Number.isFinite(wordsPerMinute) || wordsPerMinute <= 0) {
+    throw new Error(`wordsPerMinute must be a positive number, received: ${wordsPerMinute}`)
+  }
+  const words = text.match(/\S+/g)?.length ?? 0
+  return Math.max(1, Math.round(words / wordsPerMinute))
+}
+
 /** Levenshtein edit distance between two strings, computed over code points. */
 export function levenshtein(a: string, b: string): number {
   const left = Array.from(a)

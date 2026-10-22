@@ -1,6 +1,6 @@
 /**
- * The canonical address, the structured data, the `sitemap.xml` and the `llms.txt` a
- * server-rendered site publishes.
+ * The canonical address, the structured data, the `sitemap.xml`, the RSS feed and the `llms.txt`
+ * a server-rendered site publishes.
  *
  * - **A canonical address is normalised before it is published.** Search engines and social
  *   networks read it, so it is parsed, required to be `http` or `https`, and stripped of the parts
@@ -235,6 +235,281 @@ export function sitemapXml(entries: readonly SitemapEntry[]): string {
 /** `value` safe inside an XML element body or a double- or single-quoted attribute. */
 function escapeXml(value: string): string {
   return value.replace(/[&<>"']/g, (char) => XML_ENTITIES[char])
+}
+
+/**
+ * Characters XML 1.0 forbids anywhere in a document, even escaped: C0 controls other than tab and
+ * line breaks, and U+FFFE and U+FFFF. One of them in a feed makes every feed reader reject it.
+ */
+// deno-lint-ignore no-control-regex
+const XML_FORBIDDEN = /[\u0000-\u0008\u000B\u000C\u000E-\u001F￾￿]/g
+
+/** `value` escaped for XML, with the characters XML cannot hold removed. */
+function xmlText(value: string): string {
+  return escapeXml(value.replace(XML_FORBIDDEN, ""))
+}
+
+/** `value` as a CDATA section; a `]]>` inside it is split across two sections. */
+function cdata(value: string): string {
+  return `<![CDATA[${value.replace(XML_FORBIDDEN, "").replaceAll("]]>", "]]]]><![CDATA[>")}]]>`
+}
+
+/** `date` as RFC 822 text in GMT, the form RSS 2.0 requires. */
+function rssDate(date: Date, label: string): string {
+  if (Number.isNaN(date.getTime())) throw new Error(`${label} must be a valid date`)
+  return date.toUTCString()
+}
+
+/** The feed itself: what an RSS reader shows as the source of the items. */
+export interface RssChannel {
+  /** Name of the feed, such as the blog's name. */
+  title: string
+  /** Absolute `http`/`https` address of the page the feed mirrors, such as `/blog`. */
+  link: string
+  /** One sentence on what the feed carries. */
+  description: string
+  /** Absolute `http`/`https` address the feed itself is served from, for `atom:link rel="self"`. */
+  feedUrl: string
+  /** Language of the items as a BCP 47 tag, such as `en` or `en-US`. */
+  language?: string
+  /** When the feed last changed. Defaults to the newest item's `pubDate`. */
+  lastBuildDate?: Date
+}
+
+/** One post in an RSS feed. */
+export interface RssItem {
+  title: string
+  /** Absolute `http`/`https` address of the post. Also its `guid`, marked as a permalink. */
+  link: string
+  /** Summary shown in the reader's list, as plain text. */
+  description: string
+  /** When the post was published. */
+  pubDate: Date
+  /** The whole post as HTML, written as `content:encoded` for readers that show full posts. */
+  contentHtml?: string
+}
+
+/**
+ * The text of an RSS 2.0 feed of `items`, in the order given.
+ *
+ * The channel carries an `atom:link rel="self"` to `feedUrl`, which feed validators ask for. Each
+ * item's `guid` is its link, marked `isPermaLink="true"`. Text is XML-escaped and `contentHtml`
+ * goes in a CDATA section; characters XML 1.0 cannot hold are removed from both, so one stray
+ * control character in a post cannot break the whole feed. Every address is normalised like a
+ * canonical one, and dates are written in GMT as RSS requires.
+ *
+ * @throws When an address is not an absolute `http`/`https` URL, or a date is invalid.
+ */
+export function rssXml(channel: RssChannel, items: readonly RssItem[]): string {
+  const itemsXml = items.map((item) => {
+    const link = xmlText(webUrl(item.link, "rss item link").href)
+    const content = item.contentHtml === undefined
+      ? ""
+      : `      <content:encoded>${cdata(item.contentHtml)}</content:encoded>\n`
+    return `    <item>\n` +
+      `      <title>${xmlText(item.title)}</title>\n` +
+      `      <link>${link}</link>\n` +
+      `      <description>${xmlText(item.description)}</description>\n` +
+      `      <pubDate>${rssDate(item.pubDate, `pubDate of ${item.link}`)}</pubDate>\n` +
+      `      <guid isPermaLink="true">${link}</guid>\n` +
+      content +
+      `    </item>\n`
+  })
+
+  const newest = items.reduce<Date | undefined>(
+    (latest, { pubDate }) => latest === undefined || pubDate > latest ? pubDate : latest,
+    undefined,
+  )
+  const built = channel.lastBuildDate ?? newest
+  const optional =
+    (channel.language === undefined
+      ? ""
+      : `    <language>${xmlText(channel.language)}</language>\n`) +
+    (built === undefined
+      ? ""
+      : `    <lastBuildDate>${rssDate(built, "lastBuildDate")}</lastBuildDate>\n`)
+
+  return `<?xml version="1.0" encoding="UTF-8"?>\n` +
+    `<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" ` +
+    `xmlns:content="http://purl.org/rss/1.0/modules/content/">\n` +
+    `  <channel>\n` +
+    `    <title>${xmlText(channel.title)}</title>\n` +
+    `    <link>${xmlText(webUrl(channel.link, "rss channel link").href)}</link>\n` +
+    `    <description>${xmlText(channel.description)}</description>\n` +
+    optional +
+    `    <atom:link href="${
+      xmlText(webUrl(channel.feedUrl, "rss feedUrl").href)
+    }" rel="self" type="application/rss+xml"/>\n` +
+    itemsXml.join("") +
+    `  </channel>\n` +
+    `</rss>\n`
+}
+
+/** A person named as a post's author, or as its publisher. */
+export interface JsonLdPerson {
+  name: string
+  /** Absolute `http`/`https` address of the person's page. */
+  url?: string
+  /** The `@id` of the person's node elsewhere on the site, such as `https://example.com/#person`. */
+  id?: string
+}
+
+/** The blog a post belongs to, described in full so the post's page stands alone. */
+export interface JsonLdBlog {
+  /** The blog's `@id`, the same one its own page uses, such as `https://example.com/blog#blog`. */
+  id: string
+  name: string
+  /** Absolute `http`/`https` address of the blog's index page. */
+  url: string
+}
+
+/** What {@link blogPostingJsonLd} describes. */
+export interface BlogPost {
+  /** Canonical absolute address of the post. */
+  url: string
+  /** The post's title. */
+  headline: string
+  description: string
+  /** Absolute or post-relative address of the post's main image; Google shows it in results. */
+  image?: string | { url: string; width: number; height: number }
+  datePublished: Date
+  /** Defaults to `datePublished`. */
+  dateModified?: Date
+  author: JsonLdPerson
+  /**
+   * Who publishes the site: an `@id` reference to a node the page already has, or a full node.
+   * Omitted, the post names no publisher.
+   */
+  publisher?: { id: string } | ({ type: "Person" | "Organization" } & JsonLdPerson)
+  /** The post's topic or category, such as `"Engineering"`. */
+  section?: string
+  /** BCP 47 language tag, such as `en-US`. */
+  inLanguage?: string
+  /** Reading time in whole minutes, written as `timeRequired` (`PT5M`). */
+  readingMinutes?: number
+  /** The blog the post belongs to, written as `isPartOf`. */
+  blog?: JsonLdBlog
+}
+
+/** A schema.org `Person` or `Organization` node, or a reference to one by `@id`. */
+export interface JsonLdPersonNode {
+  "@type"?: "Person" | "Organization"
+  "@id"?: string
+  name?: string
+  url?: string
+}
+
+/** A schema.org `BlogPosting` node. */
+export interface BlogPostingJsonLd {
+  "@type": "BlogPosting"
+  "@id": string
+  headline: string
+  description: string
+  image?: string | { "@type": "ImageObject"; url: string; width: number; height: number }
+  datePublished: string
+  dateModified: string
+  author: JsonLdPersonNode
+  publisher?: JsonLdPersonNode
+  mainEntityOfPage: { "@type": "WebPage"; "@id": string }
+  articleSection?: string
+  inLanguage?: string
+  timeRequired?: string
+  isPartOf?: { "@type": "Blog"; "@id": string; name: string; url: string }
+}
+
+/** The JSON-LD node of a person, every address normalised. */
+function personNode(
+  person: JsonLdPerson,
+  type: "Person" | "Organization",
+  label: string,
+): JsonLdPersonNode {
+  return {
+    "@type": type,
+    ...(person.id === undefined ? {} : { "@id": nodeId(person.id, `${label} id`) }),
+    name: person.name,
+    ...(person.url === undefined ? {} : { url: webUrl(person.url, `${label} url`).href }),
+  }
+}
+
+/**
+ * An `@id` address: normalised like a canonical one, but keeping its fragment, because a node id
+ * such as `https://example.com/#person` is told apart from the page by it.
+ */
+function nodeId(input: string, label: string): string {
+  return webUrl(input, label).href + new URL(input).hash
+}
+
+/** `date` as ISO 8601 in UTC, throwing a readable error when it is invalid. */
+function isoDate(date: Date, label: string): string {
+  if (Number.isNaN(date.getTime())) throw new Error(`${label} must be a valid date`)
+  return date.toISOString()
+}
+
+/**
+ * The schema.org `BlogPosting` node for one post, with the fields Google reads for an article:
+ * `headline`, `image`, `datePublished`, `dateModified`, `author` and `publisher`, plus
+ * `mainEntityOfPage`, `articleSection`, `inLanguage`, `timeRequired` and `isPartOf`.
+ *
+ * Like the other nodes here it carries no `@context`: put it in a `@graph` with the page's other
+ * nodes, or spread `{ "@context": "https://schema.org", ... }` around it, and print it with
+ * {@link jsonLdText}. Its `@id` is the canonical address plus `#article`. Optional fields that are
+ * not given are left out rather than written empty.
+ *
+ * @throws When an address is not an absolute `http`/`https` URL (the image may be relative to the
+ *   post), a date is invalid, or `readingMinutes` is not a positive whole number.
+ */
+export function blogPostingJsonLd(post: BlogPost): BlogPostingJsonLd {
+  const canonical = canonicalUrl(post.url).href
+  const base = new URL(canonical)
+  const published = isoDate(post.datePublished, "datePublished")
+  if (
+    post.readingMinutes !== undefined &&
+    (!Number.isInteger(post.readingMinutes) || post.readingMinutes < 1)
+  ) {
+    throw new Error(
+      `readingMinutes must be a positive whole number, received: ${post.readingMinutes}`,
+    )
+  }
+
+  let image: BlogPostingJsonLd["image"]
+  if (typeof post.image === "string") image = webUrl(post.image, "image", base).href
+  else if (post.image !== undefined) {
+    const { url, width, height } = post.image
+    image = { "@type": "ImageObject", url: webUrl(url, "image", base).href, width, height }
+  }
+
+  let publisher: JsonLdPersonNode | undefined
+  if (post.publisher !== undefined) {
+    publisher = "type" in post.publisher
+      ? personNode(post.publisher, post.publisher.type, "publisher")
+      : { "@id": nodeId(post.publisher.id, "publisher id") }
+  }
+
+  return {
+    "@type": "BlogPosting",
+    "@id": `${canonical}#article`,
+    headline: post.headline,
+    description: post.description,
+    ...(image === undefined ? {} : { image }),
+    datePublished: published,
+    dateModified: post.dateModified === undefined
+      ? published
+      : isoDate(post.dateModified, "dateModified"),
+    author: personNode(post.author, "Person", "author"),
+    ...(publisher === undefined ? {} : { publisher }),
+    mainEntityOfPage: { "@type": "WebPage", "@id": canonical },
+    ...(post.section === undefined ? {} : { articleSection: post.section }),
+    ...(post.inLanguage === undefined ? {} : { inLanguage: post.inLanguage }),
+    ...(post.readingMinutes === undefined ? {} : { timeRequired: `PT${post.readingMinutes}M` }),
+    ...(post.blog === undefined ? {} : {
+      isPartOf: {
+        "@type": "Blog",
+        "@id": nodeId(post.blog.id, "blog id"),
+        name: post.blog.name,
+        url: webUrl(post.blog.url, "blog url").href,
+      },
+    }),
+  }
 }
 
 const XML_ENTITIES: Record<string, string> = {

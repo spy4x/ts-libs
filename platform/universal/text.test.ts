@@ -12,9 +12,11 @@ import {
   maskEmail,
   MAX_MASKED_EMAIL_LENGTH,
   pluralize,
+  readingMinutes,
   search,
   searchWords,
   similarity,
+  slugify,
   utf8ByteLength,
 } from "./text.ts"
 
@@ -129,6 +131,46 @@ describe("pluralize", () => {
 
   it("appends es after a trailing o", () => {
     expect(pluralize("hero")).toBe("heroes")
+  })
+})
+
+describe("slugify", () => {
+  it("lower-cases, drops punctuation and joins words with one dash", () => {
+    expect(slugify("Why Deno? (and not Node)")).toBe("why-deno-and-not-node")
+    expect(slugify("  --Hello__World--  ")).toBe("hello-world")
+  })
+
+  it("removes accents and keeps letters of other scripts", () => {
+    expect(slugify("Café déjà vu")).toBe("cafe-deja-vu")
+    expect(slugify("Привет, мир")).toBe("привет-мир")
+    expect(slugify("नमस्ते दुनिया")).toBe("नमस्ते-दुनिया")
+  })
+
+  it("returns an empty string for text with no letter or digit", () => {
+    expect(slugify("!!! ???")).toBe("")
+  })
+})
+
+describe("readingMinutes", () => {
+  it("rounds words at 230 a minute to the nearest whole minute", () => {
+    expect(readingMinutes("word ".repeat(690))).toBe(3)
+    expect(readingMinutes("word ".repeat(805))).toBe(4)
+  })
+
+  it("is at least one minute, even for an empty text", () => {
+    expect(readingMinutes("")).toBe(1)
+    expect(readingMinutes("one two")).toBe(1)
+  })
+
+  it("takes another reading speed", () => {
+    expect(readingMinutes("word ".repeat(1000), 100)).toBe(10)
+  })
+
+  it("refuses a speed that is not a positive number", () => {
+    expect(() => readingMinutes("x", 0)).toThrow("wordsPerMinute must be a positive number")
+    expect(() => readingMinutes("x", Number.NaN)).toThrow(
+      "wordsPerMinute must be a positive number",
+    )
   })
 })
 

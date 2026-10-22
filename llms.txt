@@ -504,6 +504,8 @@ deviceName	function	@spy4x/net/user-agent	A short name a person recognises their
 AnyError	type	@spy4x/platform	Every error Result can carry.
 AsyncMutex	class	@spy4x/platform	A fair mutual-exclusion lock for async critical sections.
 BackoffJitterMode	type	@spy4x/platform	How backoffDelay spreads a capped delay.
+BlogPost	interface	@spy4x/platform	What blogPostingJsonLd describes.
+BlogPostingJsonLd	interface	@spy4x/platform	A schema.org `BlogPosting` node.
 BoundedIntegerOptions	interface	@spy4x/platform	Options of parseBoundedInteger.
 BreadcrumbListItem	interface	@spy4x/platform	A schema.org `ListItem` as it appears inside a `BreadcrumbList`.
 BreadcrumbListJsonLd	interface	@spy4x/platform	A schema.org `BreadcrumbList` node.
@@ -530,6 +532,9 @@ FaqQuestionJsonLd	interface	@spy4x/platform	A schema.org `Question` inside an `F
 HONEYPOT_FIELD_NAME	constant	@spy4x/platform	Default `name` of the honeypot field.
 HOURS_IN_DAY	constant	@spy4x/platform	Hours in one day.
 InferSchema	type	@spy4x/platform	Value a schema accepts and produces.
+JsonLdBlog	interface	@spy4x/platform	The blog a post belongs to, described in full so the post's page stands alone.
+JsonLdPerson	interface	@spy4x/platform	A person named as a post's author, or as its publisher.
+JsonLdPersonNode	interface	@spy4x/platform	A schema.org `Person` or `Organization` node, or a reference to one by `@id`.
 KeyValueStore	interface	@spy4x/platform	Minimal synchronous key/value port: the subset of the DOM `Storage` interface a caller needs to persist a small value, and the one shape `@spy4x/platform/browser/storage`'s `StorageLike` and `@spy4x/realtime`'s `KeyValueStore` both alias (#71).
 LlmsTxtDocument	interface	@spy4x/platform	What an `llms.txt` says: the site's name, a one-paragraph summary and its sections.
 LlmsTxtLink	interface	@spy4x/platform	One link in an `llms.txt` section.
@@ -568,6 +573,8 @@ ReportContext	interface	@spy4x/platform	Extra facts one report may carry.
 RequestError	type	@spy4x/platform	Errors a request itself can produce.
 ResponseError	type	@spy4x/platform	Errors from a response that never reached a usable body.
 Result	type	@spy4x/platform	A value or an error, as a discriminated union on `ok`.
+RssChannel	interface	@spy4x/platform	The feed itself: what an RSS reader shows as the source of the items.
+RssItem	interface	@spy4x/platform	One post in an RSS feed.
 SECONDS_IN_MINUTE	constant	@spy4x/platform	Seconds in one minute.
 SearchEntry	interface	@spy4x/platform	Something searchEntries can find: a label and, optionally, other names for it.
 SearchMatch	interface	@spy4x/platform	One result of searchEntries.
@@ -586,6 +593,7 @@ UnsafeTextOptions	interface	@spy4x/platform	Options of hasUnsafeTextCharacters.
 UuidVersion	type	@spy4x/platform	The version digit of a UUID: `4` is the random one, `7` the time-ordered one.
 ValidationError	type	@spy4x/platform	A rejected input: its kind, one sentence for the user, the issues per field path, and arktype's own errors.
 backoffDelay	function	@spy4x/platform	Caps a raw delay and jitters it — the exponential-backoff arithmetic that used to be implemented twice: once with symmetric jitter around the capped delay (`integrations/retry.ts`'s `createExponentialBackoff`) and once with jitter that only ever shortens the wait (`realtime/backoff.ts`'s `nextBackoffDelay`).
+blogPostingJsonLd	function	@spy4x/platform	The schema.org `BlogPosting` node for one post, with the fields Google reads for an article: `headline`, `image`, `datePublished`, `dateModified`, `author` and `publisher`, plus `mainEntityOfPage`, `articleSection`, `inLanguage`, `timeRequired` and `isPartOf`.
 breadcrumbItems	function	@spy4x/platform	`itemListElement` for a schema.org `BreadcrumbList`, built from the crumbs the caller stated.
 breadcrumbListJsonLd	function	@spy4x/platform	The complete `BreadcrumbList` node, `@id`-anchored to the page it describes.
 canonicalUrl	function	@spy4x/platform	Parse a canonical address into the normalised `URL` that will be published.
@@ -629,9 +637,11 @@ parseDsn	function	@spy4x/platform	The DSN's endpoint and key, or `null` when `ds
 parseQuickAdd	function	@spy4x/platform	Read the tokens out of a quick-add line.
 parseSort	function	@spy4x/platform	Read sort rules out of a URL parameter.
 pluralize	function	@spy4x/platform	Naive English pluraliser for UI copy.
+readingMinutes	function	@spy4x/platform	Whole minutes a reader needs for `text`, at least 1.
 removeSortRule	function	@spy4x/platform	Removes one sort priority while preserving all remaining priorities.
 responseError	function	@spy4x/platform	Turn a failed response into a structured error.
 round	function	@spy4x/platform	Round to the nearest 10^-`decimals`.
+rssXml	function	@spy4x/platform	The text of an RSS 2.0 feed of `items`, in the order given.
 scrubText	function	@spy4x/platform	Free text with the secrets it may carry masked: URLs lose their query, `Bearer` values, and the value of anything named like a password, token, cookie or key.
 scrubUrl	function	@spy4x/platform	`url` as origin and path only, with credentials, query and fragment dropped.
 search	function	@spy4x/platform	Whether one search word occurs in one value.
@@ -641,6 +651,7 @@ serializeSort	function	@spy4x/platform	Write sort rules into a URL parameter.
 similarity	function	@spy4x/platform	Similarity of two strings in `[0, 1]`, derived from levenshtein.
 sitemapXml	function	@spy4x/platform	The text of a `sitemap.xml` that lists `entries` in the order given.
 sleep	function	@spy4x/platform	Wait `ms` milliseconds.
+slugify	function	@spy4x/platform	A URL- and `id`-safe slug of a title or heading, in any script.
 sortRows	function	@spy4x/platform	Sort rows by every rule in order.
 stepAxis	function	@spy4x/platform	Round `[min, max]` outward to multiples of `step` and return the new bounds with the ticks between them.
 systemClock	constant	@spy4x/platform	The host clock.
@@ -1196,6 +1207,9 @@ todayView	function	@spy4x/platform/universal/ical-tasks-view	Deprecated: Import 
 upcomingView	function	@spy4x/platform/universal/ical-tasks-view	Deprecated: Import from `@spy4x/tasks/view`. Tomorrow through UPCOMING_DAYS days after today, one entry per day that has tasks, in date order.
 isRecord	function	@spy4x/platform/universal/is-record	True for a plain keyed object: not `null`, not an array.
 KeyValueStore	interface	@spy4x/platform/universal/key-value-store	Minimal synchronous key/value port: the subset of the DOM `Storage` interface a caller needs to persist a small value, and the one shape `@spy4x/platform/browser/storage`'s `StorageLike` and `@spy4x/realtime`'s `KeyValueStore` both alias (#71).
+MarkdownHeading	interface	@spy4x/platform/universal/markdown	One heading of a rendered document, for its table of contents.
+RenderedMarkdown	interface	@spy4x/platform/universal/markdown	What renderMarkdown returns.
+renderMarkdown	function	@spy4x/platform/universal/markdown	Render Markdown to HTML that is safe to put on a public page, plus its headings.
 Counter	interface	@spy4x/platform/universal/metrics	A monotonically increasing count, kept separately for every distinct set of labels.
 MetricLabels	type	@spy4x/platform/universal/metrics	The labels of one series, for example `{ event: "UserSignedOut", listener: "close" }`.
 createCounter	function	@spy4x/platform/universal/metrics	Creates a counter.
@@ -1224,16 +1238,24 @@ ok	function	@spy4x/platform/universal/result	Wrap a success.
 unwrap	function	@spy4x/platform/universal/result	Narrow a Result to its value, or raise.
 unwrapOr	function	@spy4x/platform/universal/result	Narrow a Result to its value, or fall back.
 InferSchema	type	@spy4x/platform/universal/schema	Value a schema accepts and produces.
+BlogPost	interface	@spy4x/platform/universal/seo	What blogPostingJsonLd describes.
+BlogPostingJsonLd	interface	@spy4x/platform/universal/seo	A schema.org `BlogPosting` node.
 BreadcrumbListItem	interface	@spy4x/platform/universal/seo	A schema.org `ListItem` as it appears inside a `BreadcrumbList`.
 BreadcrumbListJsonLd	interface	@spy4x/platform/universal/seo	A schema.org `BreadcrumbList` node.
 Crumb	interface	@spy4x/platform/universal/seo	One entry in the breadcrumb trail a page declares.
 FaqItem	interface	@spy4x/platform/universal/seo	One question and its answer, as a page shows them.
 FaqPageJsonLd	interface	@spy4x/platform/universal/seo	A schema.org `FAQPage` node.
 FaqQuestionJsonLd	interface	@spy4x/platform/universal/seo	A schema.org `Question` inside an `FAQPage`.
+JsonLdBlog	interface	@spy4x/platform/universal/seo	The blog a post belongs to, described in full so the post's page stands alone.
+JsonLdPerson	interface	@spy4x/platform/universal/seo	A person named as a post's author, or as its publisher.
+JsonLdPersonNode	interface	@spy4x/platform/universal/seo	A schema.org `Person` or `Organization` node, or a reference to one by `@id`.
 LlmsTxtDocument	interface	@spy4x/platform/universal/seo	What an `llms.txt` says: the site's name, a one-paragraph summary and its sections.
 LlmsTxtLink	interface	@spy4x/platform/universal/seo	One link in an `llms.txt` section.
 LlmsTxtSection	interface	@spy4x/platform/universal/seo	One `## Section` of an `llms.txt` and its links.
+RssChannel	interface	@spy4x/platform/universal/seo	The feed itself: what an RSS reader shows as the source of the items.
+RssItem	interface	@spy4x/platform/universal/seo	One post in an RSS feed.
 SitemapEntry	interface	@spy4x/platform/universal/seo	One page in a `sitemap.xml`.
+blogPostingJsonLd	function	@spy4x/platform/universal/seo	The schema.org `BlogPosting` node for one post, with the fields Google reads for an article: `headline`, `image`, `datePublished`, `dateModified`, `author` and `publisher`, plus `mainEntityOfPage`, `articleSection`, `inLanguage`, `timeRequired` and `isPartOf`.
 breadcrumbItems	function	@spy4x/platform/universal/seo	`itemListElement` for a schema.org `BreadcrumbList`, built from the crumbs the caller stated.
 breadcrumbListJsonLd	function	@spy4x/platform/universal/seo	The complete `BreadcrumbList` node, `@id`-anchored to the page it describes.
 canonicalUrl	function	@spy4x/platform/universal/seo	Parse a canonical address into the normalised `URL` that will be published.
@@ -1241,6 +1263,7 @@ faqPageJsonLd	function	@spy4x/platform/universal/seo	The `FAQPage` node for the 
 jsonLdText	function	@spy4x/platform/universal/seo	Serialise JSON-LD for a `<script>` body.
 llmsTxt	function	@spy4x/platform/universal/seo	The text of an `/llms.txt` in the format llmstxt.org describes: `# Title`, a `> summary` line, then each section as a `## Section` heading followed by `- [Title](url): description` lines.
 normalizeCanonical	function	@spy4x/platform/universal/seo	The canonical address as it should be published: one clean `http`/`https` address.
+rssXml	function	@spy4x/platform/universal/seo	The text of an RSS 2.0 feed of `items`, in the order given.
 sitemapXml	function	@spy4x/platform/universal/seo	The text of a `sitemap.xml` that lists `entries` in the order given.
 DEFAULT_SETTINGS_MAX_BYTES	constant	@spy4x/platform/universal/settings	The default cap on a saved value: 4 KiB of UTF-8 JSON, plenty for a handful of preferences.
 SettingsDefinition	interface	@spy4x/platform/universal/settings	One app's settings: its schema, defaults and cap, with the checks built on them.
@@ -1285,10 +1308,12 @@ levenshtein	function	@spy4x/platform/universal/text	Levenshtein edit distance be
 maskEmail	function	@spy4x/platform/universal/text	An email address with its local part hidden behind its first character, for showing a person which address they used without spelling it out: `jane.doe@example.com` gives `j***@example.com`.
 matchEntry	function	@spy4x/platform/universal/text	How well `query` matches one entry, or `null` when it does not.
 pluralize	function	@spy4x/platform/universal/text	Naive English pluraliser for UI copy.
+readingMinutes	function	@spy4x/platform/universal/text	Whole minutes a reader needs for `text`, at least 1.
 search	function	@spy4x/platform/universal/text	Whether one search word occurs in one value.
 searchEntries	function	@spy4x/platform/universal/text	The entries that `query` matches, the best first (see matchEntry for what matches).
 searchWords	function	@spy4x/platform/universal/text	Split a search box's value into words.
 similarity	function	@spy4x/platform/universal/text	Similarity of two strings in `[0, 1]`, derived from levenshtein.
+slugify	function	@spy4x/platform/universal/text	A URL- and `id`-safe slug of a title or heading, in any script.
 utf8ByteLength	function	@spy4x/platform/universal/text	UTF-8 byte length, i.e. what a `Content-Length` or a storage quota counts.
 Clock	interface	@spy4x/platform/universal/time	Injectable time source, so formatting and relative times are testable without a frozen host.
 DAYS_OF_WEEK	constant	@spy4x/platform/universal/time	Weekday names indexed Monday-first, matching getDaysOfWeek's bitmask order.
@@ -2626,4 +2651,4 @@ firstIssueMessage	function	@spy4x/validation/validate	First issue message in a v
 isArkErrors	function	@spy4x/validation/validate	Whether a value is an arktype rejection, without relying on `instanceof`.
 toValidationError	function	@spy4x/validation/validate	Build a ValidationError from arktype's issues.
 validate	function	@spy4x/validation/validate	Parse `value` with an arktype schema exactly once.
-# export surface: sha256 765c46e04074de0740b4e1092b60695cab894a1f2ab1dd371e6d8c89445493f6
+# export surface: sha256 db45205c895e59d26317018e2056deda0a45d6a85223955b7a00ef3cd59d1dab

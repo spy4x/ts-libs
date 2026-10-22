@@ -1,7 +1,9 @@
 import { describe, it } from "@std/testing/bdd"
 import { expect } from "@std/expect"
 
+import { parseXml, type XmlElement } from "@spy4x/caldav/xml"
 import {
+  blogPostingJsonLd,
   breadcrumbItems,
   breadcrumbListJsonLd,
   canonicalUrl,
@@ -9,6 +11,7 @@ import {
   jsonLdText,
   llmsTxt,
   normalizeCanonical,
+  rssXml,
   sitemapXml,
 } from "./seo.ts"
 
@@ -401,5 +404,213 @@ describe("llmsTxt", () => {
         sections: [{ title: "Docs", links: [{ title: "A", url: "/a" }] }],
       })
     ).toThrow("llms.txt url must be an absolute URL")
+  })
+})
+
+/** A feed's channel as a blog states it. */
+const CHANNEL = {
+  title: "Acme blog",
+  link: "https://acme.example/blog",
+  description: "Notes from Acme.",
+  feedUrl: "https://acme.example/rss.xml",
+}
+
+/** A post published on 22 October 2026. */
+const ITEM = {
+  title: "Launch",
+  link: "https://acme.example/blog/launch",
+  description: "We launched.",
+  pubDate: new Date("2026-10-22T10:00:00Z"),
+}
+
+/** The first `name` element under `element`, depth first. */
+function find(element: XmlElement, name: string): XmlElement | undefined {
+  for (const child of element.children) {
+    if (typeof child === "string") continue
+    if (child.name === name) return child
+    const found = find(child, name)
+    if (found !== undefined) return found
+  }
+  return undefined
+}
+
+/** The text of the first `name` element under `element`. */
+function textOf(element: XmlElement, name: string): string | undefined {
+  return find(element, name)?.children.filter((c) => typeof c === "string").join("")
+}
+
+/** `xml` parsed by a strict XML reader; fails the test when it is not well-formed. */
+function parseFeed(xml: string): XmlElement {
+  const result = parseXml(xml)
+  if (!result.success) throw new Error(`feed is not well-formed: ${result.error.message}`)
+  return result.output
+}
+
+describe("rssXml", () => {
+  it("writes an RSS 2.0 channel with a self link, a permalink guid and an RFC 822 date", () => {
+    const xml = rssXml({ ...CHANNEL, language: "en" }, [ITEM])
+    expect(xml).toContain(`<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom"`)
+    expect(xml).toContain(
+      `<atom:link href="https://acme.example/rss.xml" rel="self" type="application/rss+xml"/>`,
+    )
+    expect(xml).toContain(
+      `<guid isPermaLink="true">https://acme.example/blog/launch</guid>`,
+    )
+    expect(xml).toContain(`<pubDate>Thu, 22 Oct 2026 10:00:00 GMT</pubDate>`)
+    expect(xml).toContain(`<language>en</language>`)
+    expect(parseFeed(xml).name).toBe("rss")
+  })
+
+  it("dates the channel by its newest item unless lastBuildDate is given", () => {
+    const older = {
+      ...ITEM,
+      link: "https://acme.example/blog/old",
+      pubDate: new Date("2026-01-01"),
+    }
+    expect(rssXml(CHANNEL, [older, ITEM])).toContain(
+      `<lastBuildDate>Thu, 22 Oct 2026 10:00:00 GMT</lastBuildDate>`,
+    )
+    expect(rssXml({ ...CHANNEL, lastBuildDate: new Date("2026-10-23T00:00:00Z") }, [ITEM]))
+      .toContain(`<lastBuildDate>Fri, 23 Oct 2026 00:00:00 GMT</lastBuildDate>`)
+    expect(rssXml(CHANNEL, [])).not.toContain("lastBuildDate")
+  })
+
+  it("escapes markup in titles and descriptions so they read back unchanged", () => {
+    const title = `Tom & Jerry <script>alert("x")</script>`
+    const feed = parseFeed(rssXml(CHANNEL, [{ ...ITEM, title, description: "a < b & c > d" }]))
+    const item = find(feed, "item")!
+    expect(textOf(item, "title")).toBe(title)
+    expect(textOf(item, "description")).toBe("a < b & c > d")
+  })
+
+  it("puts contentHtml in CDATA and splits a ]]> inside it", () => {
+    const contentHtml = `<p>Code: <code>a[b[0]]>c</code></p>`
+    const xml = rssXml(CHANNEL, [{ ...ITEM, contentHtml }])
+    expect(xml).toContain(`xmlns:content="http://purl.org/rss/1.0/modules/content/"`)
+    expect(xml).toContain(`<content:encoded><![CDATA[<p>Code: <code>a[b[0]]]]><![CDATA[>c`)
+    expect(textOf(parseFeed(xml), "encoded")).toBe(contentHtml)
+  })
+
+  it("removes characters XML cannot hold, so one stray control character keeps the feed valid", () => {
+    const xml = rssXml(CHANNEL, [{
+      ...ITEM,
+      title: "Bell\u0007 here",
+      contentHtml: "<p>form\u000Cfeed</p>",
+    }])
+    expect(xml).toContain("<title>Bell here</title>")
+    expect(xml).toContain("<p>formfeed</p>")
+    expect(parseFeed(xml).name).toBe("rss")
+  })
+
+  it("refuses a relative link, a non-web feed address and an invalid date", () => {
+    expect(() => rssXml(CHANNEL, [{ ...ITEM, link: "/blog/launch" }])).toThrow(
+      "rss item link must be an absolute URL",
+    )
+    expect(() => rssXml({ ...CHANNEL, feedUrl: "javascript:alert(1)" }, [])).toThrow(
+      "rss feedUrl must be an http or https URL",
+    )
+    expect(() => rssXml(CHANNEL, [{ ...ITEM, pubDate: new Date("soon") }])).toThrow(
+      "must be a valid date",
+    )
+  })
+})
+
+/** A post with only the required fields. */
+const POST = {
+  url: "https://acme.example/blog/launch#top",
+  headline: "Launch",
+  description: "We launched.",
+  datePublished: new Date("2026-10-22T10:00:00Z"),
+  author: { name: "Jane Doe" },
+}
+
+describe("blogPostingJsonLd", () => {
+  it("writes Google's article fields and defaults dateModified to datePublished", () => {
+    expect(blogPostingJsonLd(POST)).toEqual({
+      "@type": "BlogPosting",
+      "@id": "https://acme.example/blog/launch#article",
+      headline: "Launch",
+      description: "We launched.",
+      datePublished: "2026-10-22T10:00:00.000Z",
+      dateModified: "2026-10-22T10:00:00.000Z",
+      author: { "@type": "Person", name: "Jane Doe" },
+      mainEntityOfPage: { "@type": "WebPage", "@id": "https://acme.example/blog/launch" },
+    })
+  })
+
+  it("writes every optional field, resolving the image against the post and keeping @id fragments", () => {
+    const node = blogPostingJsonLd({
+      ...POST,
+      image: { url: "/og/launch.png", width: 1200, height: 630 },
+      dateModified: new Date("2026-10-23T00:00:00Z"),
+      author: {
+        name: "Jane Doe",
+        url: "https://acme.example/about",
+        id: "https://acme.example/#jane",
+      },
+      publisher: { id: "https://acme.example/#org" },
+      section: "News",
+      inLanguage: "en-US",
+      readingMinutes: 4,
+      blog: {
+        id: "https://acme.example/blog#blog",
+        name: "Acme blog",
+        url: "https://acme.example/blog",
+      },
+    })
+    expect(node.image).toEqual({
+      "@type": "ImageObject",
+      url: "https://acme.example/og/launch.png",
+      width: 1200,
+      height: 630,
+    })
+    expect(node.dateModified).toBe("2026-10-23T00:00:00.000Z")
+    expect(node.author).toEqual({
+      "@type": "Person",
+      "@id": "https://acme.example/#jane",
+      name: "Jane Doe",
+      url: "https://acme.example/about",
+    })
+    expect(node.publisher).toEqual({ "@id": "https://acme.example/#org" })
+    expect(node.articleSection).toBe("News")
+    expect(node.inLanguage).toBe("en-US")
+    expect(node.timeRequired).toBe("PT4M")
+    expect(node.isPartOf).toEqual({
+      "@type": "Blog",
+      "@id": "https://acme.example/blog#blog",
+      name: "Acme blog",
+      url: "https://acme.example/blog",
+    })
+  })
+
+  it("writes a full publisher node when one is given", () => {
+    const node = blogPostingJsonLd({
+      ...POST,
+      image: "https://cdn.acme.example/a.png",
+      publisher: { type: "Organization", name: "Acme", url: "https://acme.example" },
+    })
+    expect(node.image).toBe("https://cdn.acme.example/a.png")
+    expect(node.publisher).toEqual({
+      "@type": "Organization",
+      name: "Acme",
+      url: "https://acme.example/",
+    })
+  })
+
+  it("refuses a javascript image, an invalid date and a fractional reading time", () => {
+    expect(() => blogPostingJsonLd({ ...POST, image: "javascript:alert(1)" })).toThrow(
+      "image must be an http or https URL",
+    )
+    expect(() => blogPostingJsonLd({ ...POST, datePublished: new Date("soon") })).toThrow(
+      "datePublished must be a valid date",
+    )
+    expect(() => blogPostingJsonLd({ ...POST, readingMinutes: 2.5 })).toThrow(
+      "readingMinutes must be a positive whole number",
+    )
+  })
+
+  it("prints safely inside a script element through jsonLdText", () => {
+    const text = jsonLdText(blogPostingJsonLd({ ...POST, headline: "</script><script>x()" }))
+    expect(text).not.toContain("</script>")
   })
 })
