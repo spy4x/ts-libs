@@ -346,6 +346,39 @@ ReminderForPush	interface	@spy4x/integrations/push-reminders	The parts of a `Due
 createReminderNotify	function	@spy4x/integrations/push-reminders	Builds the `notify` of a reminder runner: it pushes each reminder to every device of `userId`.
 reminderDeliveryOutcome	function	@spy4x/integrations/push-reminders	What a sender's result means for a reminder runner: `"delivered"` when a device got the push, when there was no device, or when every device was gone and removed; `"retry"` when no device got it and a failure may pass later; `"drop"` when no device got it and every failure is for good.
 reminderPushMessage	function	@spy4x/integrations/push-reminders	The push message of one reminder.
+TELEGRAM_API_BASE_URL	constant	@spy4x/integrations/telegram	Where the Bot API lives unless a config names a local Bot API server.
+TELEGRAM_RETRY_POLICY	constant	@spy4x/integrations/telegram	Default retry policy: 3 attempts, 1s doubling, at most 30s per wait (Telegram's `retry_after` on a 429 is honoured up to that), 60s for the whole call, +/-20% jitter.
+TelegramAnswerCallbackQuery	interface	@spy4x/integrations/telegram	Parameters of `answerCallbackQuery`, named as in the Bot API.
+TelegramBot	class	@spy4x/integrations/telegram	Routes updates to handlers.
+TelegramBotCommand	interface	@spy4x/integrations/telegram	One entry of the command menu.
+TelegramCallOptions	interface	@spy4x/integrations/telegram	Per-call overrides for TelegramClient.call.
+TelegramCallbackQuery	interface	@spy4x/integrations/telegram	A press on an inline keyboard button.
+TelegramChat	interface	@spy4x/integrations/telegram	The chat a message belongs to.
+TelegramClient	class	@spy4x/integrations/telegram	Calls the Telegram Bot API as one bot.
+TelegramContext	interface	@spy4x/integrations/telegram	What a handler gets for one update.
+TelegramConversationControl	interface	@spy4x/integrations/telegram	Starts and ends a conversation from inside a handler.
+TelegramConversationData	type	@spy4x/integrations/telegram	A conversation's saved answers.
+TelegramConversationStore	type	@spy4x/integrations/telegram	Where conversation state lives: the get, set-with-expiry and delete of an `ICacheStorage`.
+TelegramEditMessageText	interface	@spy4x/integrations/telegram	Parameters of `editMessageText`, named as in the Bot API.
+TelegramErrorCode	type	@spy4x/integrations/telegram	Why a call failed.
+TelegramFailure	interface	@spy4x/integrations/telegram	The call failed; `message` is Telegram's `description` when it sent one.
+TelegramHandler	type	@spy4x/integrations/telegram	Handles one update.
+TelegramInlineButton	interface	@spy4x/integrations/telegram	One inline keyboard button: it sends `callback_data` back to the bot, or opens `url`.
+TelegramInlineKeyboard	interface	@spy4x/integrations/telegram	Buttons under a message, as rows.
+TelegramMessage	interface	@spy4x/integrations/telegram	A message, with the fields a bot routes on.
+TelegramPollingOptions	interface	@spy4x/integrations/telegram	Options of pollTelegramUpdates.
+TelegramResult	type	@spy4x/integrations/telegram	What a TelegramClient call resolves with.
+TelegramSendMessage	interface	@spy4x/integrations/telegram	Parameters of `sendMessage`, named as in the Bot API.
+TelegramSetWebhook	interface	@spy4x/integrations/telegram	Parameters of `setWebhook`, named as in the Bot API.
+TelegramStepHandler	type	@spy4x/integrations/telegram	Handles one answer inside a conversation step.
+TelegramStepResult	type	@spy4x/integrations/telegram	What a step returns: the next step and the data so far, `{ done: true }`, or nothing to stay.
+TelegramSuccess	interface	@spy4x/integrations/telegram	Telegram accepted the call.
+TelegramUpdate	interface	@spy4x/integrations/telegram	One update.
+TelegramUser	interface	@spy4x/integrations/telegram	A Telegram user or bot.
+TelegramWebhookOptions	interface	@spy4x/integrations/telegram	Options of createTelegramWebhookHandler.
+createTelegramWebhookHandler	function	@spy4x/integrations/telegram	Builds a webhook endpoint: `(request) => response`, for any server that speaks `Request`.
+parseTelegramUpdate	function	@spy4x/integrations/telegram	Checks an untrusted value against TelegramUpdate.
+pollTelegramUpdates	function	@spy4x/integrations/telegram	Long polling for development, where Telegram cannot reach a webhook.
 CombinedSignatureHeader	interface	@spy4x/integrations/webhooks	One header that carries the timestamp and the signatures together, as a list of `key=value` pairs: Stripe's `Stripe-Signature: t=1492774577,v1=5257…,v0=6ffb…` is `{ name: "Stripe-Signature", pairSeparator: ",", timestampKey: "t", signatureKey: "v1" }`.
 WebhookRejectReason	type	@spy4x/integrations/webhooks	Why a delivery was rejected.
 WebhookVerifierConfig	interface	@spy4x/integrations/webhooks	Shared secret and header names verifyWebhookRequest needs to check a delivery.
@@ -2571,4 +2604,4 @@ firstIssueMessage	function	@spy4x/validation/validate	First issue message in a v
 isArkErrors	function	@spy4x/validation/validate	Whether a value is an arktype rejection, without relying on `instanceof`.
 toValidationError	function	@spy4x/validation/validate	Build a ValidationError from arktype's issues.
 validate	function	@spy4x/validation/validate	Parse `value` with an arktype schema exactly once.
-# export surface: sha256 06f866d3156fbbb26c2777218fad29312fd49211dc38de7f76df97e9e98ce48c
+# export surface: sha256 8ddb8be0a0f9176f2a3b8ddba0e34d30f7d921d543e7840eb2b472d06b24aaf1
