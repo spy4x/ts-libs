@@ -99,6 +99,12 @@ describe("renderMarkdown: images", () => {
     )
   })
 
+  it("escapes an image title that tries to open a second attribute", () => {
+    const out = html(`![a](https://example.com/a.png "t\\" onload=\\"alert(1)")`)
+    expect(out).toContain(`title="t&quot; onload=&quot;alert(1)"`)
+    expect(out).not.toContain(`" onload="`)
+  })
+
   it("turns a data: or javascript: image into its alt text", () => {
     expect(html("![pic](data:image/svg+xml;base64,PHN2Zz4=)")).toBe("<p>pic</p>\n")
     expect(html("![pic](javascript:alert(1))")).toBe("<p>pic</p>\n")
