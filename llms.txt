@@ -2128,9 +2128,15 @@ LocalStorage	class	@spy4x/server/storage	Local-filesystem provider for developme
 MAX_PRESIGN_EXPIRES_IN_SECONDS	constant	@spy4x/server/storage	
 ObjectFs	interface	@spy4x/server/storage	Minimal object-store filesystem port.
 PresignCredentials	interface	@spy4x/server/storage	Credentials for one presign.
+PresignGetOptions	interface	@spy4x/server/storage	Options of `S3Storage.presignGet`: how the store labels the file it sends back.
 PresignOptions	interface	@spy4x/server/storage	Per-call presign overrides.
+PresignPutOptions	interface	@spy4x/server/storage	Options of `S3Storage.presignPut`: the one type and the one size the upload may have.
 PresignRequest	interface	@spy4x/server/storage	Everything SigV4 needs to describe the request being signed.
-S3Storage	class	@spy4x/server/storage	S3-compatible provider.
+S3ListOptions	interface	@spy4x/server/storage	Options of `S3Storage.list`.
+S3ListPage	interface	@spy4x/server/storage	One page of `S3Storage.list`.
+S3ListedObject	interface	@spy4x/server/storage	One object in a `S3Storage.list` page.
+S3ObjectInfo	interface	@spy4x/server/storage	What `S3Storage.head` reports about one object.
+S3Storage	class	@spy4x/server/storage	S3-compatible provider and client: presigned PUT and GET URLs for browsers, head, ranged read, delete and list, for AWS, MinIO and Garage.
 StorageEnvName	enum	@spy4x/server/storage	Environment variable names this package reads.
 StorageError	class	@spy4x/server/storage	Storage failure carrying a machine-readable `code`, the operation that failed and any HTTP status the backend returned, so a caller can retry or re-map the failure without parsing the message.
 StorageErrorCode	type	@spy4x/server/storage	Error codes a caller can branch on without matching on a message string.
@@ -2565,4 +2571,4 @@ firstIssueMessage	function	@spy4x/validation/validate	First issue message in a v
 isArkErrors	function	@spy4x/validation/validate	Whether a value is an arktype rejection, without relying on `instanceof`.
 toValidationError	function	@spy4x/validation/validate	Build a ValidationError from arktype's issues.
 validate	function	@spy4x/validation/validate	Parse `value` with an arktype schema exactly once.
-# export surface: sha256 33a235920ade67d600dfb1a4fe45a550863fccf0d736fd58b45b330567a445cf
+# export surface: sha256 06f866d3156fbbb26c2777218fad29312fd49211dc38de7f76df97e9e98ce48c
