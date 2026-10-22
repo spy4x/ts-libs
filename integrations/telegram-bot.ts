@@ -49,8 +49,10 @@ export interface TelegramContext {
     extra?: Omit<TelegramSendMessage, `chat_id` | `text`>,
   ): Promise<TelegramResult<TelegramMessage>>
   /**
-   * Answers the button press, with an optional toast. The bot answers a press itself after the
-   * handler when the handler did not, so the button's spinner always stops. Nothing for a message.
+   * Answers the button press, with an optional toast. When the handler did not, the bot answers
+   * the press itself after it, also when it threw, so the button's spinner stops. A press on a
+   * message the bot cannot see (inline mode) gets an empty answer and no handler. Nothing for a
+   * message.
    */
   answer(text?: string): Promise<void>
   /** The conversation this chat is in, for this person. */
@@ -119,7 +121,8 @@ type SavedState = typeof savedState.infer
  *
  * Order for one update: a registered command; then a callback route; then a running
  * conversation, which takes any other text or button press; then the text handler. A registered
- * command always wins, so `/cancel` can end a conversation.
+ * command always wins, so `/cancel` can end a conversation. With `username` set, a command
+ * addressed to another bot (`/start@other_bot`) reaches no handler at all.
  *
  * ```ts
  * const bot = new TelegramBot({ client, conversations: { store } })
@@ -179,27 +182,31 @@ export class TelegramBot {
   }
 
   /**
-   * Routes one update. A handler's error is not caught here; the webhook handler and the polling
-   * loop pass it to their `onError`.
+   * Routes one update. A handler's error is not caught here, only passed on after the button
+   * press is answered; the webhook handler and the polling loop pass it to their `onError`.
    *
    * @returns Whether a handler took the update.
    */
   async handleUpdate(update: TelegramUpdate): Promise<boolean> {
     const query = update.callback_query
     const message = update.message ?? query?.message
-    if (!message) return false
+    if (!message) {
+      if (query) await this.#client.answerCallbackQuery({ callback_query_id: query.id })
+      return false
+    }
     const key = this.#stateKey(message.chat.id, update.message?.from?.id ?? query?.from.id)
     let state = await this.#load(key)
     const ctx = this.#context(update, message, query, () => state, (next) => (state = next), key)
 
     const handler = this.#route(ctx, query, state !== null)
-    if (handler === `conversation`) {
-      await this.#step(ctx, state as SavedState, key)
-    } else if (handler) {
-      await handler(ctx)
-    }
-    if (query && !answered.has(ctx)) {
-      await ctx.answer()
+    try {
+      if (handler === `conversation`) {
+        await this.#step(ctx, state as SavedState, key)
+      } else if (handler) {
+        await handler(ctx)
+      }
+    } finally {
+      if (query) await ctx.answer()
     }
     return handler !== undefined
   }
@@ -213,7 +220,9 @@ export class TelegramBot {
     if (!query && ctx.text?.startsWith(`/`)) {
       const match = /^\/([A-Za-z0-9_]+)(?:@([A-Za-z0-9_]+))?(?:\s+([\s\S]*))?$/.exec(ctx.text)
       const addressed = !match?.[2] || !this.#username || match[2].toLowerCase() === this.#username
-      const handler = match && addressed ? this.#commands.get(match[1].toLowerCase()) : undefined
+      // A command for another bot in the same group is not ours, nor an answer to a question.
+      if (match && !addressed) return undefined
+      const handler = match ? this.#commands.get(match[1].toLowerCase()) : undefined
       if (handler) {
         ctx.args = match?.[3]?.trim() ?? ``
         return handler

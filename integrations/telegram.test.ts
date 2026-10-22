@@ -203,6 +203,39 @@ describe(`TelegramBot behind the webhook handler`, () => {
     expect(calls[0].params.text).toBe(`You chose reports`)
   })
 
+  it(`still answers a button press whose handler threw`, async () => {
+    const { bot, calls } = setup()
+    bot.callback(`menu`, () => {
+      throw new Error(`boom`)
+    })
+    await expect(bot.handleUpdate(pressUpdate(`menu`))).rejects.toThrow(`boom`)
+    expect(calls.map((call) => call.method)).toEqual([`answerCallbackQuery`])
+  })
+
+  it(`answers a press only once when the handler answered it`, async () => {
+    const { bot, calls } = setup()
+    bot.callback(`save`, (ctx) => ctx.answer(`Saved`))
+    await bot.handleUpdate(pressUpdate(`save`))
+    expect(calls.map((call) => [call.method, call.params.text])).toEqual([
+      [`answerCallbackQuery`, `Saved`],
+    ])
+  })
+
+  it(`answers a press on a message the bot cannot see, without a handler`, async () => {
+    const { bot, calls } = setup()
+    const seen: string[] = []
+    bot.callback(`menu`, () => seen.push(`menu`))
+    const update: TelegramUpdate = {
+      update_id: nextId++,
+      callback_query: { id: `inline-1`, from: person, data: `menu` },
+    }
+    expect(await bot.handleUpdate(update)).toBe(false)
+    expect(seen).toEqual([])
+    expect(calls.map((call) => [call.method, call.params.callback_query_id])).toEqual([
+      [`answerCallbackQuery`, `inline-1`],
+    ])
+  })
+
   it(`gives a command the text after it as args`, async () => {
     const { bot } = setup()
     let args = ``
@@ -215,6 +248,7 @@ describe(`TelegramBot behind the webhook handler`, () => {
     const { bot } = setup({ username: `our_bot` })
     const seen: string[] = []
     bot.command(`start`, () => seen.push(`start`))
+    bot.text((ctx) => seen.push(`text: ${ctx.text}`))
     expect(await bot.handleUpdate(textUpdate(`/start@other_bot`))).toBe(false)
     expect(await bot.handleUpdate(textUpdate(`/start@Our_Bot`))).toBe(true)
     expect(seen).toEqual([`start`])
@@ -247,6 +281,35 @@ describe(`TelegramBot behind the webhook handler`, () => {
       maxBodyBytes: 16,
     })
     expect((await small(webhookRequest(textUpdate(`/start`)))).status).toBe(413)
+  })
+
+  it(`checks the secret before it reads the body`, async () => {
+    const { webhook } = setup()
+    let pulled = false
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        pulled = true
+        controller.enqueue(new TextEncoder().encode(JSON.stringify(textUpdate(`/start`))))
+        controller.close()
+      },
+    }, { highWaterMark: 0 }) // pulled only when someone reads it
+    const request = new Request(`https://bot.example.com/telegram`, {
+      method: `POST`,
+      headers: { "x-telegram-bot-api-secret-token": `wrong` },
+      body,
+    })
+    expect((await webhook(request)).status).toBe(401)
+    expect(pulled).toBe(false)
+  })
+
+  it(`accepts a body up to 1 MiB by default and refuses one byte more`, async () => {
+    const { webhook } = setup()
+    const padded = (size: number) => {
+      const base = JSON.stringify({ update_id: 1, pad: `` })
+      return JSON.stringify({ update_id: 1, pad: `x`.repeat(size - base.length) })
+    }
+    expect((await webhook(webhookRequest(padded(1024 * 1024)))).status).toBe(200)
+    expect((await webhook(webhookRequest(padded(1024 * 1024 + 1)))).status).toBe(413)
   })
 
   it(`answers 200 when the handler throws, and reports the error`, async () => {
@@ -387,6 +450,27 @@ describe(`pollTelegramUpdates`, () => {
     })
     expect(Date.now() - started).toBeLessThan(900)
     expect(errors.map(String)).toEqual([`Error: Telegram getUpdates failed: http_error: Conflict`])
+  })
+
+  it(`moves the offset past an update that is not valid, and reports it`, async () => {
+    const controller = new AbortController()
+    const batches: unknown[][] = [[{ update_id: 20, message: `not a message` }]]
+    const { client, calls } = fakeTelegram(() => {
+      const batch = batches.shift()
+      if (!batch) controller.abort()
+      return Response.json({ ok: true, result: batch ?? [] })
+    })
+    const seen: number[] = []
+    const errors: unknown[] = []
+    await pollTelegramUpdates({
+      client,
+      signal: controller.signal,
+      onUpdate: (update) => seen.push(update.update_id),
+      onError: (error) => errors.push(error),
+    })
+    expect(seen).toEqual([])
+    expect(errors.map(String)).toEqual([`Error: Telegram sent an update that is not valid`])
+    expect(calls.map((call) => call.params.offset)).toEqual([undefined, 21])
   })
 
   it(`hands every update over in order and moves the offset past each, even one that threw`, async () => {
