@@ -262,12 +262,16 @@ describe("S3Storage.getRange", () => {
   })
 
   it("rejects a range that ends before it starts", async () => {
-    await assertRejects(() => garage().getRange("uploads", "a", 5, 4), StorageError)
+    await assertRejects(
+      () => garage().getRange("uploads", "a", 5, 4),
+      StorageError,
+      "range must be integers",
+    )
   })
 })
 
 describe("S3Storage.delete", () => {
-  it("sends a DELETE signed for DELETE and accepts a missing object", async () => {
+  it("sends a DELETE and accepts a missing object", async () => {
     const { fetch, calls } = fakeFetch(() => new Response(null, { status: 404 }))
     await garage(fetch).delete("uploads", "gone.png")
 
