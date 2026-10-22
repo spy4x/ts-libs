@@ -8034,6 +8034,7 @@ plus an RFC 5545 iCalendar writer and a lossless iCalendar editor. Zero runtime 
 | `time/ical-tasks-edit`      | Writing a `Task` back: `createTask`, `editTask`, `rebaseEdit`, `keepMine`, `keepMineText`, `completeTask`, `reopenTask`                                                                                                                                                     |
 | `time/ical-tasks-reminders` | Which reminders of a task fall in a time window: `dueReminders` (alarms relative to start or due, absolute ones, a Tasks.org snooze; nothing for a completed task)                                                                                                          |
 | `time/rrule`                | Repeat rules for the subset Tasks.org writes: `parseRrule`, `formatRrule`, `nextOccurrence`, `describeRrule`                                                                                                                                                                |
+| `time/cron`                 | Cron schedules in UTC: `parseCron` (five fields, names, steps, `@daily` and the other aliases), `nextCronRun`, `describeCron` ("Every day at 03:00 UTC"), `CronSchedule`                                                                                                    |
 
 ```ts
 import { formatDateTimeLong, zonedDateTime } from "@spy4x/time/tz"
