@@ -1472,6 +1472,7 @@ Runs on: server (Deno).
 | `./push`            | `createWebPushSender`, `generateVapidKeyPair` — Web Push to a user's devices   |
 | `./push-file-store` | `createFilePushSubscriptionStore` — push subscriptions in one JSON file        |
 | `./push-reminders`  | `createReminderNotify`, `reminderPushMessage`, `reminderDeliveryOutcome`       |
+| `./telegram`        | `TelegramClient`, `TelegramBot`, `createTelegramWebhookHandler`, polling       |
 
 ## Contracts
 
@@ -1621,6 +1622,60 @@ different needs follow, and `mig`'s source conflated them:
 
 `createAsciiHeaders` applies the transliteration to every value, so the failure cannot come back
 through a new call site. Both halves are pinned by tests, including the body round-trip.
+
+### Telegram bots — `./telegram`
+
+```ts
+const client = new TelegramClient({ token })
+const bot = new TelegramBot({ client, conversations: { store } }) // store: get, set with TTL, del
+  .command(`start`, (ctx) => ctx.reply(`Hi`, { reply_markup: menu }))
+  .callback(`menu`, (ctx) => ctx.reply(`You chose ${ctx.args}`)) // data `menu:<args>`
+  .command(`rename`, async (ctx) => {
+    await ctx.conversation.start(`rename`)
+    await ctx.reply(`New name?`)
+  })
+  .conversation(`rename`, {
+    name: (ctx) => ({ step: `confirm`, data: { name: ctx.text } }),
+    confirm: (ctx, data) => ({ done: true }),
+  })
+
+// Production: a webhook. Development: long polling until the signal aborts.
+const webhook = createTelegramWebhookHandler({
+  secretToken,
+  onUpdate: (u) => bot.handleUpdate(u),
+  onError,
+})
+await pollTelegramUpdates({ client, signal, onUpdate: (u) => bot.handleUpdate(u), onError })
+```
+
+- **Client.** Typed `getMe`, `sendMessage`, `editMessageText`, `deleteMessage`,
+  `answerCallbackQuery`, `setWebhook`, `deleteWebhook` and `setMyCommands`, with parameters named
+  as in the Bot API; `call(method, params)` reaches any other method. A result is
+  `{ ok: true, result, attempts }` or `{ ok: false, code, message, status?, attempts }`, where
+  `message` is Telegram's `description`. Redirects are refused, answers are read under a 5 MiB
+  cap, and the token never appears in a result.
+- **Retries.** 3 attempts, 1s doubling up to 30s, 60s in all; a 429's `retry_after` is honoured up to 30s.
+  Telegram has no idempotency key, so a retry after a timeout can send a message twice: pass
+  `retry: { maxAttempts: 1 }` where that is worse than losing it.
+- **Webhook.** 405 for anything but `POST`; 401 when `X-Telegram-Bot-Api-Secret-Token` is missing
+  or wrong, compared in constant time before the body is read; 413 over 1 MiB; 400 for a body
+  arktype does not accept as an update. A handler that throws goes to `onError` and the answer is
+  still 200, because any other status makes Telegram send the update again.
+- **Routing.** A registered command wins (`/cancel` can always end a conversation), then a
+  callback route by `prefix` or `prefix:`, then a running conversation, then the `text` handler.
+  With `username` set, `/start@other_bot` reaches no handler, not even a conversation or the
+  `text` handler. A button press the handler did not answer is answered after it, also when the
+  handler threw, so its spinner stops; a press the bot cannot route to a chat (inline mode) gets
+  an empty answer.
+- **Conversations.** State is `{ name, step, data }` as JSON in the store passed in, one per person
+  per chat, expiring after `ttlSec` (900 by default), so a restart or a second instance continues
+  where the person left off. A step returns the next step, `{ done: true }`, or nothing to stay. A
+  saved step that no longer exists is dropped.
+- **Polling.** For development only. A failed call waits 1s, doubling up to 60s; an update whose
+  handler threw still counts as read. Telegram refuses polling while a webhook is set, so call
+  `deleteWebhook` first.
+- **Not here.** Linking a Telegram account to a user, and any product's commands: those belong to
+  the app.
 
 ### `purgeUrls` — Cloudflare cache purge
 
@@ -4820,6 +4875,34 @@ const storage = createBucketStorage({ bucket: "examplebucket", provider })
 `clock`, `fetch` and `fs` each default to the real thing and exist so a
 signature, a transfer and a filesystem write can all be pinned in a test. A
 provider that could not be tested this way would be a design defect.
+
+### Browser uploads and object management (S3 only)
+
+`S3Storage` has six more methods that the port does not, because a local folder
+cannot honour them. The integration tier runs them against MinIO and Garage; they should work
+against AWS too, but no test runs there.
+
+| Method                                                        | Does                                                                                                                                                                                          |
+| ------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `presignPut(bucket, path, { contentType, contentLength })`    | URL for one browser PUT. Both headers are signed, so the store refuses another type or another size.                                                                                          |
+| `presignGet(bucket, path, { responseContentDisposition, … })` | URL for one GET; `responseContentType` and `responseContentDisposition` set the headers the store answers with.                                                                               |
+| `head(bucket, path)`                                          | `{ size, contentType, etag, lastModified }`, or `null` when the object is missing.                                                                                                            |
+| `getRange(bucket, path, start, end)`                          | Bytes `start` to `end`, inclusive, to check an upload's real type. Keeps only the range; a store that ignores `Range` sends bytes up to `end`, and those before `start` are read and dropped. |
+| `delete(bucket, path)`                                        | Deletes one object; a missing one is not an error.                                                                                                                                            |
+| `list(bucket, prefix, { maxKeys, continuationToken })`        | One page of keys under `prefix`, with the token for the next page.                                                                                                                            |
+
+```ts
+const url = await provider.presignPut("uploads", `${userId}/${fileId}`, {
+  contentType: "image/png",
+  contentLength: file.size,
+  expiresIn: 300,
+})
+// the browser: fetch(url, { method: "PUT", body: file, headers: { "content-type": "image/png" } })
+```
+
+A failed request throws a `StorageError` whose message carries only the store's
+error code and message, never the rest of its error body, which can echo the
+access key id and the signature.
 
 ## Environment
 

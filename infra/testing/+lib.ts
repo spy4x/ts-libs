@@ -3,8 +3,8 @@
  *
  * Four jobs, and nothing else belongs here:
  *
- * 1. **Addresses.** Where Postgres, MinIO, Mailpit, the two Redis servers, Radicale and
- *    Stalwart are, from one environment variable each, defaulting to
+ * 1. **Addresses.** Where Postgres, MinIO, Garage, Mailpit, the two Redis servers, Radicale
+ *    and Stalwart are, from one environment variable each, defaulting to
  *    `infra/compose.integration.yml`. `createStalwartUser` adds a per-run Stalwart login.
  * 2. **Failing loudly.** `requireReachable` turns a missing container into a red
  *    test that names the service, the address and the command that starts it.
@@ -19,6 +19,8 @@
 
 export {
   type CalDavServerSettings,
+  GARAGE_CREDENTIALS,
+  garageSettings,
   IntegrationEnvName,
   LOCAL_DEFAULTS,
   type MailpitSettings,
