@@ -6846,6 +6846,22 @@ default. `ensureScheduledOutboxEvent` takes an advisory lock on kind, aggregate 
 id inside its own transaction, so two workers starting together leave one chain; give it the pool,
 not a transaction. The repeat interval counts from the end of a run, not from a fixed clock time.
 
+**Cron schedules.** A job that runs at clock times lists its kind in
+`OutboxProcessorOptions.repeatCron` instead, with a UTC cron expression from `@spy4x/time/cron`
+(`"0 3 * * *"`, `"@daily"`, `"0 9 * * MON-FRI"`). Once a run succeeds (or, with
+`repeatAfterGiveUp`, is given up), the next run is written at the schedule's next minute after
+that moment, through `markProcessed(id, { at })`. A kind in both options, or an invalid expression,
+throws a `RangeError` at construction. Start the chain at the schedule's next time:
+
+```ts
+import { nextCronRun } from "@spy4x/time/cron"
+
+const NIGHTLY = "0 3 * * *"
+const job = { eventKind: "outbox.cleanup", aggregateType: "job", aggregateId: JOB_ID }
+await ensureScheduledOutboxEvent(sql, job, { at: nextCronRun(NIGHTLY, new Date()) })
+new OutboxProcessor(repository, publisher, { repeatCron: { "outbox.cleanup": NIGHTLY } })
+```
+
 **Failed attempts and given-up rows.** By default a row that fails says nothing: the processor
 stores the error name on it and retries, and after `maxAttempts` never claims it again. Three
 options, all off by default, make that visible and recoverable:
@@ -6859,7 +6875,8 @@ options, all off by default, make that visible and recoverable:
   it throws or rejects with goes to `console.error`. Only a lost last attempt is reported; an
   earlier one that was lost is simply tried again.
 - `OutboxProcessorOptions.repeatAfterGiveUp: true` writes the next run of a repeating job when a run
-  is given up, one interval later, so one bad night costs one run and not the chain.
+  is given up, one interval later (or at its next cron time), so one bad night costs one run and
+  not the chain.
 - `ensureScheduledOutboxEvent(sql, event, when, { replaceGivenUpAfter: maxAttempts, onReplaced })`
   closes a waiting row that has been tried `maxAttempts` times and starts the chain again, in the
   same transaction and under the same advisory lock, so two workers starting together still leave

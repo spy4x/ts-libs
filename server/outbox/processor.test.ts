@@ -6,6 +6,7 @@ import {
   type OutboxAttemptFailure,
   type OutboxEvent,
   OutboxLeaseExpiredError,
+  type OutboxNextRun,
   OutboxProcessor,
   type OutboxRepository,
   retryDelayMs,
@@ -951,5 +952,81 @@ describe("OutboxProcessor repeatAfterGiveUp", () => {
     expect(repository.givenUp).toEqual([])
     expect(repository.lostQueries).toEqual([])
     expect(repository.retries.length).toBe(1)
+  })
+})
+
+/** A repository that records the next run it is asked for, a moment as well as seconds. */
+class NextRunRepository extends GivingUpRepository {
+  nextRuns: { id: string; repeat?: OutboxNextRun }[] = []
+
+  override markProcessed(id: string, repeat?: OutboxNextRun): Promise<void> {
+    this.nextRuns.push({ id, repeat })
+    return Promise.resolve()
+  }
+  override giveUp(id: string, _errorCode: string, repeat?: OutboxNextRun): Promise<boolean> {
+    this.nextRuns.push({ id, repeat })
+    return Promise.resolve(true)
+  }
+}
+
+describe("OutboxProcessor repeatCron", () => {
+  const ok = { publish: () => Promise.resolve() }
+  // A Friday, 05:00 UTC.
+  const now = () => Date.parse("2026-10-23T05:00:00Z")
+
+  it("asks for the next run at the schedule's next time after now, only for a cron kind", async () => {
+    const repository = new NextRunRepository([[
+      event({ id: "nightly", eventKind: "nightly.cleanup" }),
+      event({ id: "weekly", eventKind: "weekly.report" }),
+      event({ id: "every", eventKind: "hourly.ping" }),
+      event({ id: "plain", eventKind: "group.created" }),
+    ]])
+    const processor = new OutboxProcessor(repository, ok, {
+      repeatCron: { "nightly.cleanup": "0 3 * * *", "weekly.report": "0 9 * * MON" },
+      repeatEveryMs: { "hourly.ping": 3_600_000 },
+      now,
+    })
+
+    await processor.drainOnce()
+
+    expect(repository.nextRuns).toEqual([
+      { id: "nightly", repeat: { at: new Date("2026-10-24T03:00:00Z") } },
+      { id: "weekly", repeat: { at: new Date("2026-10-26T09:00:00Z") } },
+      { id: "every", repeat: 3_600 },
+      { id: "plain", repeat: undefined },
+    ])
+  })
+
+  it("with repeatAfterGiveUp, asks for the cron's next time when a run is given up", async () => {
+    const repository = new NextRunRepository([[
+      event({ id: "nightly", eventKind: "nightly.cleanup", attemptCount: 3 }),
+    ]])
+    const processor = new OutboxProcessor(
+      repository,
+      { publish: () => Promise.reject(new TypeError("down")) },
+      { maxAttempts: 3, repeatCron: { "nightly.cleanup": "@daily" }, repeatAfterGiveUp: true, now },
+    )
+
+    await processor.drainOnce()
+
+    expect(repository.nextRuns).toEqual([
+      { id: "nightly", repeat: { at: new Date("2026-10-24T00:00:00Z") } },
+    ])
+  })
+
+  it("refuses an invalid expression, naming the kind and the field", () => {
+    expect(() =>
+      new OutboxProcessor(new FakeRepository([]), ok, { repeatCron: { k: "0 25 * * *" } })
+    )
+      .toThrow(new RangeError(`repeatCron for k: cron hour: "25" is out of range 0-23`))
+  })
+
+  it("refuses a kind that repeats both every few milliseconds and on a cron schedule", () => {
+    expect(() =>
+      new OutboxProcessor(new FakeRepository([]), ok, {
+        repeatEveryMs: { k: 1000 },
+        repeatCron: { k: "@daily" },
+      })
+    ).toThrow(RangeError)
   })
 })

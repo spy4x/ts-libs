@@ -12,6 +12,7 @@ export {
   type OutboxEvent,
   type OutboxFailureStage,
   OutboxLeaseExpiredError,
+  type OutboxNextRun,
   OutboxProcessor,
   type OutboxProcessorOptions,
   type OutboxPublisher,
