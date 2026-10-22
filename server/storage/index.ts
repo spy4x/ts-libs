@@ -12,6 +12,7 @@ import type { FileStorage, PresignOptions, UploadBody } from "./ports.ts"
 import type { S3StorageConfig } from "./s3.ts"
 
 export { StorageError, type StorageErrorCode } from "./errors.ts"
+export { matchesContentType, SNIFF_BYTES, SNIFFABLE_CONTENT_TYPES } from "./content-type.ts"
 export { parseExpiresIn, parseStorageEnv, type StorageConfig, StorageEnvName } from "./env.ts"
 export { createDenoObjectFs, ensureFileDirectory } from "./fs.ts"
 export { DEFAULT_LOCAL_BASE_PATH, LocalStorage, type LocalStorageConfig } from "./local.ts"

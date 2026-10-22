@@ -2189,6 +2189,8 @@ S3ListPage	interface	@spy4x/server/storage	One page of `S3Storage.list`.
 S3ListedObject	interface	@spy4x/server/storage	One object in a `S3Storage.list` page.
 S3ObjectInfo	interface	@spy4x/server/storage	What `S3Storage.head` reports about one object.
 S3Storage	class	@spy4x/server/storage	S3-compatible provider and client: presigned PUT and GET URLs for browsers, head, ranged read, delete and list, for AWS, MinIO and Garage.
+SNIFFABLE_CONTENT_TYPES	constant	@spy4x/server/storage	Every type matchesContentType can confirm.
+SNIFF_BYTES	constant	@spy4x/server/storage	How many leading bytes matchesContentType looks at; more are ignored.
 StorageEnvName	enum	@spy4x/server/storage	Environment variable names this package reads.
 StorageError	class	@spy4x/server/storage	Storage failure carrying a machine-readable `code`, the operation that failed and any HTTP status the backend returned, so a caller can retry or re-map the failure without parsing the message.
 StorageErrorCode	type	@spy4x/server/storage	Error codes a caller can branch on without matching on a message string.
@@ -2207,6 +2209,7 @@ ensureFileDirectory	function	@spy4x/server/storage	Create the directory holding 
 formatAmzDate	function	@spy4x/server/storage	`YYYYMMDDTHHMMSSZ`, the only timestamp format SigV4 accepts.
 isSafeObjectPath	function	@spy4x/server/storage	Report whether one path is safe to join onto a bucket: relative, free of a scheme, a backslash or a NUL byte, and free of a `..` segment.
 loadStorageProvider	function	@spy4x/server/storage	Load and construct a provider by dynamic `import()`.
+matchesContentType	function	@spy4x/server/storage	Whether `bytes`, the start of a file, are what `contentType` says.
 parseExpiresIn	function	@spy4x/server/storage	Parse an expiry from either a number or an environment string.
 parseStorageEnv	function	@spy4x/server/storage	Parse storage configuration from an explicit environment record.
 resolveObjectKey	function	@spy4x/server/storage	Validate a bucket and an object key and return them joined.
@@ -2623,4 +2626,4 @@ firstIssueMessage	function	@spy4x/validation/validate	First issue message in a v
 isArkErrors	function	@spy4x/validation/validate	Whether a value is an arktype rejection, without relying on `instanceof`.
 toValidationError	function	@spy4x/validation/validate	Build a ValidationError from arktype's issues.
 validate	function	@spy4x/validation/validate	Parse `value` with an arktype schema exactly once.
-# export surface: sha256 e78513561ba0a3d09822878bbce0bc9e430c85567e4e50cdf95148cce3edc323
+# export surface: sha256 765c46e04074de0740b4e1092b60695cab894a1f2ab1dd371e6d8c89445493f6
