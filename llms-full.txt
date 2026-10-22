@@ -1654,7 +1654,7 @@ await pollTelegramUpdates({ client, signal, onUpdate: (u) => bot.handleUpdate(u)
   `{ ok: true, result, attempts }` or `{ ok: false, code, message, status?, attempts }`, where
   `message` is Telegram's `description`. Redirects are refused, answers are read under a 5 MiB
   cap, and the token never appears in a result.
-- **Retries.** 3 attempts, 1s doubling up to 30s, 60s in all; a 429's `retry_after` is honoured.
+- **Retries.** 3 attempts, 1s doubling up to 30s, 60s in all; a 429's `retry_after` is honoured up to 30s.
   Telegram has no idempotency key, so a retry after a timeout can send a message twice: pass
   `retry: { maxAttempts: 1 }` where that is worse than losing it.
 - **Webhook.** 405 for anything but `POST`; 401 when `X-Telegram-Bot-Api-Secret-Token` is missing
@@ -1663,8 +1663,10 @@ await pollTelegramUpdates({ client, signal, onUpdate: (u) => bot.handleUpdate(u)
   still 200, because any other status makes Telegram send the update again.
 - **Routing.** A registered command wins (`/cancel` can always end a conversation), then a
   callback route by `prefix` or `prefix:`, then a running conversation, then the `text` handler.
-  With `username` set, `/start@other_bot` is ignored. A button press the handler did not answer is
-  answered after it, so its spinner stops.
+  With `username` set, `/start@other_bot` reaches no handler, not even a conversation or the
+  `text` handler. A button press the handler did not answer is answered after it, also when the
+  handler threw, so its spinner stops; a press the bot cannot route to a chat (inline mode) gets
+  an empty answer.
 - **Conversations.** State is `{ name, step, data }` as JSON in the store passed in, one per person
   per chat, expiring after `ttlSec` (900 by default), so a restart or a second instance continues
   where the person left off. A step returns the next step, `{ done: true }`, or nothing to stay. A
