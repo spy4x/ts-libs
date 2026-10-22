@@ -19,6 +19,7 @@ export enum IntegrationEnvName {
   S3SecretAccessKey = "TS_LIBS_IT_S3_SECRET_ACCESS_KEY",
   S3Bucket = "TS_LIBS_IT_S3_BUCKET",
   S3Region = "TS_LIBS_IT_S3_REGION",
+  GarageEndpoint = "TS_LIBS_IT_GARAGE_ENDPOINT",
   SmtpHost = "TS_LIBS_IT_SMTP_HOST",
   SmtpPort = "TS_LIBS_IT_SMTP_PORT",
   MailpitUrl = "TS_LIBS_IT_MAILPIT_URL",
@@ -45,6 +46,7 @@ export const LOCAL_DEFAULTS = {
   s3Endpoint: "http://127.0.0.1:59000",
   s3Bucket: "ts-libs-integration",
   s3Region: "us-east-1",
+  garageEndpoint: "http://127.0.0.1:53900",
   smtpHost: "127.0.0.1",
   smtpPort: 51025,
   mailpitUrl: "http://127.0.0.1:58025",
@@ -202,6 +204,33 @@ export function s3Settings(): S3Settings {
       hostname: url.hostname,
       port: url.port === "" ? (url.protocol === "https:" ? 443 : 80) : Number(url.port),
       envName: IntegrationEnvName.S3Endpoint,
+    },
+  }
+}
+
+/**
+ * Garage's key: it must be `GK` and 24 hex digits, with a 64-hex secret, so it cannot be
+ * {@link THROWAWAY_CREDENTIAL}. All zeros, just as throw-away. Garage creates the key and
+ * the bucket at start (`--default-bucket` in `infra/compose.integration.yml`).
+ */
+export const GARAGE_CREDENTIALS = {
+  accessKeyId: "GK000000000000000000000000",
+  secretAccessKey: "0".repeat(64),
+} as const
+
+/** S3 settings for the Garage container, the store Seed bundles. Region `garage`. */
+export function garageSettings(): S3Settings {
+  const url = new URL(readEnv(IntegrationEnvName.GarageEndpoint) ?? LOCAL_DEFAULTS.garageEndpoint)
+  return {
+    endpoint: url.origin,
+    region: "garage",
+    ...GARAGE_CREDENTIALS,
+    bucket: LOCAL_DEFAULTS.s3Bucket,
+    address: {
+      service: "Garage (S3)",
+      hostname: url.hostname,
+      port: url.port === "" ? (url.protocol === "https:" ? 443 : 80) : Number(url.port),
+      envName: IntegrationEnvName.GarageEndpoint,
     },
   }
 }

@@ -1,10 +1,11 @@
 import { StorageError } from "./errors.ts"
 import { createDenoObjectFs } from "./fs.ts"
-import { assertDestinationPath, resolveObjectKey } from "./paths.ts"
+import { assertBucket, assertDestinationPath, resolveObjectKey } from "./paths.ts"
 import type { FileStorage, ObjectFs, PresignOptions, UploadBody } from "./ports.ts"
 import {
   DEFAULT_EXPIRES_IN_SECONDS,
   MAX_PRESIGN_EXPIRES_IN_SECONDS,
+  type PresignRequest,
   signS3Request,
 } from "./sigv4.ts"
 
@@ -24,6 +25,63 @@ export function defaultS3Endpoint(region: string): string {
 
 /** Loopback hosts where a bucket as subdomain cannot resolve, e.g. the MinIO default. */
 const LOOPBACK_HOST = /^(127\.0\.0\.1|localhost|\[::1\]|0\.0\.0\.0)$/
+
+/** Options of `S3Storage.presignPut`: the one type and the one size the upload may have. */
+export interface PresignPutOptions {
+  /** `Content-Type` the upload must send, e.g. `image/png`. Signed, so it cannot change. */
+  contentType: string
+  /** Exact size in bytes the upload must have. Signed, so a bigger body is refused. */
+  contentLength: number
+  /** Lifetime of the URL in seconds. Defaults to the provider's `expiresIn`. */
+  expiresIn?: number
+}
+
+/** Options of `S3Storage.presignGet`: how the store labels the file it sends back. */
+export interface PresignGetOptions {
+  /** `Content-Type` of the response, overriding the stored one. */
+  responseContentType?: string
+  /** `Content-Disposition` of the response, e.g. `attachment; filename="report.pdf"`. */
+  responseContentDisposition?: string
+  /** Lifetime of the URL in seconds. Defaults to the provider's `expiresIn`. */
+  expiresIn?: number
+}
+
+/** What `S3Storage.head` reports about one object. */
+export interface S3ObjectInfo {
+  /** Size in bytes. */
+  size: number
+  /** Stored `Content-Type`, when the store reports one. */
+  contentType?: string
+  /** Entity tag, quotes included, as the store sends it. */
+  etag?: string
+  lastModified?: Date
+}
+
+/** One object in a `S3Storage.list` page. */
+export interface S3ListedObject {
+  /** Object key, relative to the bucket. */
+  key: string
+  size: number
+  etag?: string
+  lastModified?: Date
+}
+
+/** One page of `S3Storage.list`. */
+export interface S3ListPage {
+  objects: S3ListedObject[]
+  /** Pass to the next `list` call to read the next page; absent on the last page. */
+  continuationToken?: string
+}
+
+/** Options of `S3Storage.list`. */
+export interface S3ListOptions {
+  /** At most this many keys per page, 1 to 1000. The store's default is 1000. */
+  maxKeys?: number
+  /** `continuationToken` of the previous page. */
+  continuationToken?: string
+}
+
+type SignedMethod = "GET" | "PUT" | "HEAD" | "DELETE"
 
 export interface S3StorageConfig {
   region: string
@@ -45,11 +103,12 @@ export interface S3StorageConfig {
 }
 
 /**
- * S3-compatible provider.
+ * S3-compatible provider and client: presigned PUT and GET URLs for browsers,
+ * head, ranged read, delete and list, for AWS, MinIO and Garage.
  *
  * Presigning is pure computation over Web Crypto (`signS3Request`), so the
- * package needs no AWS SDK: only the data path (`upload`, `download`,
- * `doesExist`) calls `fetch`, and that is injectable. The default presign
+ * package needs no AWS SDK: only the methods that talk to the store call
+ * `fetch`, and that is injectable. The default presign
  * carries no ACL — objects stay private unless a caller passes
  * `{ acl: "public-read" }` explicitly.
  */
@@ -157,6 +216,123 @@ export class S3Storage implements FileStorage {
   }
 
   /**
+   * Presign a browser upload of one exact file: the URL accepts a PUT only with
+   * this `Content-Type` and a body of exactly `contentLength` bytes, because
+   * both headers are signed. No ACL is signed, so the object stays private.
+   */
+  async presignPut(bucket: string, path: string, options: PresignPutOptions): Promise<string> {
+    const address = await Promise.resolve().then(() => this.addressFor(bucket, path))
+    const { contentType, contentLength } = options
+    if (contentType.trim() === "") {
+      throw new StorageError("invalid_config", "contentType must not be empty")
+    }
+    if (!Number.isSafeInteger(contentLength) || contentLength < 0) {
+      throw new StorageError("invalid_config", "contentLength must be a non-negative integer")
+    }
+    return await this.presign("PUT", address, {
+      expiresIn: options.expiresIn,
+      headers: { "content-type": contentType, "content-length": String(contentLength) },
+    })
+  }
+
+  /**
+   * Presign a download, optionally telling the store which `Content-Type` and
+   * `Content-Disposition` to answer with, so a browser saves the file under its
+   * own name, or never renders an upload as a page of this origin.
+   */
+  async presignGet(bucket: string, path: string, options: PresignGetOptions = {}): Promise<string> {
+    const address = await Promise.resolve().then(() => this.addressFor(bucket, path))
+    return await this.presign("GET", address, {
+      expiresIn: options.expiresIn,
+      query: {
+        "response-content-type": options.responseContentType,
+        "response-content-disposition": options.responseContentDisposition,
+      },
+    })
+  }
+
+  /** Size, type, entity tag and date of one object, or `null` when it does not exist. */
+  async head(bucket: string, path: string): Promise<S3ObjectInfo | null> {
+    const address = await Promise.resolve().then(() => this.addressFor(bucket, path))
+    const url = await this.presign("HEAD", address)
+    const response = await this.fetchOrFail(url, { method: "HEAD" }, "head", bucket, path)
+    if (response.status === 404) return null
+    if (!response.ok) throw await this.failure("head", response, bucket, path)
+    const info: S3ObjectInfo = { size: Number(response.headers.get("content-length") ?? "0") }
+    const contentType = response.headers.get("content-type")
+    const etag = response.headers.get("etag")
+    const lastModified = response.headers.get("last-modified")
+    if (contentType !== null) info.contentType = contentType
+    if (etag !== null) info.etag = etag
+    if (lastModified !== null) info.lastModified = new Date(lastModified)
+    return info
+  }
+
+  /**
+   * Read bytes `start` to `end` of one object, both inclusive: the first bytes
+   * of an upload are enough to check what the file really is. A range that
+   * starts past the end of the object reads as no bytes, and never more than
+   * the range is kept, even from a store that ignores `Range`.
+   */
+  async getRange(bucket: string, path: string, start: number, end: number): Promise<Uint8Array> {
+    if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start < 0 || end < start) {
+      throw new StorageError("invalid_config", "range must be integers with 0 <= start <= end")
+    }
+    const address = await Promise.resolve().then(() => this.addressFor(bucket, path))
+    const url = await this.presign("GET", address)
+    const response = await this.fetchOrFail(
+      url,
+      { method: "GET", headers: { range: `bytes=${start}-${end}` } },
+      "getRange",
+      bucket,
+      path,
+    )
+    if (response.status === 416) {
+      await response.body?.cancel().catch(() => {})
+      return new Uint8Array(0)
+    }
+    if (!response.ok || response.body === null) {
+      throw await this.failure("getRange", response, bucket, path)
+    }
+    const skip = response.status === 206 ? 0 : start
+    return await readBounded(response.body, skip, end - start + 1)
+  }
+
+  /** Delete one object. Deleting an object that is not there succeeds. */
+  async delete(bucket: string, path: string): Promise<void> {
+    const address = await Promise.resolve().then(() => this.addressFor(bucket, path))
+    const url = await this.presign("DELETE", address)
+    const response = await this.fetchOrFail(url, { method: "DELETE" }, "delete", bucket, path)
+    if (!response.ok && response.status !== 404) {
+      throw await this.failure("delete", response, bucket, path)
+    }
+    await response.body?.cancel().catch(() => {})
+  }
+
+  /**
+   * One page of the objects whose key starts with `prefix`, in key order
+   * (ListObjectsV2). Pass the page's `continuationToken` back to read the next.
+   */
+  async list(bucket: string, prefix: string, options: S3ListOptions = {}): Promise<S3ListPage> {
+    const address = await Promise.resolve().then(() => this.bucketAddress(bucket))
+    const { maxKeys } = options
+    if (maxKeys !== undefined && (!Number.isInteger(maxKeys) || maxKeys < 1 || maxKeys > 1000)) {
+      throw new StorageError("invalid_config", "maxKeys must be an integer between 1 and 1000")
+    }
+    const url = await this.presign("GET", address, {
+      query: {
+        "list-type": "2",
+        prefix,
+        "max-keys": maxKeys === undefined ? undefined : String(maxKeys),
+        "continuation-token": options.continuationToken,
+      },
+    })
+    const response = await this.fetchOrFail(url, { method: "GET" }, "list", bucket, prefix)
+    if (!response.ok) throw await this.failure("list", response, bucket, prefix)
+    return parseListPage(await response.text())
+  }
+
+  /**
    * Resolve the endpoint origin and the canonical URI for one object.
    *
    * Path-style addressing (selected for a loopback endpoint such as MinIO's
@@ -175,15 +351,25 @@ export class S3Storage implements FileStorage {
       : { origin: `${endpoint.protocol}//${bucket}.${endpoint.host}`, key: path }
   }
 
+  /** The same as `addressFor`, for a request on the bucket itself, such as a listing. */
+  private bucketAddress(bucket: string): { origin: string; key: string } {
+    const endpoint = new URL(this.config.endpoint ?? defaultS3Endpoint(this.config.region))
+    assertBucket(bucket)
+    const pathStyle = this.config.forcePathStyle ?? LOOPBACK_HOST.test(endpoint.hostname)
+    return pathStyle
+      ? { origin: endpoint.origin, key: bucket }
+      : { origin: `${endpoint.protocol}//${bucket}.${endpoint.host}`, key: "" }
+  }
+
   /**
    * Sign one request. `key` is the canonical URI for the addressing style in
    * use, and `options.acl` is forwarded verbatim: when it is absent the
    * canonical request carries no ACL at all.
    */
   private presign(
-    method: "GET" | "PUT" | "HEAD",
+    method: SignedMethod,
     address: { origin: string; key: string },
-    options?: PresignOptions,
+    options?: PresignOptions & Pick<PresignRequest, "headers" | "query">,
   ): Promise<string> {
     return signS3Request({
       method,
@@ -200,6 +386,8 @@ export class S3Storage implements FileStorage {
       expiresIn: options?.expiresIn ?? this.expiresIn,
       now: this.clock(),
       ...(options?.acl !== undefined ? { acl: options.acl } : {}),
+      ...(options?.headers !== undefined ? { headers: options.headers } : {}),
+      ...(options?.query !== undefined ? { query: options.query } : {}),
     })
   }
 
@@ -230,14 +418,22 @@ export class S3Storage implements FileStorage {
     }
   }
 
-  /** Read the response body once and turn a non-2xx reply into a `StorageError`. */
+  /**
+   * Read the response body once and turn a non-2xx reply into a `StorageError`.
+   *
+   * Only the S3 error `<Code>` and `<Message>` reach the message: the rest of
+   * an error body can echo the access key id, the string to sign and the
+   * signature (`SignatureDoesNotMatch` does), which a log must not carry.
+   */
   private async failure(
     operation: string,
     response: Response,
     bucket: string,
     path: string,
   ): Promise<StorageError> {
-    const detail = await response.text().catch(() => "")
+    const body = await response.text().catch(() => "")
+    const detail = [xmlField(body, "Code"), xmlField(body, "Message")]
+      .filter((part) => part !== undefined).join(": ")
     const suffix = detail === "" ? "" : `: ${detail.slice(0, 200)}`
     return new StorageError(
       "request_failed",
@@ -245,4 +441,76 @@ export class S3Storage implements FileStorage {
       { operation, status: response.status },
     )
   }
+}
+
+/** Undo the five XML entities and numeric character references. */
+function decodeXml(text: string): string {
+  return text.replace(/&(#x[0-9a-f]+|#\d+|amp|lt|gt|quot|apos);/gi, (_, entity: string) => {
+    const named: Record<string, string> = { amp: "&", lt: "<", gt: ">", quot: '"', apos: "'" }
+    if (entity[0] !== "#") return named[entity.toLowerCase()]
+    const hex = entity[1] === "x" || entity[1] === "X"
+    return String.fromCodePoint(parseInt(entity.slice(hex ? 2 : 1), hex ? 16 : 10))
+  })
+}
+
+/** Text of the first `<name>` element in `xml`, decoded, or `undefined`. */
+function xmlField(xml: string, name: string): string | undefined {
+  const match = new RegExp(`<${name}>([^<]*)</${name}>`).exec(xml)
+  return match === null ? undefined : decodeXml(match[1])
+}
+
+/**
+ * Read a ListObjectsV2 reply. S3's listing is flat and regular, so each
+ * `<Contents>` block is read field by field instead of pulling in an XML parser.
+ */
+function parseListPage(xml: string): S3ListPage {
+  const objects: S3ListedObject[] = []
+  for (const [, block] of xml.matchAll(/<Contents>([\s\S]*?)<\/Contents>/g)) {
+    const key = xmlField(block, "Key")
+    if (key === undefined) continue
+    const etag = xmlField(block, "ETag")
+    const lastModified = xmlField(block, "LastModified")
+    objects.push({
+      key,
+      size: Number(xmlField(block, "Size") ?? "0"),
+      ...(etag === undefined ? {} : { etag }),
+      ...(lastModified === undefined ? {} : { lastModified: new Date(lastModified) }),
+    })
+  }
+  const truncated = xmlField(xml, "IsTruncated") === "true"
+  const token = xmlField(xml, "NextContinuationToken")
+  return truncated && token !== undefined ? { objects, continuationToken: token } : { objects }
+}
+
+/**
+ * Read `length` bytes of `body` after skipping `skip`, then cancel the rest,
+ * so a store that ignores `Range` cannot make the caller download a whole file.
+ */
+async function readBounded(
+  body: ReadableStream<Uint8Array>,
+  skip: number,
+  length: number,
+): Promise<Uint8Array> {
+  const out = new Uint8Array(length)
+  let offset = 0
+  let skipped = 0
+  const reader = body.getReader()
+  try {
+    while (offset < length) {
+      const { done, value } = await reader.read()
+      if (done) break
+      let chunk = value
+      if (skipped < skip) {
+        const drop = Math.min(skip - skipped, chunk.length)
+        skipped += drop
+        chunk = chunk.subarray(drop)
+      }
+      const take = Math.min(length - offset, chunk.length)
+      out.set(chunk.subarray(0, take), offset)
+      offset += take
+    }
+  } finally {
+    await reader.cancel().catch(() => {})
+  }
+  return out.slice(0, offset)
 }

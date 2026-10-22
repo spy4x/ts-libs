@@ -177,9 +177,9 @@ anywhere in this repo's workflows — undo a throw-away checkout with `git check
 | `deno task ts:check`         | `deno check` over every `.ts`/`.tsx` in the tree           |
 | `deno task test`             | the unit tier — every test except `*.integration.test.ts`  |
 | `deno task test:integration` | the integration tier — only `*.integration.test.ts`        |
-| `deno task services:up`      | start the seven integration services, wait until healthy   |
+| `deno task services:up`      | start the eight integration services, wait until healthy   |
 | `deno task services:down`    | stop them and drop their volumes                           |
-| `deno task services:logs`    | logs of the seven containers                               |
+| `deno task services:logs`    | logs of the eight containers                               |
 | `deno task publish:dry`      | `deno publish --dry-run` over the workspace; CI runs it    |
 | `deno task contract`         | regenerate `docs/1.0-contract.md` from `deno doc` (#77)    |
 | `deno task llms`             | regenerate `llms.txt` and `llms-full.txt` (#297)           |
@@ -200,7 +200,7 @@ they are written.
 | ------------ | -------------------------- | ------------------------------------------------------------------ |
 | File name    | `*.test.ts`                | `*.integration.test.ts`                                            |
 | Task         | `deno task test`           | `deno task test:integration`                                       |
-| Talks to     | fakes only                 | real Postgres, MinIO, Mailpit, Redis x2                            |
+| Talks to     | fakes only                 | real Postgres, MinIO, Garage, Mailpit, Redis x2                    |
 | Permissions  | `--allow-read --allow-env` | the above plus `--allow-net` and a narrow `--allow-write=.volumes` |
 | Needs Docker | no                         | yes                                                                |
 
@@ -265,6 +265,7 @@ TS_LIBS_IT_S3_ACCESS_KEY_ID      integration-test-only
 TS_LIBS_IT_S3_SECRET_ACCESS_KEY  integration-test-only
 TS_LIBS_IT_S3_BUCKET             ts-libs-integration
 TS_LIBS_IT_S3_REGION             us-east-1
+TS_LIBS_IT_GARAGE_ENDPOINT       http://127.0.0.1:53900   (key and bucket fixed, see the harness)
 TS_LIBS_IT_SMTP_HOST             127.0.0.1
 TS_LIBS_IT_SMTP_PORT             51025
 TS_LIBS_IT_MAILPIT_URL           http://127.0.0.1:58025
