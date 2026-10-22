@@ -192,7 +192,7 @@ describe("S3Storage.presignGet", () => {
 })
 
 describe("S3Storage.head", () => {
-  it("reports size, type, entity tag and date from a HEAD signed for HEAD", async () => {
+  it("reports size, type, entity tag and date from a HEAD request", async () => {
     const { fetch, calls } = fakeFetch(() =>
       new Response(null, {
         headers: {
