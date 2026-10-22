@@ -50,10 +50,6 @@ export interface CheckCatalogsOptions {
   readonly languages: { readonly [language: string]: Catalog }
   /** The lock text of each language, as {@link stampLocks} wrote it. A missing lock is empty. */
   readonly locks: { readonly [language: string]: string }
-  /** The language of `source`, named in problems it has itself. Default `en`. */
-  readonly sourceLanguage?: string
-  /** The command that rewrites the locks, named in every problem. Default `deno task i18n:stamp`. */
-  readonly stampCommand?: string
 }
 
 /** Hex characters of the SHA-256 kept per lock line: 64 bits, plenty to notice a change. */
@@ -66,12 +62,15 @@ const LOCK_HASH_LENGTH = 16
  * differ from those `Intl.PluralRules` lists for the language. The source itself is checked for
  * empty messages and for its own plural categories.
  *
+ * The source is English (`en`), and every problem ends with the command that fixes it, which is
+ * `deno task i18n:stamp`, the task that writes {@link stampLocks}' output to the lock files.
+ *
  * Problems come in a stable order (language, then key) so a test's failure output diffs cleanly.
  */
 export async function checkCatalogs(options: CheckCatalogsOptions): Promise<CatalogProblem[]> {
   const { source, languages, locks } = options
-  const sourceLanguage = options.sourceLanguage ?? "en"
-  const stamp = `\`${options.stampCommand ?? "deno task i18n:stamp"}\``
+  const sourceLanguage = "en"
+  const stamp = "`deno task i18n:stamp`"
   const problems: CatalogProblem[] = []
   const hashes = await sourceHashes(source)
 

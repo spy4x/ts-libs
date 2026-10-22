@@ -2,7 +2,6 @@ import { describe, it } from "@std/testing/bdd"
 import { expect } from "@std/expect"
 
 import {
-  ACCEPT_LANGUAGE_MAX_LENGTH,
   type CatalogPair,
   createTranslator,
   negotiateLanguage,
@@ -119,6 +118,33 @@ describe("createTranslator", () => {
     expect(missing).toEqual(["de:notes.empty"])
   })
 
+  it("falls back to English for a plural translation with an empty form", () => {
+    const { t, missing } = translator("ru", { "notes.count": { ...ru["notes.count"], many: "" } })
+    expect(t("notes.count", { count: 5 })).toBe("5 notes")
+    expect(missing).toEqual(["ru:notes.count"])
+  })
+
+  it("treats prototype names as unknown keys and unknown values", () => {
+    const missing: string[] = []
+    const { t } = createTranslator<string>({
+      language: "de",
+      catalogs: [{
+        source: { hi: "Hi {constructor}" },
+        translation: { hi: "Hallo {constructor}" },
+      }],
+      onMissing: (key) => missing.push(key),
+    })
+    expect(t("constructor")).toBe("constructor")
+    expect(t("toString")).toBe("toString")
+    expect(t("hi", {})).toBe("Hallo {constructor}")
+    expect(missing).toEqual(["constructor", "toString"])
+    // English has no translation to miss, so only a key absent from the catalog itself is reported.
+    const english = translator("en")
+    // @ts-expect-error: not a catalog key.
+    expect(english.t("constructor")).toBe("constructor")
+    expect(english.missing).toEqual(["en:constructor"])
+  })
+
   it("falls back to the key and reports a key no catalog has", () => {
     const { t, missing } = translator("en")
     // @ts-expect-error: the key type is `keyof typeof en`, so an unknown key does not compile.
@@ -146,6 +172,23 @@ describe("createTranslator", () => {
     expect(translator("en").t("signup.terms", { name: "Ana" })).toBe(
       "I agree to the Terms as Ana.",
     )
+  })
+
+  it("keeps a value that looks like a tag as text in plain text", () => {
+    expect(translator("en").t("signup.terms", { name: "<terms>x</terms>" })).toBe(
+      "I agree to the Terms as <terms>x</terms>.",
+    )
+  })
+
+  it("fills a placeholder inside a tag span", () => {
+    const { parts } = createTranslator<"link">({
+      language: "en",
+      catalogs: [{ source: { link: "See <terms>the terms of {name}</terms>" } }],
+    })
+    expect(parts("link", { name: "Ana" })).toEqual([
+      "See ",
+      { tag: "terms", text: "the terms of Ana" },
+    ])
   })
 
   it("returns tag spans as parts and never turns a value into a tag", () => {
@@ -192,6 +235,11 @@ describe("negotiateLanguage", () => {
 
   it("prefers the bare language over a regional one for a regional request", () => {
     expect(negotiateLanguage("en-US", ["en-GB", "en"], "en-GB")).toBe("en")
+  })
+
+  it("looks at no more than the first 32 requested languages", () => {
+    expect(negotiateLanguage([...Array(32).fill("fr"), "de"], supported, "en")).toBe("en")
+    expect(negotiateLanguage([...Array(31).fill("fr"), "de"], supported, "en")).toBe("de")
   })
 
   it("returns the fallback when nothing matches", () => {
@@ -242,7 +290,7 @@ describe("parseAcceptLanguage", () => {
   it("reads only the first 256 characters, cut back to the last whole entry", () => {
     const header = `${"fr,".repeat(83)} zh-Hant-TW, ru`
     // The cap falls inside the Chinese tag, and its cut-off start is a valid tag of its own.
-    expect(header.slice(0, ACCEPT_LANGUAGE_MAX_LENGTH).endsWith(" zh-Han")).toBe(true)
+    expect(header.slice(0, 256).endsWith(" zh-Han")).toBe(true)
     expect(parseAcceptLanguage(header)).toEqual(Array(83).fill("fr"))
   })
 })

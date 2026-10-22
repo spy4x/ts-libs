@@ -2346,8 +2346,12 @@ for (const [lang, text] of Object.entries(await stampLocks(en, { de }))) {
 the lock was stamped), placeholders or tags that differ from English, and plural forms that differ
 from what `Intl.PluralRules` lists for the language. `findUnusedKeys` lists keys no source file
 names, and `pseudoLocalize` makes the `en-XA` pseudo-language that finds text which skipped the
-catalog. A `.json` export of a published package resolves in Vite through `@deno/vite-plugin`, one
-chunk per language (#364).
+catalog. Problems name `deno task i18n:stamp` as the fix, so an app names its stamp task that.
+
+Whether a `.json` export of a published JSR package builds in Vite through `@deno/vite-plugin` is
+proven in two halves only (#364): a linked package's `.json` export resolved and built with one
+chunk per language, and a `.json` file served by jsr.io loaded through the plugin. It holds end to
+end once the first consumer ships one.
 
 #### `universal/uuid` — version 7 ids and UUID validators
 

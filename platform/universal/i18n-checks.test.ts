@@ -165,23 +165,17 @@ describe("checkCatalogs", () => {
       ["plural", "en"],
     ])
   })
-
-  it("names the app's own stamp command", async () => {
-    const { "notes.empty": _, ...de } = languages.de
-    const [problem] = await checkCatalogs({
-      source: en,
-      languages: { de },
-      locks: await stampLocks(en, { de }),
-      stampCommand: "npm run i18n:stamp",
-    })
-    expect(problem.message).toMatch(/run `npm run i18n:stamp`\.$/)
-  })
 })
 
 describe("stampLocks", () => {
   it("writes one sorted key and hash line per translated key", async () => {
     const { de } = await stampLocks(en, { de: { "signup.terms": "x", "notes.empty": "y" } })
     expect(de).toMatch(/^notes\.empty\t[0-9a-f]{16}\nsignup\.terms\t[0-9a-f]{16}\n$/)
+  })
+
+  it("leaves out keys the English catalog lacks", async () => {
+    const { de } = await stampLocks(en, { de: { "notes.empty": "x", "notes.old": "y" } })
+    expect(de).toMatch(/^notes\.empty\t[0-9a-f]{16}\n$/)
   })
 
   it("gives the same hash whatever order the plural forms are written in", async () => {

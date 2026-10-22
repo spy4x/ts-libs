@@ -1128,7 +1128,6 @@ formatPct	function	@spy4x/platform/universal/format-number	Format a fraction in 
 round	function	@spy4x/platform/universal/format-number	Round to the nearest 10^-`decimals`.
 HONEYPOT_FIELD_NAME	constant	@spy4x/platform/universal/honeypot	Default `name` of the honeypot field.
 honeypotFilled	function	@spy4x/platform/universal/honeypot	Whether a submitted honeypot field carries a value — a person never types into a field they cannot see, so any value here means whatever posted the form was not one.
-ACCEPT_LANGUAGE_MAX_LENGTH	constant	@spy4x/platform/universal/i18n	The most characters of an `Accept-Language` header that parseAcceptLanguage reads.
 Catalog	type	@spy4x/platform/universal/i18n	A flat catalog: message key to message.
 CatalogPair	interface	@spy4x/platform/universal/i18n	One namespace of messages: its English source and, for any other language, its translation.
 CatalogProblem	interface	@spy4x/platform/universal/i18n	One problem checkCatalogs found.
@@ -2585,4 +2584,4 @@ firstIssueMessage	function	@spy4x/validation/validate	First issue message in a v
 isArkErrors	function	@spy4x/validation/validate	Whether a value is an arktype rejection, without relying on `instanceof`.
 toValidationError	function	@spy4x/validation/validate	Build a ValidationError from arktype's issues.
 validate	function	@spy4x/validation/validate	Parse `value` with an arktype schema exactly once.
-# export surface: sha256 8130a1324207b649e233bb89b81c28393376ad1d57bb0b795b68c59a0e94afec
+# export surface: sha256 68d71e312c407c699c2d558c3db3968ec51f9824d2e11f8bc22a41923f6f329a

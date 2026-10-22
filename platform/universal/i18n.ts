@@ -101,7 +101,7 @@ function numberFormat(locale: string): Intl.NumberFormat {
 /**
  * Make a translator for one interface language.
  *
- * A key with no text in `language` (absent, or an empty string) falls back to the English source, then to the key itself, and
+ * A key with no text in `language` (absent, an empty string, or a plural with an empty form) falls back to the English source, then to the key itself, and
  * calls `onMissing` in both cases. A plural message picks its form with `Intl.PluralRules` and the
  * number in `values.count`; a form the catalog lacks falls back to `other`, because older locale
  * data can pick a category the catalog does not have.
@@ -134,7 +134,7 @@ export function createTranslator<Key extends string = string>(
       if (!Object.hasOwn(source, key)) continue
       if (!translation) return source[key]
       const translated = Object.hasOwn(translation, key) ? translation[key] : undefined
-      if (isMessage(translated) && translated !== "") return translated
+      if (hasText(translated)) return translated
       onMissing?.(key, language)
       return source[key]
     }
@@ -180,6 +180,13 @@ export function createTranslator<Key extends string = string>(
   }
 }
 
+/** True for a message with text in every form: an empty one falls back to English instead. */
+function hasText(message: unknown): message is Message {
+  if (!isMessage(message)) return false
+  const forms = typeof message === "string" ? [message] : Object.values(message)
+  return forms.length > 0 && forms.every((text) => text !== "")
+}
+
 const RTL_SCRIPTS = new Set(["Arab", "Hebr", "Thaa", "Syrc", "Nkoo", "Adlm"])
 
 /**
@@ -196,7 +203,7 @@ export function textDirection(language: string): TextDirection {
 }
 
 /** The most characters of an `Accept-Language` header that {@link parseAcceptLanguage} reads. */
-export const ACCEPT_LANGUAGE_MAX_LENGTH = 256
+const ACCEPT_LANGUAGE_MAX_LENGTH = 256
 
 /** The most requested languages {@link negotiateLanguage} looks at. */
 const MAX_REQUESTED = 32
@@ -205,7 +212,7 @@ const LANGUAGE_TAG = /^[A-Za-z]{1,8}(-[A-Za-z0-9]{1,8})*$/
 
 /**
  * The language tags of an `Accept-Language` header, most preferred first. Only the first
- * {@link ACCEPT_LANGUAGE_MAX_LENGTH} characters are read, cut back to the last whole entry; `*`,
+ * 256 characters are read, cut back to the last whole entry; `*`,
  * `q=0` and malformed entries are dropped.
  */
 export function parseAcceptLanguage(header: string | null | undefined): string[] {
