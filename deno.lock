@@ -39,6 +39,7 @@
     "npm:@scure/base@2": "2.4.0",
     "npm:arktype@2.2.3": "2.2.3",
     "npm:fake-indexeddb@6.2.5": "6.2.5",
+    "npm:marked@18.1.1": "18.1.1",
     "npm:nodemailer@10.0.10": "10.0.10",
     "npm:postgres@3.4.7": "3.4.7",
     "npm:reflect-metadata@~0.2.2": "0.2.2"
@@ -351,6 +352,10 @@
     "fake-indexeddb@6.2.5": {
       "integrity": "sha512-CGnyrvbhPlWYMngksqrSSUT1BAVP49dZocrHuK0SvtR0D5TMs5wP0o3j7jexDJW01KSadjBp1M/71o/KR3nD1w=="
     },
+    "marked@18.1.1": {
+      "integrity": "sha512-zEGgrtUG8crk+TrMacJSVABU4DYDDkS8uqgU3ohrn/2fW9C2AEfUrO3m6IhpIpQpl7YcVpiXXC9cSMWDANT3dg==",
+      "bin": true
+    },
     "nodemailer@10.0.10": {
       "integrity": "sha512-He9XskOFms62SyAKkLu8CcGcYHAo+BSHSsORI8s4PJH8qZgZY4L4lDfvyN0twvmbpyG+eGrxpyBlskj9d9rJ8A=="
     },
@@ -401,6 +406,7 @@
       "jsr:@std/ulid@1.0.0",
       "jsr:@std/uuid@1.1.2",
       "npm:arktype@2.2.3",
+      "npm:marked@18.1.1",
       "npm:postgres@3.4.7"
     ],
     "members": {
