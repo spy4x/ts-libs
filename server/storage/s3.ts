@@ -1,6 +1,6 @@
 import { StorageError } from "./errors.ts"
 import { createDenoObjectFs } from "./fs.ts"
-import { assertBucket, assertDestinationPath, resolveObjectKey } from "./paths.ts"
+import { assertBucket, assertDestinationPath, encodeS3Path, resolveObjectKey } from "./paths.ts"
 import type { FileStorage, ObjectFs, PresignOptions, UploadBody } from "./ports.ts"
 import {
   DEFAULT_EXPIRES_IN_SECONDS,
@@ -104,7 +104,7 @@ export interface S3StorageConfig {
 
 /**
  * S3-compatible provider and client: presigned PUT and GET URLs for browsers,
- * head, ranged read, delete and list, for AWS, MinIO and Garage.
+ * head, ranged read, copy, delete and list, for AWS, MinIO and Garage.
  *
  * Presigning is pure computation over Web Crypto (`signS3Request`), so the
  * package needs no AWS SDK: only the methods that talk to the store call
@@ -296,6 +296,30 @@ export class S3Storage implements FileStorage {
     }
     const skip = response.status === 206 ? 0 : start
     return await readBounded(response.body, skip, end - start + 1)
+  }
+
+  /**
+   * Copy one object to another key of the same bucket inside the store (CopyObject), with its
+   * type and metadata, without the bytes passing through this process. A missing source throws.
+   * S3 can answer a failed copy with HTTP 200 and an `<Error>` body, so the body is read too.
+   */
+  async copy(bucket: string, fromPath: string, toPath: string): Promise<void> {
+    const source = await Promise.resolve().then(() => resolveObjectKey(bucket, fromPath))
+    const address = this.addressFor(bucket, toPath)
+    const copySource = `/${encodeS3Path(source)}`
+    const url = await this.presign("PUT", address, { headers: { "x-amz-copy-source": copySource } })
+    const response = await this.fetchOrFail(
+      url,
+      { method: "PUT", headers: { "x-amz-copy-source": copySource } },
+      "copy",
+      bucket,
+      fromPath,
+    )
+    if (!response.ok) throw await this.failure("copy", response, bucket, fromPath)
+    const body = await response.text()
+    if (body.includes("<Error>")) {
+      throw await this.failure("copy", new Response(body, { status: 200 }), bucket, fromPath)
+    }
   }
 
   /** Delete one object. Deleting an object that is not there succeeds. */

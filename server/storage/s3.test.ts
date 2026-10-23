@@ -285,6 +285,48 @@ describe("S3Storage.delete", () => {
   })
 })
 
+describe("S3Storage.copy", () => {
+  it("sends a signed PUT to the target that names the encoded source", async () => {
+    const { fetch, calls } = fakeFetch(() => new Response("<CopyObjectResult/>"))
+    await garage(fetch).copy("uploads", "tmp/a b.png", "final/a.png")
+
+    const url = new URL(calls[0].url)
+    assertEquals(calls[0].init?.method, "PUT")
+    assertEquals(url.pathname, "/uploads/final/a.png")
+    assertEquals(url.searchParams.get("X-Amz-SignedHeaders"), "host;x-amz-copy-source")
+    assertEquals(
+      new Headers(calls[0].init?.headers).get("x-amz-copy-source"),
+      "/uploads/tmp/a%20b.png",
+    )
+  })
+
+  it("throws when the store refuses the copy or answers 200 with an error", async () => {
+    const missing = fakeFetch(() => new Response(null, { status: 404 }))
+    await assertRejects(
+      () => garage(missing.fetch).copy("uploads", "gone.png", "b.png"),
+      StorageError,
+      "HTTP 404",
+    )
+
+    const failed = fakeFetch(() =>
+      new Response("<Error><Code>InternalError</Code><Message>try again</Message></Error>")
+    )
+    await assertRejects(
+      () => garage(failed.fetch).copy("uploads", "a.png", "b.png"),
+      StorageError,
+      "InternalError: try again",
+    )
+  })
+
+  it("rejects a source path that climbs out of the bucket", async () => {
+    await assertRejects(
+      () => garage().copy("uploads", "../other/a.png", "b.png"),
+      StorageError,
+      "Object path must be relative",
+    )
+  })
+})
+
 describe("S3Storage.list", () => {
   const PAGE = `<?xml version="1.0" encoding="UTF-8"?>
 <ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">

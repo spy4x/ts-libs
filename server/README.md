@@ -499,7 +499,7 @@ provider that could not be tested this way would be a design defect.
 
 ### Browser uploads and object management (S3 only)
 
-`S3Storage` has six more methods that the port does not, because a local folder
+`S3Storage` has seven more methods that the port does not, because a local folder
 cannot honour them. The integration tier runs them against MinIO and Garage; they should work
 against AWS too, but no test runs there.
 
@@ -509,6 +509,7 @@ against AWS too, but no test runs there.
 | `presignGet(bucket, path, { responseContentDisposition, … })` | URL for one GET; `responseContentType` and `responseContentDisposition` set the headers the store answers with.                                                                               |
 | `head(bucket, path)`                                          | `{ size, contentType, etag, lastModified }`, or `null` when the object is missing.                                                                                                            |
 | `getRange(bucket, path, start, end)`                          | Bytes `start` to `end`, inclusive, to check an upload's real type. Keeps only the range; a store that ignores `Range` sends bytes up to `end`, and those before `start` are read and dropped. |
+| `copy(bucket, fromPath, toPath)`                              | Copies one object to another key inside the store, with its type; a missing source throws.                                                                                                    |
 | `delete(bucket, path)`                                        | Deletes one object; a missing one is not an error.                                                                                                                                            |
 | `list(bucket, prefix, { maxKeys, continuationToken })`        | One page of keys under `prefix`, with the token for the next page.                                                                                                                            |
 
@@ -528,6 +529,10 @@ type it claimed: a signed URL holds the upload to a name, not to what the file i
 const head = await provider.getRange("uploads", key, 0, SNIFF_BYTES - 1)
 if (!matchesContentType(head, "image/png")) await provider.delete("uploads", key)
 ```
+
+The signed URL stays valid until it expires, so its holder can PUT other bytes after the check.
+Sign the browser's PUT for a staging key, `copy` it to a key no browser has a URL for, check
+that copy, and delete the staging object: the checked bytes then cannot be replaced.
 
 `matchesContentType` knows PNG, JPEG, GIF, WebP, PDF and ZIP by their signature,
 and plain text, CSV and JSON as UTF-8 without a NUL byte (`SNIFFABLE_CONTENT_TYPES`).

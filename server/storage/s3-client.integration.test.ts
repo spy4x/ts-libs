@@ -7,7 +7,7 @@
  * harness's own `deleteObject`, not through the code under test.
  */
 
-import { assert, assertEquals } from "@std/assert"
+import { assert, assertEquals, assertRejects } from "@std/assert"
 import { describe, it } from "@std/testing/bdd"
 import {
   deleteObject,
@@ -112,6 +112,39 @@ for (const [name, settingsOf] of STORES) {
         assertEquals(await storage.head(settings.bucket, key), null)
       } finally {
         await deleteObject(settings, key)
+      }
+    })
+
+    it("copies an object to a key the upload URL cannot reach", async () => {
+      const settings = settingsOf()
+      const storage = await connect(settings)
+      const prefix = uniqueKeyPrefix("s3client")
+      const staging = `${prefix}/tmp/a b.png`
+      const final = `${prefix}/final.png`
+
+      try {
+        const url = await storage.presignPut(settings.bucket, staging, {
+          contentType: "image/png",
+          contentLength: PNG.length,
+        })
+        const upload = (body: Uint8Array<ArrayBuffer>) =>
+          fetch(url, { method: "PUT", body, headers: { "content-type": "image/png" } })
+            .then(async (response) => {
+              await response.body?.cancel()
+              return response.status
+            })
+        assertEquals(await upload(PNG), 200)
+
+        await storage.copy(settings.bucket, staging, final)
+        assertEquals(await upload(new Uint8Array(PNG.length)), 200)
+
+        const info = await storage.head(settings.bucket, final)
+        assertEquals([info?.size, info?.contentType], [PNG.length, "image/png"])
+        assertEquals(await storage.getRange(settings.bucket, final, 0, PNG.length - 1), PNG)
+        await assertRejects(() => storage.copy(settings.bucket, `${prefix}/gone`, final))
+      } finally {
+        await deleteObject(settings, staging)
+        await deleteObject(settings, final)
       }
     })
 
