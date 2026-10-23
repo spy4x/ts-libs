@@ -1340,6 +1340,26 @@ describe("ClientTransport requests", () => {
     expect((call.error as RealtimeRequestError).details).toEqual({ groupId: 4 })
   })
 
+  it("rejects with the server's reason and fields", async () => {
+    const harness = createHarness()
+    await harness.open()
+    const call = track(harness.transport.command("note.create"))
+    const [frame] = requestFrames(harness)
+    const fields = { title: { code: "required" } }
+
+    harness.factory.latest.receive(JSON.stringify({
+      kind: "server.error",
+      requestId: frame.id,
+      code: "bad_request",
+      message: "title must be a string (was missing)",
+      reason: "validation",
+      fields,
+    }))
+    await drainMicrotasks()
+
+    expect(call.error).toMatchObject({ code: "bad_request", reason: "validation", fields })
+  })
+
   it("rejects with RequestTimeoutError when no answer arrives, and ignores the late answer", async () => {
     const harness = createHarness()
     await harness.open()

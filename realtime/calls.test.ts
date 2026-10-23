@@ -250,6 +250,31 @@ describe("the HTTP port", () => {
     })
   })
 
+  it("reads the reason and fields of the error body", async () => {
+    const fields = { title: { code: "maxLength", values: { rule: 120 } } }
+    const body = {
+      error: { code: "bad_request", message: "title is too long", reason: "validation", fields },
+    }
+    const { fetcher } = recordingFetch(Response.json(body, { status: 400 }))
+
+    const error = await port(fetcher).command("x", {}).catch((e) => e)
+
+    expect(error).toMatchObject({ code: "bad_request", reason: "validation", fields })
+  })
+
+  it("keeps the code and message of a body whose reason and fields are malformed", async () => {
+    const body = {
+      error: { code: "conflict", message: "taken", reason: 7, fields: { title: "required" } },
+    }
+    const { fetcher } = recordingFetch(Response.json(body, { status: 409 }))
+
+    const error = await port(fetcher).command("x", {}).catch((e) => e)
+
+    expect(error).toMatchObject({ code: "conflict", message: "taken" })
+    expect((error as RealtimeRequestError).reason).toBeUndefined()
+    expect((error as RealtimeRequestError).fields).toBeUndefined()
+  })
+
   it("keeps the code of an `internal` answer instead of calling it a lost connection", async () => {
     const body = { error: { code: "internal", message: "Something went wrong" } }
     const { fetcher } = recordingFetch(Response.json(body, { status: 500 }))

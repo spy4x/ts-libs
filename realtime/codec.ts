@@ -62,7 +62,13 @@ import { type Type, type } from "arktype"
 import { hasUnstorableTextCharacters } from "@spy4x/platform/universal/text"
 
 import type { CursorSnapshot } from "./cursor.ts"
-import { REALTIME_ERROR_CODES, type RealtimeErrorCode } from "./errors.ts"
+import { type FieldErrors, fieldErrorsSchema } from "@spy4x/validation"
+import {
+  errorExtras,
+  REALTIME_ERROR_CODES,
+  type RealtimeErrorCode,
+  type RealtimeRequestErrorOptions,
+} from "./errors.ts"
 
 /** A client liveness frame. */
 export interface ClientLivenessMessage {
@@ -161,6 +167,10 @@ export interface ServerErrorMessage {
   code: RealtimeErrorCode
   message: string
   details?: unknown
+  /** The host's finer name for the refusal; see `RealtimeRequestErrorOptions.reason`. */
+  reason?: string
+  /** The fields a payload failed on, keyed by path. */
+  fields?: FieldErrors
 }
 
 /** Frames a server sends. */
@@ -255,6 +265,8 @@ export const serverMessageSchema: Type<ServerMessage> = type({
     code: type.enumerated(...REALTIME_ERROR_CODES),
     message: errorMessageSchema,
     "details?": "unknown",
+    "reason?": "string <= 128",
+    "fields?": fieldErrorsSchema,
   }),
 )
 
@@ -277,7 +289,7 @@ const DECLARED_FRAME_KEYS: Record<WireMessage["kind"], readonly string[]> = {
   "client.command": ["kind", "id", "name", "payload", "idempotencyKey"],
   "client.query": ["kind", "id", "name", "payload"],
   "server.result": ["kind", "requestId", "payload"],
-  "server.error": ["kind", "requestId", "code", "message", "details"],
+  "server.error": ["kind", "requestId", "code", "message", "details", "reason", "fields"],
 }
 
 /** Keys a handshake cursor snapshot may carry. */
@@ -374,6 +386,7 @@ export function createError(
   code: RealtimeErrorCode,
   message: string,
   details?: unknown,
+  extras: RealtimeRequestErrorOptions = {},
 ): ServerErrorMessage {
   return {
     kind: "server.error",
@@ -381,6 +394,7 @@ export function createError(
     code,
     message,
     ...(details !== undefined ? { details } : {}),
+    ...errorExtras(extras),
   }
 }
 

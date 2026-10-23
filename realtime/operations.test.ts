@@ -71,6 +71,16 @@ function createTable(): { operations: Operations<Actor>; calls: OperationCall<Ac
         throw new RealtimeRequestError("conflict", "stale version", { currentVersion: 3 })
       },
     },
+    "note.full": {
+      kind: "query",
+      handle: (call) => {
+        record(call)
+        throw new RealtimeRequestError("forbidden", "The note is too long", undefined, {
+          reason: "quota_exceeded",
+          fields: { body: { code: "maxLength", values: { rule: 3 } } },
+        })
+      },
+    },
     "note.locked": {
       kind: "query",
       handle: (call) => {
@@ -816,6 +826,20 @@ describe("createCallHandler", () => {
     expect(body).toEqual(errorBody("conflict", "stale version", { currentVersion: 3 }))
   })
 
+  it("answers a typed error's reason and fields beside its code", async () => {
+    const { status, body } = await createHttp().call({ name: "note.full" })
+
+    expect(status).toBe(403)
+    expect(body).toEqual({
+      error: {
+        code: "forbidden",
+        message: "The note is too long",
+        reason: "quota_exceeded",
+        fields: { body: { code: "maxLength", values: { rule: 3 } } },
+      },
+    })
+  })
+
   it("answers each error code with its own status", async () => {
     const statuses: Record<string, number> = {}
     for (const code of REALTIME_ERROR_CODES) {
@@ -1046,6 +1070,19 @@ describe("createOperationDispatcher", () => {
     expect(socket.calls).toHaveLength(0)
   })
 
+  it("answers a typed error's reason and fields on the socket too", async () => {
+    const frame = await createSocket().send({ kind: "client.query", name: "note.full" })
+
+    expect(frame).toEqual({
+      kind: "server.error",
+      requestId: frame.requestId,
+      code: "forbidden",
+      message: "The note is too long",
+      reason: "quota_exceeded",
+      fields: { body: { code: "maxLength", values: { rule: 3 } } },
+    })
+  })
+
   it("reports an unexpected exception to the registry instead of the client", async () => {
     const socket = createSocket()
 
@@ -1107,6 +1144,22 @@ describe("parsePayload", () => {
     const { errors } = error.details as { errors: Record<string, { code: string }[]> }
     expect(Object.keys(errors).sort()).toEqual(["age", "name"])
     expect(errors.name[0].code).toBe("domain")
+  })
+
+  it("names each failed field with its code and rule, and keeps the English summary", () => {
+    const schema = type({ title: "string <= 3", tag: "string" })
+    const error = (() => {
+      try {
+        parsePayload(schema, { title: "long" })
+      } catch (error) {
+        return error
+      }
+    })() as RealtimeRequestError
+    expect(error.fields).toEqual({
+      title: { code: "maxLength", values: { rule: 3 } },
+      tag: { code: "required" },
+    })
+    expect(error.message).toBe((schema({ title: "long" }) as { summary: string }).summary)
   })
 })
 
