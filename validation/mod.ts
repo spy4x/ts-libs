@@ -6,3 +6,4 @@
 
 export * from "./validate.ts"
 export * from "./model.ts"
+export * from "./fields.ts"
