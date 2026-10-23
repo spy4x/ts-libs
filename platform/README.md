@@ -473,17 +473,19 @@ template's shared surface the 2026-09-23 decision in issue #77 moved into this p
 recopying it into every product. Three directories, split the same way `./browser` and `./server`
 already are — by where the code can run:
 
-| Directory       | Contents                                                                                                                                                                                                                                                                                                                          |
-| --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `model/`        | `dateSchema`/`DateNullableSchema`, the `ImmutableBaseModelSchema`/`UndeletableBaseModelSchema`/`BaseModelSchema` tiers, and the Web Push wire schemas — universal, arktype only                                                                                                                                                   |
-| `api/`          | `ApiError` (`status`, `message`, optional `code`), `ApiResult<T>`, `apiFetch`, `createOfflineFetch` (reports `offline: true` when nothing answered, checks a reply against a schema, keeps a "last request failed" flag with `subscribe`), `OfflineFetch`, `OfflineApiResult`, `INVALID_REPLY_CODE` — browser-only, needs `fetch` |
-| `request-info/` | `RequestInfo`, `requestInfoFromContext` — server-only, needs Hono                                                                                                                                                                                                                                                                 |
+| Directory       | Contents                                                                                                                                                                                                                                                                                                                                              |
+| --------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `model/`        | `dateSchema`/`DateNullableSchema`, the `ImmutableBaseModelSchema`/`UndeletableBaseModelSchema`/`BaseModelSchema` tiers, and the Web Push wire schemas — universal, arktype only                                                                                                                                                                       |
+| `api/`          | `ApiError` (`status`, `message`, optional `code`, `reason`, `fields`), `ApiResult<T>`, `apiFetch`, `createOfflineFetch` (reports `offline: true` when nothing answered, checks a reply against a schema, keeps a "last request failed" flag with `subscribe`), `OfflineFetch`, `OfflineApiResult`, `INVALID_REPLY_CODE` — browser-only, needs `fetch` |
+| `request-info/` | `RequestInfo`, `requestInfoFromContext` — server-only, needs Hono                                                                                                                                                                                                                                                                                     |
 
 `apiFetch` reads an error body in three shapes: `{ error }` (a string), `{ code, message }`, or
 `{ error: { code, message } }`. The message is the string `error`, else the string `message` of an
 `error` object, else the body's string `message`, else `"Request failed"`. `error.code` is the string
 `code` of an `error` object, else the body's string `code`, when there is one, so a client can branch
-on `caldav_unreachable` instead of on wording. Non-string fields are ignored, and so is any extra
+on `caldav_unreachable` instead of on wording. `error.reason` and `error.fields` are the `reason`
+string and the `fields` record (`fieldErrorsSchema` of `@spy4x/validation`) of an `error` object,
+each left out when absent or of another shape. Non-string fields are ignored, and so is any extra
 field in the nested object (such as `requestId`). Only HTTP answers resolve: a network failure still rejects, so wrap the call in
 `try`/`catch` where a throw is not acceptable.
 

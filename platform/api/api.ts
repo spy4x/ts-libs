@@ -27,6 +27,7 @@
  * default so `fetch` sets its own `content-type`.
  */
 
+import type { FieldErrors } from "@spy4x/validation"
 import { errorBodyFields } from "../universal/error-body.ts"
 
 /**
@@ -38,6 +39,10 @@ export interface ApiError {
   message: string
   /** The error body's string `code` field (e.g. `caldav_unreachable`), for a caller to branch on. */
   code?: string
+  /** `error.reason`: the server's finer name for the refusal, such as `GROUP_NOT_FOUND`. */
+  reason?: string
+  /** `error.fields`: each failed field's code and rule, keyed by path, for a form to mark. */
+  fields?: FieldErrors
 }
 
 /** Outcome of {@link apiFetch}: the parsed body on success, or a typed error on failure. */
@@ -61,7 +66,8 @@ export type ApiResult<T> =
  * error message is the first non-empty string of: a bare string body, the body's `error` field, the
  * `message` of an `error` object, the body's `message`, its `detail`, else the fallback
  * `"Request failed"`; `error.code` is the non-empty string `code` of an `error` object, else the
- * body's `code`, and is absent otherwise. So a server answering `{ error }`, `{ code, message }`,
+ * body's `code`, and is absent otherwise. `error.reason` and `error.fields` are the `reason` and
+ * `fields` of an `error` object, when they have the right shape. So a server answering `{ error }`, `{ code, message }`,
  * `{ error: { code, message } }` or `{ detail }` needs no wrapper of its own; non-string nested
  * fields are ignored. `responseError` from `@spy4x/platform/universal/errors` reads a body by the
  * same rule.
@@ -107,9 +113,11 @@ export async function apiFetch<T>(
   }
 
   if (!response.ok) {
-    const { message, code } = errorBodyFields(data)
+    const { message, code, reason, fields } = errorBodyFields(data)
     const error: ApiError = { status: response.status, message: message ?? "Request failed" }
     if (code !== undefined) error.code = code
+    if (reason !== undefined) error.reason = reason
+    if (fields !== undefined) error.fields = fields
     return { ok: false, status: response.status, error }
   }
   return { ok: true, status: response.status, data: data as T }
