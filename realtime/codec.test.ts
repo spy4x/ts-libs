@@ -462,6 +462,20 @@ describe("request and response frames", () => {
     }
   })
 
+  it("round-trips an error with a reason and fields, and refuses fields of another shape", () => {
+    const frame: WireMessage = {
+      kind: "server.error",
+      requestId: "req-4",
+      code: "bad_request",
+      message: "title is too long",
+      reason: "validation",
+      fields: { title: { code: "maxLength", values: { rule: 120 } } },
+    }
+    expect(codec.decode(codec.encode(frame))).toEqual({ ok: true, message: frame })
+    const bad = JSON.stringify({ ...frame, fields: { title: "maxLength" } })
+    expect(codec.decode(bad).ok).toBe(false)
+  })
+
   it("refuses a request frame without an id", () => {
     const raw = JSON.stringify({ kind: "client.command", name: "group.rename" })
     expect(codec.decode(raw).ok).toBe(false)

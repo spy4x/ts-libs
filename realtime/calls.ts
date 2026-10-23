@@ -20,12 +20,16 @@
  *   JSON (no body at all when there is none), header `Idempotency-Key` on commands, header
  *   `X-Realtime-User` with the id of the user the page was started for.
  * - Success: every 2xx carries the JSON body `{ "result": <value> }`.
- * - Failure: a non-2xx with the JSON body `{ "error": { "code", "message", "details"? } }`, where
- *   `code` is one of {@link REALTIME_ERROR_CODES}, the same code the socket uses.
+ * - Failure: a non-2xx with the JSON body
+ *   `{ "error": { "code", "message", "details"?, "reason"?, "fields"? } }`, where `code` is one of
+ *   {@link REALTIME_ERROR_CODES}, the same code the socket uses, and `reason` and `fields` are the
+ *   finer detail of `RealtimeRequestErrorOptions`.
  *
  * @module
  */
 
+import { type } from "arktype"
+import { type FieldErrors, fieldErrorsSchema } from "@spy4x/validation"
 import { isRecord } from "@spy4x/platform/universal/is-record"
 import { uuidV7 } from "@spy4x/platform/universal/uuid"
 import { retryDelay } from "./backoff.ts"
@@ -37,7 +41,12 @@ import {
   TransportStatus,
 } from "./client-transport.ts"
 import { type Clock, createSystemClock } from "./clock.ts"
-import { isRealtimeErrorCode, type RealtimeErrorCode, RealtimeRequestError } from "./errors.ts"
+import {
+  isRealtimeErrorCode,
+  type RealtimeErrorCode,
+  RealtimeRequestError,
+  type RealtimeRequestErrorOptions,
+} from "./errors.ts"
 
 /** Options for one {@link CallPort.query}. */
 export interface CallPortOptions {
@@ -192,12 +201,26 @@ function codeForStatus(status: number): RealtimeErrorCode | undefined {
   return status >= 400 && !isForeignAnswer(status) ? "bad_request" : undefined
 }
 
-/** Reads the nested `{ error: { code, message, details? } }` body. `null` when it is not one. */
+/**
+ * Reads the nested `{ error: { code, message, details?, reason?, fields? } }` body. `null` when it
+ * is not one. A `reason` that is not a string, or `fields` of another shape, is left out rather
+ * than failing the read, so the code and message still reach the caller.
+ */
 function readErrorBody(body: unknown): RealtimeRequestError | null {
   if (!isRecord(body) || !isRecord(body.error)) return null
-  const { code, message, details } = body.error
+  const { code, message, details, reason, fields } = body.error
   if (!isRealtimeErrorCode(code)) return null
-  return new RealtimeRequestError(code, typeof message === "string" ? message : code, details)
+  const extras: RealtimeRequestErrorOptions = {}
+  if (typeof reason === "string") extras.reason = reason
+  if (fields !== undefined && !(fieldErrorsSchema(fields) instanceof type.errors)) {
+    extras.fields = fields as FieldErrors
+  }
+  return new RealtimeRequestError(
+    code,
+    typeof message === "string" ? message : code,
+    details,
+    extras,
+  )
 }
 
 async function readJson(response: Response): Promise<unknown> {

@@ -580,7 +580,7 @@ export class ConnectionRegistry {
         this.#answer(
           connection,
           requestId,
-          createError(requestId, error.code, error.message, error.details),
+          createError(requestId, error.code, error.message, error.details, error),
         )
         return
       }

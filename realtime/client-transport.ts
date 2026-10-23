@@ -772,10 +772,13 @@ export class ClientTransport {
         this.#emitFrame(result.message)
         return
       case "server.error": {
-        const { requestId, code, message, details } = result.message
+        const { requestId, code, message, details, reason, fields } = result.message
         this.#settleCall(
           requestId,
-          (call) => call.deferred.reject(new RealtimeRequestError(code, message, details)),
+          (call) =>
+            call.deferred.reject(
+              new RealtimeRequestError(code, message, details, { reason, fields }),
+            ),
         )
         this.#emitFrame(result.message)
         return

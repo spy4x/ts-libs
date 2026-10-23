@@ -48,6 +48,20 @@ object — goes under `FORM_FIELD` (`"_form"`) with an empty `path`, so it is ne
 `firstIssueMessage` returns the first path-prefixed message from `details`, and still accepts an
 error built by hand with only `description` and `details`.
 
+## Field codes for the wire
+
+`fieldErrors(errors)` turns a rejection into what a server sends so a screen can name each failed
+field in its own language: `{ [path]: { code, values? } }`. `code` is arktype's own (`required`,
+`maxLength`, `domain`, …), and `values` holds the rule the value missed, such as
+`{ rule: 120 }` for `maxLength` or `{ rule: 17, exclusive: true }` for `> 17`. The submitted value
+is never included. One entry per path, the first issue arktype reports; an issue with no path goes
+under `FORM_FIELD`. `fieldErrorsSchema` is the arktype type of that record, for a client reading it.
+
+```ts
+fieldErrors(type({ title: "string <= 120" })({ title: "x".repeat(121) }) as ArkErrors)
+// { title: { code: "maxLength", values: { rule: 120 } } }
+```
+
 `ErrType` is declared here, not in `@spy4x/platform`, because `@spy4x/platform` imports this package
 and the reverse import would be a cycle that fails `deno publish`. `@spy4x/platform/universal/errors`
 re-exports the same enum next to the transport errors (`ConnectionError`, `ServerError`,

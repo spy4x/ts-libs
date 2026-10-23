@@ -29,10 +29,16 @@ import {
 } from "@spy4x/net/bounded-body"
 
 import type { Type } from "arktype"
-import { isArkErrors, toValidationError } from "@spy4x/validation"
+import { fieldErrors, isArkErrors, toValidationError } from "@spy4x/validation"
 import { uuidV7 } from "@spy4x/platform/universal/uuid"
 
-import { isRealtimeErrorCode, type RealtimeErrorCode, RealtimeRequestError } from "./errors.ts"
+import {
+  errorExtras,
+  isRealtimeErrorCode,
+  type RealtimeErrorCode,
+  RealtimeRequestError,
+  type RealtimeRequestErrorOptions,
+} from "./errors.ts"
 import type { RequestContext, RequestDispatcher } from "./registry.ts"
 
 /** The header that carries the id of the user the page was started for. */
@@ -314,11 +320,17 @@ function refuse(
   details?: unknown,
   status: number = CALL_ERROR_STATUS[code],
   headers?: Record<string, string>,
+  extras: RealtimeRequestErrorOptions = {},
 ): Response {
   let body: string
   try {
     body = JSON.stringify({
-      error: { code, message, ...(details !== undefined ? { details } : {}) },
+      error: {
+        code,
+        message,
+        ...(details !== undefined ? { details } : {}),
+        ...errorExtras(extras),
+      },
     })
   } catch {
     // Details that cannot be encoded (a `BigInt`, a cycle) must not become an unanswered call.
@@ -360,8 +372,8 @@ function readOperationName(url: string, basePath: string): string | null {
  * - {@link REALTIME_USER_HEADER} is required on every call;
  * - success is `200` with `{ "result": <value> }`, always with the key: `null` when the operation
  *   returned nothing or something JSON has no value for;
- * - failure is `{ "error": { "code", "message", "details"? } }` with the socket's code and the
- *   status in {@link CALL_ERROR_STATUS}. Three refusals use a more exact status with the code
+ * - failure is `{ "error": { "code", "message", "details"?, "reason"?, "fields"? } }` with the
+ *   socket's code and the status in {@link CALL_ERROR_STATUS}. Three refusals use a more exact status with the code
  *   `bad_request`: `405` for a method that is not `POST`, `413` for a body over the cap and `415`
  *   for a body that is not declared as JSON; a body that stalls is `408`.
  *
@@ -399,7 +411,9 @@ export function createCallHandler<TActor>(
 
   const answerThrown = (error: unknown, context: CallErrorContext): Response => {
     const typed = toClientError(error, options.mapError)
-    return typed ? refuse(typed.code, typed.message, typed.details) : report(error, context)
+    return typed
+      ? refuse(typed.code, typed.message, typed.details, undefined, undefined, typed)
+      : report(error, context)
   }
 
   return async (request) => {
@@ -459,9 +473,10 @@ export function createCallHandler<TActor>(
 
 /**
  * Checks a request payload with an arktype schema and returns the parsed value. A payload that
- * does not match throws `RealtimeRequestError("bad_request", …)` with arktype's summary, which a
- * client may show, and `details` of `{ errors }`: the issues keyed by field path, the shape
- * `toValidationError` from `@spy4x/validation` gives, so a form can mark each field. Use the same
+ * does not match throws `RealtimeRequestError("bad_request", …)` with arktype's English summary,
+ * which a client may show, `fields` with each failed field's code and rule (`fieldErrors` from
+ * `@spy4x/validation`), so a screen can say it in its own language, and `details` of `{ errors }`:
+ * the issues keyed by field path, the shape `toValidationError` gives, kept for older clients. Use the same
  * schema as the REST route that checks the same body, so the two ways in cannot drift. A rejection
  * is recognised by its shape (`isArkErrors`), so a schema built by another loaded copy of arktype
  * is still refused.
@@ -470,7 +485,9 @@ export function parsePayload<T extends Type>(schema: T, payload: unknown): T["in
   const result = schema(payload)
   if (isArkErrors(result)) {
     const { errors } = toValidationError(result)
-    throw new RealtimeRequestError("bad_request", result.summary, { errors })
+    throw new RealtimeRequestError("bad_request", result.summary, { errors }, {
+      fields: fieldErrors(result),
+    })
   }
   return result as T["infer"]
 }

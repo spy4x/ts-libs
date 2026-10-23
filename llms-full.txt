@@ -2735,17 +2735,19 @@ template's shared surface the 2026-09-23 decision in issue #77 moved into this p
 recopying it into every product. Three directories, split the same way `./browser` and `./server`
 already are — by where the code can run:
 
-| Directory       | Contents                                                                                                                                                                                                                                                                                                                          |
-| --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `model/`        | `dateSchema`/`DateNullableSchema`, the `ImmutableBaseModelSchema`/`UndeletableBaseModelSchema`/`BaseModelSchema` tiers, and the Web Push wire schemas — universal, arktype only                                                                                                                                                   |
-| `api/`          | `ApiError` (`status`, `message`, optional `code`), `ApiResult<T>`, `apiFetch`, `createOfflineFetch` (reports `offline: true` when nothing answered, checks a reply against a schema, keeps a "last request failed" flag with `subscribe`), `OfflineFetch`, `OfflineApiResult`, `INVALID_REPLY_CODE` — browser-only, needs `fetch` |
-| `request-info/` | `RequestInfo`, `requestInfoFromContext` — server-only, needs Hono                                                                                                                                                                                                                                                                 |
+| Directory       | Contents                                                                                                                                                                                                                                                                                                                                              |
+| --------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `model/`        | `dateSchema`/`DateNullableSchema`, the `ImmutableBaseModelSchema`/`UndeletableBaseModelSchema`/`BaseModelSchema` tiers, and the Web Push wire schemas — universal, arktype only                                                                                                                                                                       |
+| `api/`          | `ApiError` (`status`, `message`, optional `code`, `reason`, `fields`), `ApiResult<T>`, `apiFetch`, `createOfflineFetch` (reports `offline: true` when nothing answered, checks a reply against a schema, keeps a "last request failed" flag with `subscribe`), `OfflineFetch`, `OfflineApiResult`, `INVALID_REPLY_CODE` — browser-only, needs `fetch` |
+| `request-info/` | `RequestInfo`, `requestInfoFromContext` — server-only, needs Hono                                                                                                                                                                                                                                                                                     |
 
 `apiFetch` reads an error body in three shapes: `{ error }` (a string), `{ code, message }`, or
 `{ error: { code, message } }`. The message is the string `error`, else the string `message` of an
 `error` object, else the body's string `message`, else `"Request failed"`. `error.code` is the string
 `code` of an `error` object, else the body's string `code`, when there is one, so a client can branch
-on `caldav_unreachable` instead of on wording. Non-string fields are ignored, and so is any extra
+on `caldav_unreachable` instead of on wording. `error.reason` and `error.fields` are the `reason`
+string and the `fields` record (`fieldErrorsSchema` of `@spy4x/validation`) of an `error` object,
+each left out when absent or of another shape. Non-string fields are ignored, and so is any extra
 field in the nested object (such as `requestId`). Only HTTP answers resolve: a network failure still rejects, so wrap the call in
 `try`/`catch` where a throw is not acceptable.
 
@@ -3627,8 +3629,11 @@ of only whitespace is not empty and not JSON, so it is refused. `Idempotency-Key
 `X-Realtime-User` is required on every call.
 
 Success is `200` with `{ "result": <value> }`, always with the `result` key. An operation that
-returns nothing, or something JSON has no value for, answers `"result": null`. Failure is `{ "error": { "code", "message", "details"? } }`, where `code` is the
-socket's code and the status follows from it (`CALL_ERROR_STATUS`):
+returns nothing, or something JSON has no value for, answers `"result": null`. Failure is `{ "error": { "code", "message", "details"?, "reason"?, "fields"? } }`, where `code` is the
+socket's code and the status follows from it (`CALL_ERROR_STATUS`). `reason` is the host's finer name
+for the refusal (`GROUP_NOT_FOUND`, `quota_exceeded`) and `fields` maps each failed field's path to
+`{ code, values? }`; the socket's `server.error` frame carries the same two keys, and a screen
+translates `reason ?? code`:
 
 | Code           | Status | When                                                                |
 | -------------- | ------ | ------------------------------------------------------------------- |
@@ -3661,7 +3666,8 @@ goes away (`signal`). It does no rate limiting either; put the app's limiter in 
 
 `parsePayload(schema, payload)` checks a socket payload with an arktype schema, the one the REST
 route checks the same body with, and returns the parsed value. A mismatch throws
-`RealtimeRequestError("bad_request", summary)`. `expectNoPayload(payload)` throws the same for a
+`RealtimeRequestError("bad_request", summary)` with arktype's English summary as the message and
+each failed field in `fields` (`fieldErrors` from `@spy4x/validation`). `expectNoPayload(payload)` throws the same for a
 request that takes none and was sent one.
 
 ## Client wiring
@@ -3793,8 +3799,8 @@ handshake only.
 A store should not know whether its calls travel over the socket or over HTTP. It takes a
 `CallPort`: `command(name, payload, { idempotencyKey, signal? })` and
 `query(name, payload, { signal? })`. Every module throws the same two errors:
-`RealtimeRequestError` (the server answered; `code` is one of the closed set, `details` is what
-the server sent) and `ConnectionLostError` (the server could not be reached, so a command may or
+`RealtimeRequestError` (the server answered; `code` is one of the closed set, `details`, `reason`
+and `fields` are what the server sent) and `ConnectionLostError` (the server could not be reached, so a command may or
 may not have run).
 
 | Piece                                                         | Does                                                                                             |
@@ -3815,8 +3821,9 @@ may not have run).
   refuses a command without `Idempotency-Key` with `bad_request`, so a keyless command only works
   over the socket.
 - Success: every 2xx carries `{ "result": <value> }`; `null` for an operation that returns nothing.
-- Failure: a non-2xx with `{ "error": { "code", "message", "details"? } }`; `code` is the same
-  string the socket uses.
+- Failure: a non-2xx with `{ "error": { "code", "message", "details"?, "reason"?, "fields"? } }`;
+  `code` is the same string the socket uses. A `reason` or `fields` of the wrong shape is dropped,
+  and the code and message still arrive.
 - `ConnectionLostError`: `fetch` failed, no answer within `timeoutMs` (default 15 s), a 5xx with no
   readable error body, a bare 404 or 429 (a proxy answers them while a container is replaced; a
   real not-found or rate limit of ours carries the error body), or a 2xx that is not `{ result }`.
@@ -8661,6 +8668,20 @@ object — goes under `FORM_FIELD` (`"_form"`) with an empty `path`, so it is ne
 `ArkErrors` instance, so `flatByPath`, `byPath` and iteration stay available to the caller.
 `firstIssueMessage` returns the first path-prefixed message from `details`, and still accepts an
 error built by hand with only `description` and `details`.
+
+## Field codes for the wire
+
+`fieldErrors(errors)` turns a rejection into what a server sends so a screen can name each failed
+field in its own language: `{ [path]: { code, values? } }`. `code` is arktype's own (`required`,
+`maxLength`, `domain`, …), and `values` holds the rule the value missed, such as
+`{ rule: 120 }` for `maxLength` or `{ rule: 17, exclusive: true }` for `> 17`. The submitted value
+is never included. One entry per path, the first issue arktype reports; an issue with no path goes
+under `FORM_FIELD`. `fieldErrorsSchema` is the arktype type of that record, for a client reading it.
+
+```ts
+fieldErrors(type({ title: "string <= 120" })({ title: "x".repeat(121) }) as ArkErrors)
+// { title: { code: "maxLength", values: { rule: 120 } } }
+```
 
 `ErrType` is declared here, not in `@spy4x/platform`, because `@spy4x/platform` imports this package
 and the reverse import would be a cycle that fails `deno publish`. `@spy4x/platform/universal/errors`

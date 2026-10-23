@@ -2614,6 +2614,8 @@ zoneOffsetLabel	function	@spy4x/time/tz	The offset of `tz` at `at` as `UTC+7`, `
 zonedDateTime	function	@spy4x/time/tz	The instant at which `tz`'s wall clock reads `date` + `time`.
 ErrType	enum	@spy4x/validation	Kind of a failed operation.
 FORM_FIELD	constant	@spy4x/validation	Key an issue with no single field is reported under.
+FieldError	interface	@spy4x/validation	Why one field failed: arktype's code, and the rule its message quotes.
+FieldErrors	type	@spy4x/validation	Failed fields keyed by path as arktype prints it (`"title"`, `"address.city"`, `"items[1]"`).
 FieldIssue	interface	@spy4x/validation	One issue on one field.
 FieldValidation	type	@spy4x/validation	Issues of one field, keyed by issue type.
 SchemaInput	type	@spy4x/validation	Value a schema accepts as input, before parsing.
@@ -2625,6 +2627,8 @@ ValidationIssues	type	@spy4x/validation	Issues keyed by field path.
 ValidationModel	type	@spy4x/validation	Issues of a whole model, keyed by field name.
 ValidationResult	type	@spy4x/validation	Outcome of validate: the parsed value, or the error that rejected it.
 ValidationType	enum	@spy4x/validation	Issue kinds the schema itself reports.
+fieldErrors	function	@spy4x/validation	The failed fields of an arktype rejection, one entry per path.
+fieldErrorsSchema	constant	@spy4x/validation	The arktype type of FieldErrors, for a client that reads them off the wire.
 firstIssueMessage	function	@spy4x/validation	First issue message in a validation error, in the order arktype reports them.
 isArkErrors	function	@spy4x/validation	Whether a value is an arktype rejection, without relying on `instanceof`.
 isValid	function	@spy4x/validation	Whether no field carries an issue.
@@ -2656,4 +2660,4 @@ firstIssueMessage	function	@spy4x/validation/validate	First issue message in a v
 isArkErrors	function	@spy4x/validation/validate	Whether a value is an arktype rejection, without relying on `instanceof`.
 toValidationError	function	@spy4x/validation/validate	Build a ValidationError from arktype's issues.
 validate	function	@spy4x/validation/validate	Parse `value` with an arktype schema exactly once.
-# export surface: sha256 9f0786f395f396bb12f19fffeb79a603b0d6f7774b911b3712749ae09ae27bb6
+# export surface: sha256 30de81237135e303d0527acd7993aa767e9cf77a477e0cf576f59b34443b7eb5

@@ -66,6 +66,7 @@ export {
   REALTIME_ERROR_CODES,
   type RealtimeErrorCode,
   RealtimeRequestError,
+  type RealtimeRequestErrorOptions,
 } from "./errors.ts"
 
 export { type KeyValueStore, MemoryKeyValueStore } from "./storage.ts"

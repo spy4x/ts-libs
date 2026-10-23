@@ -447,6 +447,24 @@ describe("apiFetch — error body shapes", () => {
       .toEqual({ status: 403, message: "y", code: "x" })
   })
 
+  it("reads reason and fields from a { error: { code, message, reason, fields } } body", async () => {
+    const fields = { title: { code: "maxLength", values: { rule: 120 } } }
+    expect(
+      await errorFor(
+        { error: { code: "bad_request", message: "m", reason: "validation", fields } },
+        400,
+      ),
+    ).toEqual({ status: 400, message: "m", code: "bad_request", reason: "validation", fields })
+  })
+
+  it("leaves out a reason and fields of the wrong shape", async () => {
+    const error = await errorFor({
+      error: { code: "bad_request", message: "m", reason: 7, fields: { title: "required" } },
+      reason: "top-level",
+    })
+    expect(error).toEqual({ status: 502, message: "m", code: "bad_request" })
+  })
+
   it("prefers the nested code and message over the top-level ones", async () => {
     expect(
       await errorFor({

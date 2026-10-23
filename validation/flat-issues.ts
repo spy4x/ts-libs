@@ -18,6 +18,12 @@ export interface FlatIssue {
   problem: string
   /** The same explanation prefixed with its path: `"age must be a number"`. */
   message: string
+  /**
+   * The constraint the value missed, for a message to quote: `{ rule: 120 }` for `maxLength`,
+   * plus `exclusive: true` for a bound like `> 1`. Empty for a code with no rule (`required`,
+   * `domain`). Never the submitted value, which can be a password.
+   */
+  values: Record<string, string | number | boolean>
 }
 
 /**
@@ -34,6 +40,7 @@ export function flatIssues(errors: ArkErrors): FlatIssue[] {
       code: issue.code,
       problem: problemOf(issue),
       message: issue.message,
+      values: valuesOf(issue),
     }))
   )
 }
@@ -52,4 +59,18 @@ function problemOf(issue: ArkError): string {
   } catch {
     return issue.message
   }
+}
+
+/**
+ * The rule an issue carries, as JSON-safe values. arktype puts the limit of a bound, the divisor
+ * and a pattern's source on `rule` (a `Date` for `before` and `after`, sent as its ISO string) and
+ * marks a strict bound with `exclusive`.
+ */
+function valuesOf(issue: ArkError): Record<string, string | number | boolean> {
+  const { rule, exclusive } = issue as { rule?: unknown; exclusive?: unknown }
+  const values: Record<string, string | number | boolean> = {}
+  if (rule instanceof Date) values.rule = rule.toISOString()
+  else if (typeof rule === "number" || typeof rule === "string") values.rule = rule
+  if (exclusive === true) values.exclusive = true
+  return values
 }

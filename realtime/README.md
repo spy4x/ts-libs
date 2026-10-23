@@ -343,8 +343,11 @@ of only whitespace is not empty and not JSON, so it is refused. `Idempotency-Key
 `X-Realtime-User` is required on every call.
 
 Success is `200` with `{ "result": <value> }`, always with the `result` key. An operation that
-returns nothing, or something JSON has no value for, answers `"result": null`. Failure is `{ "error": { "code", "message", "details"? } }`, where `code` is the
-socket's code and the status follows from it (`CALL_ERROR_STATUS`):
+returns nothing, or something JSON has no value for, answers `"result": null`. Failure is `{ "error": { "code", "message", "details"?, "reason"?, "fields"? } }`, where `code` is the
+socket's code and the status follows from it (`CALL_ERROR_STATUS`). `reason` is the host's finer name
+for the refusal (`GROUP_NOT_FOUND`, `quota_exceeded`) and `fields` maps each failed field's path to
+`{ code, values? }`; the socket's `server.error` frame carries the same two keys, and a screen
+translates `reason ?? code`:
 
 | Code           | Status | When                                                                |
 | -------------- | ------ | ------------------------------------------------------------------- |
@@ -377,7 +380,8 @@ goes away (`signal`). It does no rate limiting either; put the app's limiter in 
 
 `parsePayload(schema, payload)` checks a socket payload with an arktype schema, the one the REST
 route checks the same body with, and returns the parsed value. A mismatch throws
-`RealtimeRequestError("bad_request", summary)`. `expectNoPayload(payload)` throws the same for a
+`RealtimeRequestError("bad_request", summary)` with arktype's English summary as the message and
+each failed field in `fields` (`fieldErrors` from `@spy4x/validation`). `expectNoPayload(payload)` throws the same for a
 request that takes none and was sent one.
 
 ## Client wiring
@@ -509,8 +513,8 @@ handshake only.
 A store should not know whether its calls travel over the socket or over HTTP. It takes a
 `CallPort`: `command(name, payload, { idempotencyKey, signal? })` and
 `query(name, payload, { signal? })`. Every module throws the same two errors:
-`RealtimeRequestError` (the server answered; `code` is one of the closed set, `details` is what
-the server sent) and `ConnectionLostError` (the server could not be reached, so a command may or
+`RealtimeRequestError` (the server answered; `code` is one of the closed set, `details`, `reason`
+and `fields` are what the server sent) and `ConnectionLostError` (the server could not be reached, so a command may or
 may not have run).
 
 | Piece                                                         | Does                                                                                             |
@@ -531,8 +535,9 @@ may not have run).
   refuses a command without `Idempotency-Key` with `bad_request`, so a keyless command only works
   over the socket.
 - Success: every 2xx carries `{ "result": <value> }`; `null` for an operation that returns nothing.
-- Failure: a non-2xx with `{ "error": { "code", "message", "details"? } }`; `code` is the same
-  string the socket uses.
+- Failure: a non-2xx with `{ "error": { "code", "message", "details"?, "reason"?, "fields"? } }`;
+  `code` is the same string the socket uses. A `reason` or `fields` of the wrong shape is dropped,
+  and the code and message still arrive.
 - `ConnectionLostError`: `fetch` failed, no answer within `timeoutMs` (default 15 s), a 5xx with no
   readable error body, a bare 404 or 429 (a proxy answers them while a container is replaced; a
   real not-found or rate limit of ours carries the error body), or a 2xx that is not `{ result }`.
