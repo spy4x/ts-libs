@@ -63,7 +63,16 @@ services:
     commands:
       - |
           set -eu
-          wget -q -O /usr/local/bin/garage https://garagehq.deuxfleurs.fr/_releases/v2.4.1/x86_64-unknown-linux-musl/garage
+          # The release host has several addresses and busybox wget tries only the first, so one
+          # address that is down failed the run. Try each address in turn, pinned in /etc/hosts so
+          # TLS still checks the host name; the checksum below proves the file either way.
+          host=garagehq.deuxfleurs.fr
+          url="https://$${host}/_releases/v2.4.1/x86_64-unknown-linux-musl/garage"
+          cp /etc/hosts /etc/hosts.orig
+          wget -q -T 20 -O /usr/local/bin/garage "$${url}" || for ip in $$(nslookup -type=a "$${host}" | awk '/^Address: / { print $$2 }'); do
+            { cat /etc/hosts.orig; echo "$${ip} $${host}"; } > /etc/hosts
+            wget -q -T 20 -O /usr/local/bin/garage "$${url}" && break
+          done
           echo "ae49f8de4aaee6b5ca305f7cbdccc8cd8a29b2804aac074649f18bfb83d0a2b6  /usr/local/bin/garage" | sha256sum -c -
           chmod +x /usr/local/bin/garage
           printf '%s\n' 'metadata_dir = "/var/lib/garage/meta"' 'data_dir = "/var/lib/garage/data"' 'db_engine = "sqlite"' 'replication_factor = 1' 'rpc_bind_addr = "[::]:3901"' 'rpc_public_addr = "127.0.0.1:3901"' '[s3_api]' 's3_region = "garage"' 'api_bind_addr = "[::]:3900"' > /etc/garage.toml
