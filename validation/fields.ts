@@ -46,12 +46,7 @@ export function fieldErrors(errors: ArkErrors): FieldErrors {
   for (const { path, code, values } of flatIssues(errors)) {
     const key = path === "" ? FORM_FIELD : path
     if (Object.hasOwn(fields, key)) continue
-    Object.defineProperty(fields, key, {
-      value: Object.keys(values).length > 0 ? { code, values } : { code },
-      enumerable: true,
-      writable: true,
-      configurable: true,
-    })
+    fields[key] = Object.keys(values).length > 0 ? { code, values } : { code }
   }
   return fields
 }

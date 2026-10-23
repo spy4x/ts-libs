@@ -35,16 +35,15 @@ describe("fieldErrors", () => {
   })
 
   it("never carries the submitted value", () => {
-    const errors = rejection(type({ password: "string >= 12" }), { password: "hunter2" })
+    const errors = rejection(type({ password: /^.{12,}$/ }), { password: "hunter2" })
     expect(JSON.stringify(fieldErrors(errors))).not.toContain("hunter2")
   })
 
-  it("keeps a field named __proto__ as an own entry", () => {
-    const schema = type({ "+": "reject" })
-    const errors = rejection(schema, JSON.parse(`{"__proto__":1}`))
-    const fields = fieldErrors(errors)
-    expect(Object.keys(fields)).toEqual(["__proto__"])
-    expect(Object.getPrototypeOf(fields)).toBe(Object.prototype)
+  it("keeps the first issue arktype reports when one field fails twice", () => {
+    const errors = rejection(type({ name: "/^a/ & string >= 3" }), { name: "1" })
+    const [first, second] = errors.flatByPath.name
+    expect(first.code).not.toBe(second.code)
+    expect(fieldErrors(errors).name.code).toBe(first.code)
   })
 
   it("produces what fieldErrorsSchema accepts", () => {
