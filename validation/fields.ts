@@ -5,7 +5,7 @@
  * @module
  */
 
-import { type ArkErrors, type } from "arktype"
+import { type ArkErrors, type Type, type } from "arktype"
 import { flatIssues } from "./flat-issues.ts"
 import { FORM_FIELD } from "./model.ts"
 
@@ -24,7 +24,7 @@ export interface FieldError {
 export type FieldErrors = Record<string, FieldError>
 
 /** The arktype type of {@link FieldErrors}, for a client that reads them off the wire. */
-export const fieldErrorsSchema = type({
+export const fieldErrorsSchema: Type<FieldErrors> = type({
   "[string]": {
     code: "string",
     "values?": { "[string]": "string | number | boolean" },
