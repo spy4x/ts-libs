@@ -13,6 +13,7 @@
     "./static": "./static.ts",
     "./healthcheck": "./healthcheck.ts",
     "./storage": "./storage/index.ts",
+    "./images": "./images/mod.ts",
     "./auth": "./auth/mod.ts",
     "./auth/postgres": "./auth/postgres.ts",
     "./auth/memory-store": "./auth/memory-store.ts",

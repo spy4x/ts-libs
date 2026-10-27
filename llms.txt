@@ -2030,6 +2030,12 @@ PostgresIdempotencyStore	class	@spy4x/server/idempotency	IdempotencyStore over t
 createIdempotencyMiddleware	function	@spy4x/server/idempotency	Makes a command safe to send twice.
 fingerprint	function	@spy4x/server/idempotency	A stable SHA-256 hex fingerprint of a command's name and input.
 isIdempotencyKey	function	@spy4x/server/idempotency	Whether `key` is usable: 1 to 128 printable ASCII characters.
+IMAGE_MAX_PIXELS	constant	@spy4x/server/images	The largest image read unless the caller names another limit: 100 megapixels.
+IMAGE_WIDTHS	constant	@spy4x/server/images	The widths made unless the caller names others.
+ImageRefusal	enum	@spy4x/server/images	Why an image was not processed.
+ImageResult	type	@spy4x/server/images	`{ success, output, error }`: the variants, AVIF then WebP, narrowest first, or the refusal.
+ImageVariant	interface	@spy4x/server/images	One stored variant: its file, `Content-Type` and size in pixels.
+processImage	function	@spy4x/server/images	Makes the variants of the image at `input` in `outputDir`, named `<width>.avif` and `<width>.webp`, and answers them, or why the image was refused.
 RateLimitRedisScriptStore	interface	@spy4x/server/kv	The part of RedisKvStore the store needs.
 RateLimitRedisStore	interface	@spy4x/server/kv	The part of RedisKvStore the adapter needs.
 RedisKvStore	class	@spy4x/server/kv	A key-value store scoped to one Redis connection and one key prefix.
@@ -2676,4 +2682,4 @@ firstIssueMessage	function	@spy4x/validation/validate	First issue message in a v
 isArkErrors	function	@spy4x/validation/validate	Whether a value is an arktype rejection, without relying on `instanceof`.
 toValidationError	function	@spy4x/validation/validate	Build a ValidationError from arktype's issues.
 validate	function	@spy4x/validation/validate	Parse `value` with an arktype schema exactly once.
-# export surface: sha256 a4eb6f94dd8f0f95b6086cbb6cc773cd0ec9ba9c65f49f65f371370d38e18729
+# export surface: sha256 990323d5ea1a12b9f4525f8c053fdfa7176fd73ab8d6e4c60bfbe844b1208a3a
