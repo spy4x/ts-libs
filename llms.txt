@@ -1132,6 +1132,18 @@ AsyncMutex	class	@spy4x/platform/universal/concurrency	A fair mutual-exclusion l
 DEFAULT_DEBOUNCE_DELAY	constant	@spy4x/platform/universal/constants	Default trailing-edge debounce delay, in milliseconds.
 DEFAULT_FLUSH_INTERVAL_MS	constant	@spy4x/platform/universal/constants	Default window for the throttled JSON saver, in milliseconds.
 MIN_PASSWORD_LENGTH	constant	@spy4x/platform/universal/constants	Minimum accepted password length.
+CONTACT_KINDS	constant	@spy4x/platform/universal/contact	Every kind of contact channel, in the order a form offers them.
+CONTACT_KIND_NAMES	constant	@spy4x/platform/universal/contact	Each kind's name as a person reads it, such as in a form's select or a link without a label.
+CONTACT_URL_MAX_LENGTH	constant	@spy4x/platform/universal/contact	The longest web page address contactValueProblem accepts.
+ContactJsonLd	interface	@spy4x/platform/universal/contact	The contact properties of a schema.org `Organization`; a key with nothing to say is left out.
+ContactKind	type	@spy4x/platform/universal/contact	One kind of contact channel.
+ContactLink	interface	@spy4x/platform/universal/contact	One contact channel: its kind and its normalised value.
+ContactPointJsonLd	interface	@spy4x/platform/universal/contact	A schema.org `ContactPoint`: one way to reach an organization.
+contactHref	function	@spy4x/platform/universal/contact	The link that opens the channel: `https://t.me/<username>`, `https://zalo.me/<digits>`, `https://wa.me/<digits>`, the Instagram or Facebook profile, `tel:`, `mailto:`, or the web page itself.
+contactJsonLd	function	@spy4x/platform/universal/contact	The properties of a schema.org `Organization` that `links` describe, to spread into the node.
+contactKind	constant	@spy4x/platform/universal/contact	The arktype type of a ContactKind, for a request body.
+contactValueProblem	function	@spy4x/platform/universal/contact	Why `value` is no ContactKind `kind`, as one sentence for the form field, or `null` when it is one.
+normalizeContactValue	function	@spy4x/platform/universal/contact	What an operator typed, in the form contactValueProblem checks and a store keeps: trimmed; a profile link such as `https://t.me/my_shop` reduced to `my_shop`; a leading `@` dropped; a phone number without spaces, dashes, dots and brackets (and, for Zalo and WhatsApp, without its `+`); an e-mail address lowercased.
 CSV_BYTE_ORDER_MARK	constant	@spy4x/platform/universal/csv	UTF-8 byte-order mark.
 CsvCellValue	type	@spy4x/platform/universal/csv	What a `format` function, or an unformatted field, may hand back for one cell.
 CsvColumn	interface	@spy4x/platform/universal/csv	One column of a CSV export: the row field to read, its header text, and how to render a value.
@@ -2660,4 +2672,4 @@ firstIssueMessage	function	@spy4x/validation/validate	First issue message in a v
 isArkErrors	function	@spy4x/validation/validate	Whether a value is an arktype rejection, without relying on `instanceof`.
 toValidationError	function	@spy4x/validation/validate	Build a ValidationError from arktype's issues.
 validate	function	@spy4x/validation/validate	Parse `value` with an arktype schema exactly once.
-# export surface: sha256 30de81237135e303d0527acd7993aa767e9cf77a477e0cf576f59b34443b7eb5
+# export surface: sha256 3eebaf332b048f763c006e90c529b54332210a4cff9635b5702f86cf82fa5527
