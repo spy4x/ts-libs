@@ -64,7 +64,7 @@ describe("processImage", () => {
     assertEquals(result.output?.map(({ path }) => path), ["/out/3000.avif", "/out/3000.webp"])
   })
 
-  it("turns every variant upright and strips its metadata, with untrusted loaders blocked", async () => {
+  it("strips every variant's metadata and blocks untrusted loaders on every call", async () => {
     const vips = fakeVips(header(1000, 750))
     await processImage("/in", "/out", { widths: [480], spawn: vips.spawn })
     const thumbnails = vips.calls.filter(({ command }) => command === "vips")
