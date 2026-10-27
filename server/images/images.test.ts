@@ -8,11 +8,19 @@ interface Call {
   options: SpawnOptions
 }
 
+/** What the fake `vipsheader` knows about the input: field name to value. */
+type Fields = Record<string, string>
+
 /**
- * A fake `vips`: `vipsheader -a` answers `header`, `thumbnail` writes nothing and answers
- * `thumbnailCode`, and `vipsheader <outputs>` reports each output at its width with a 4:3 ratio.
+ * A fake `vips`. `vipsheader -f <name>` answers `fields[name]`, or fails like a missing field;
+ * `vipsheader -a` prints `exifText` and then the fields, as the real one prints EXIF text before
+ * `orientation`. `thumbnail` writes nothing and answers `thumbnailCode`. `vipsheader <outputs>`
+ * reports each output at `madeWidth` of the width in its name, with a 4:3 ratio.
  */
-function fakeVips(header: { code?: number; stdout: string }, thumbnailCode = 0) {
+function fakeVips(
+  fields: Fields,
+  { thumbnailCode = 0, exifText = "", madeWidth = (width: number) => width } = {},
+) {
   const calls: Call[] = []
   const answer = (code: number, stdout = "") => ({
     output: () =>
@@ -25,20 +33,28 @@ function fakeVips(header: { code?: number; stdout: string }, thumbnailCode = 0) 
   })
   const spawn: CommandSpawner = (command, options) => {
     calls.push({ command, options })
+    const [flag, name] = options.args
     if (command === "vips") return answer(thumbnailCode)
-    if (options.args[0] === "-a") return answer(header.code ?? 0, header.stdout)
+    if (flag === "-f") return name in fields ? answer(0, `${fields[name]}\n`) : answer(1)
+    if (flag === "-a") {
+      const dump = Object.entries(fields).map(([key, value]) => `${key}: ${value}`).join("\n")
+      return answer(0, `${exifText}${dump}\n`)
+    }
     const lines = options.args.map((path) => {
-      const width = Number(path.match(/(\d+)\.\w+$/)![1])
+      const width = madeWidth(Number(path.match(/(\d+)\.\w+$/)![1]))
       return `${path}: ${width}x${width * 3 / 4} uchar, 3 bands, srgb, heifload`
     })
     return answer(0, lines.join("\n") + "\n")
   }
-  return { calls, spawn }
+  const thumbnails = () => calls.filter(({ command }) => command === "vips")
+  return { calls, spawn, thumbnails }
 }
 
-const header = (width: number, height: number, loader = "jpegload", orientation = 1) => ({
-  stdout:
-    `width: ${width}\nheight: ${height}\norientation: ${orientation}\nvips-loader: ${loader}\n`,
+const header = (width: number, height: number, loader = "jpegload", orientation = 1): Fields => ({
+  "vips-loader": loader,
+  width: String(width),
+  height: String(height),
+  orientation: String(orientation),
 })
 
 describe("processImage", () => {
@@ -67,8 +83,7 @@ describe("processImage", () => {
   it("strips every variant's metadata and blocks untrusted loaders on every call", async () => {
     const vips = fakeVips(header(1000, 750))
     await processImage("/in", "/out", { widths: [480], spawn: vips.spawn })
-    const thumbnails = vips.calls.filter(({ command }) => command === "vips")
-    assertEquals(thumbnails.map(({ options }) => options.args.slice(0, 4)), [
+    assertEquals(vips.thumbnails().map(({ options }) => options.args.slice(0, 4)), [
       ["thumbnail", "/in", "/out/480.avif[keep=none]", "480"],
       ["thumbnail", "/in", "/out/480.webp[keep=none]", "480"],
     ])
@@ -77,8 +92,38 @@ describe("processImage", () => {
     }
   })
 
+  it("reads the orientation libvips reports, not one forged in the photo's EXIF text", async () => {
+    const exifText = "exif-ifd0-ImageDescription: x\norientation: 6\ny\n"
+    const vips = fakeVips({ ...header(900, 1700), orientation: "1" }, { exifText })
+    const result = await processImage("/in", "/out", { spawn: vips.spawn })
+    assertEquals(result.output?.map(({ path }) => path), [
+      "/out/480.avif",
+      "/out/900.avif",
+      "/out/480.webp",
+      "/out/900.webp",
+    ])
+  })
+
+  it("treats a photo with no orientation field as upright", async () => {
+    const { orientation: _, ...fields } = header(900, 1700, "heifload")
+    const vips = fakeVips(fields)
+    const result = await processImage("/in", "/out", { widths: [5000], spawn: vips.spawn })
+    assertEquals(result.output?.map(({ width }) => width), [900, 900])
+  })
+
+  it("drops a variant that came out as wide as a narrower one of its type", async () => {
+    const vips = fakeVips(header(1000, 750), { madeWidth: (width) => Math.min(width, 900) })
+    const result = await processImage("/in", "/out", { spawn: vips.spawn })
+    assertEquals(result.output?.map(({ path, width }) => [path, width]), [
+      ["/out/480.avif", 480],
+      ["/out/960.avif", 900],
+      ["/out/480.webp", 480],
+      ["/out/960.webp", 900],
+    ])
+  })
+
   it("refuses a file vips cannot read", async () => {
-    const vips = fakeVips({ code: 1, stdout: "" })
+    const vips = fakeVips({})
     assertEquals(await processImage("/in", "/out", { spawn: vips.spawn }), {
       success: false,
       error: ImageRefusal.Unreadable,
@@ -90,7 +135,7 @@ describe("processImage", () => {
       const vips = fakeVips(header(100, 100, loader))
       const result = await processImage("/in", "/out", { spawn: vips.spawn })
       assertEquals(result.error, ImageRefusal.Format, loader)
-      assertEquals(vips.calls.length, 1, loader)
+      assertEquals(vips.thumbnails().length, 0, loader)
     }
   })
 
@@ -98,7 +143,7 @@ describe("processImage", () => {
     const vips = fakeVips(header(20_001, 5_000))
     const result = await processImage("/in", "/out", { spawn: vips.spawn })
     assertEquals(result.error, ImageRefusal.TooLarge)
-    assertEquals(vips.calls.length, 1)
+    assertEquals(vips.thumbnails().length, 0)
   })
 
   it("throws when vips cannot start or fails to write a variant, so a retry can follow", async () => {
@@ -106,7 +151,7 @@ describe("processImage", () => {
       throw new Deno.errors.NotFound("vipsheader")
     }
     await assertRejects(() => processImage("/in", "/out", { spawn: missing }), Error, "vips")
-    const broken = fakeVips(header(1000, 750), 1)
+    const broken = fakeVips(header(1000, 750), { thumbnailCode: 1 })
     await assertRejects(() => processImage("/in", "/out", { spawn: broken.spawn }), Error, "broke")
   })
 

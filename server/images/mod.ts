@@ -10,7 +10,9 @@
  *
  * Only JPEG, PNG, WebP and HEIC (or AVIF) are read, whatever the file's name, and libvips's
  * untrusted loaders are blocked on every call. An image over `maxPixels` is refused before it is
- * decoded. Running it twice on the same file writes the same files.
+ * decoded. Running it twice on the same file writes the same files. Check the upload's bytes with
+ * `matchesContentType` of `@spy4x/server/storage` first: this module trusts libvips to tell a
+ * format by its content, not the type the browser claimed.
  *
  * @module
  */
@@ -77,7 +79,8 @@ export interface ProcessImageOptions {
  *
  * @throws {Error} When a path starts with `-` or holds `[`, which `vips` would read as an option;
  * when a width is not a positive whole number; when `vips` cannot start, is stopped, or fails to
- * write a variant. Those are worth a retry; a refusal is not.
+ * write a variant. Those are worth a retry; a refusal is not. The variants written before a
+ * failure stay in `outputDir`: remove the folder, or run again, which writes the same names.
  */
 export async function processImage(
   input: string,
@@ -100,22 +103,26 @@ export async function processImage(
       spawn: options.spawn,
     })
 
-  const header = await vips(["vipsheader", "-a", input])
-  if (header.error !== undefined || header.signal !== undefined) throw vipsFailure(header)
-  if (!header.success) return { success: false, error: ImageRefusal.Unreadable }
-  const field = (name: string) => header.stdout.match(new RegExp(`^${name}: (.+)$`, "m"))?.[1]
-  if (!LOADERS.has(field("vips-loader") ?? "")) {
-    return { success: false, error: ImageRefusal.Format }
+  // One field at a time: `vipsheader -a` also prints the photo's EXIF text, which its uploader
+  // writes, so a forged `orientation: 6` line there could stand in for the real one.
+  const field = async (name: string) => {
+    const read = await vips(["vipsheader", "-f", name, input])
+    if (read.error !== undefined || read.signal !== undefined) throw vipsFailure(read)
+    return read.success ? read.stdout.trim() : undefined
   }
-  const storedWidth = Number(field("width"))
-  const storedHeight = Number(field("height"))
+  const loader = await field("vips-loader")
+  if (loader === undefined) return { success: false, error: ImageRefusal.Unreadable }
+  if (!LOADERS.has(loader)) return { success: false, error: ImageRefusal.Format }
+  const storedWidth = Number(await field("width"))
+  const storedHeight = Number(await field("height"))
   if (!(storedWidth > 0 && storedHeight > 0)) {
     return { success: false, error: ImageRefusal.Unreadable }
   }
   if (storedWidth * storedHeight > (options.maxPixels ?? IMAGE_MAX_PIXELS)) {
     return { success: false, error: ImageRefusal.TooLarge }
   }
-  const turned = QUARTER_TURNS.has(Number(field("orientation")))
+  // A photo with no orientation (a HEIC, whose rotation libheif applies) has no such field.
+  const turned = QUARTER_TURNS.has(Number(await field("orientation")))
   const uprightWidth = turned ? storedHeight : storedWidth
   const targets = [...new Set(widths.map((w) => Math.min(w, uprightWidth)))].sort((a, b) => a - b)
 
@@ -151,7 +158,13 @@ export async function processImage(
     if (width === undefined) throw new Error(`vipsheader did not report the size of ${path}`)
     return { path, type, width: Number(width), height: Number(height) }
   })
-  return { success: true, output }
+  // A variant as wide as a narrower one of its type is a copy; a `srcset` may not list it twice.
+  return {
+    success: true,
+    output: output.filter((v, i) =>
+      !output.some((o, j) => j < i && o.type === v.type && o.width === v.width)
+    ),
+  }
 }
 
 function vipsFailure(result: { code: number; stderr: string; signal?: string }): Error {

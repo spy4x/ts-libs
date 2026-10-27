@@ -695,7 +695,12 @@ if (result.success) { for (const v of result.output) await store(v.path, v.type,
   four (libvips names its loader, whatever the file is called), or more than `maxPixels` (100
   million by default), refused before the pixels are decoded.
 - **A throw** is worth a retry: `vips` missing, stopped by `signal`, or failing to write a
-  variant. A job keeps the original until the variants exist.
+  variant. A job keeps the original until the variants exist. Variants written before the failure
+  stay in `outputDir`; remove the folder or run again, which writes the same names.
+- **Check the bytes first.** Run `matchesContentType` on the upload before `processImage`: libvips
+  picks a loader by content and ignores the type the browser claimed.
+- **Header fields are read one at a time** (`vipsheader -f`), since `vipsheader -a` also prints
+  the photo's EXIF text, where an uploader could forge an `orientation:` line.
 - **Same input, same files.** A second run on the same photo writes the same bytes to the same
   names, so a retried job does not pile up variants.
 - **What it needs.** libvips 8.15 or newer with its command-line tools and libheif. On Debian 13:
