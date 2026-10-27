@@ -73,6 +73,7 @@
     "./universal/settings": "./universal/settings.ts",
     "./universal/shell": "./universal/shell.ts",
     "./universal/sort": "./universal/sort.ts",
+    "./universal/srcset": "./universal/srcset.ts",
     "./universal/statistics": "./universal/statistics.ts",
     "./universal/text": "./universal/text.ts",
     "./universal/time": "./universal/time.ts",

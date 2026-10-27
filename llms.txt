@@ -1296,6 +1296,10 @@ removeSortRule	function	@spy4x/platform/universal/sort	Removes one sort priority
 serializeSort	function	@spy4x/platform/universal/sort	Write sort rules into a URL parameter.
 sortRows	function	@spy4x/platform/universal/sort	Sort rows by every rule in order.
 toggleSort	function	@spy4x/platform/universal/sort	Advance one column through `asc` → `desc` → `off`.
+ResponsiveImage	interface	@spy4x/platform/universal/srcset	What responsiveImage answers: a `<source>` per preferred type, and the `<img>`'s own.
+ResponsiveImageSource	interface	@spy4x/platform/universal/srcset	One `<source>` of a `<picture>`: a type and its `srcset`.
+ResponsiveImageVariant	interface	@spy4x/platform/universal/srcset	One stored width of an image: where it is, its size in pixels and its `Content-Type`.
+responsiveImage	function	@spy4x/platform/universal/srcset	The `<picture>` and `<img>` attributes for `variants`.
 Interval	interface	@spy4x/platform/universal/statistics	A statistic's value on the data and its bootstrap interval.
 bootstrap	function	@spy4x/platform/universal/statistics	Percentile bootstrap interval of `statistic` over `values`.
 bootstrapDifference	function	@spy4x/platform/universal/statistics	Bootstrap interval of `statistic(b) - statistic(a)`, resampling each group on its own, so the two groups may differ in size.
@@ -2672,4 +2676,4 @@ firstIssueMessage	function	@spy4x/validation/validate	First issue message in a v
 isArkErrors	function	@spy4x/validation/validate	Whether a value is an arktype rejection, without relying on `instanceof`.
 toValidationError	function	@spy4x/validation/validate	Build a ValidationError from arktype's issues.
 validate	function	@spy4x/validation/validate	Parse `value` with an arktype schema exactly once.
-# export surface: sha256 d78818f84ca316492b2c76144e360b811709879a0e733f5c0dce653d32069d36
+# export surface: sha256 a4eb6f94dd8f0f95b6086cbb6cc773cd0ec9ba9c65f49f65f371370d38e18729
