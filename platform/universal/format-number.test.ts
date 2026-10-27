@@ -133,6 +133,17 @@ describe("formatBytes", () => {
     expect(formatBytes(1.25 * 1024 * 1024 * 1024)).toBe("1.3 GB")
   })
 
+  it("follows a non-English locale in the number and the unit", () => {
+    expect(formatBytes(1.5 * 1024, `ru`)).toBe(`1,5 кБ`)
+    expect(formatBytes(512, `ru`)).toBe(`512 Б`)
+    expect(formatBytes(1024 * 1024 - 1, `de`)).toBe(`1 MB`)
+  })
+
+  it("keeps the English form for an English locale", () => {
+    expect(formatBytes(1.5 * 1024, `en-US`)).toBe("1.5 KB")
+    expect(formatBytes(512, `en`)).toBe("512 B")
+  })
+
   it("moves to the next unit when rounding reaches 1024 of the current one", () => {
     expect(formatBytes(1024 * 1024 - 1)).toBe("1 MB")
     expect(formatBytes(1024 * 1024 * 1024 - 1)).toBe("1 GB")
