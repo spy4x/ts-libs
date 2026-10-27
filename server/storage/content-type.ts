@@ -18,6 +18,11 @@ const SIGNATURES: Record<string, readonly (readonly [number, readonly number[]])
   "image/jpeg": [[[0, [0xff, 0xd8, 0xff]]]],
   "image/gif": [[[0, ascii(`GIF87a`)]], [[0, ascii(`GIF89a`)]]],
   "image/webp": [[[0, ascii(`RIFF`)], [8, ascii(`WEBP`)]]],
+  // An ISO media file whose major brand is a HEIC one; an AVIF's major brand is `avif`.
+  "image/heic": ["heic", "heix", "mif1"].map((brand): [number, number[]][] => [
+    [4, ascii(`ftyp`)],
+    [8, ascii(brand)],
+  ]),
   "application/pdf": [[[0, ascii(`%PDF-`)]]],
   // A local file header, or the end record alone: an archive with no entries.
   "application/zip": [[[0, [0x50, 0x4b, 0x03, 0x04]]], [[0, [0x50, 0x4b, 0x05, 0x06]]]],
@@ -50,7 +55,7 @@ function isText(bytes: Uint8Array): boolean {
 
 /**
  * Whether `bytes`, the start of a file, are what `contentType` says. Images (PNG, JPEG, GIF,
- * WebP), PDF and ZIP are checked by their signature; plain text, CSV and JSON by being UTF-8
+ * WebP, HEIC by its major brand), PDF and ZIP are checked by their signature; plain text, CSV and JSON by being UTF-8
  * without a NUL byte. Parameters (`; charset=utf-8`) and case are ignored. An empty file, and a
  * type not in {@link SNIFFABLE_CONTENT_TYPES}, never match: a check that cannot tell must refuse.
  */

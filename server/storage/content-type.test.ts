@@ -15,6 +15,8 @@ const SAMPLES: Record<string, Uint8Array> = {
   "image/jpeg": bytes([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10], "JFIF"),
   "image/gif": bytes("GIF89a", [1, 0, 1, 0]),
   "image/webp": bytes("RIFF", [0x24, 0, 0, 0], "WEBPVP8 "),
+  // An iPhone photo's first box: size, `ftyp`, major brand, minor version, compatible brands.
+  "image/heic": bytes([0, 0, 0, 0x18], "ftypheic", [0, 0, 0, 0], "mif1heic"),
   "application/pdf": bytes("%PDF-1.7\n"),
   "application/zip": bytes([0x50, 0x4b, 0x03, 0x04, 0x14, 0]),
   "text/plain": new TextEncoder().encode("Привет, world\n"),
@@ -44,6 +46,18 @@ describe("matchesContentType", () => {
       matchesContentType(bytes("RIFF", [0x24, 0, 0, 0], "WAVEfmt "), "image/webp"),
       false,
     )
+  })
+
+  it("accepts a HEIC whose major brand is heix or mif1", () => {
+    assertEquals(matchesContentType(bytes([0, 0, 0, 0x18], "ftypheix"), "image/heic"), true)
+    assertEquals(matchesContentType(bytes([0, 0, 0, 0x1c], "ftypmif1"), "image/heic"), true)
+  })
+
+  it("refuses an AVIF, an MP4 and a QuickTime movie sent as HEIC", () => {
+    const avif = bytes([0, 0, 0, 0x1c], "ftypavif", [0, 0, 0, 0], "avifmif1miaf")
+    assertEquals(matchesContentType(avif, "image/heic"), false)
+    assertEquals(matchesContentType(bytes([0, 0, 0, 0x18], "ftypisom"), "image/heic"), false)
+    assertEquals(matchesContentType(bytes([0, 0, 0, 0x14], "ftypqt  "), "image/heic"), false)
   })
 
   it("accepts a GIF87a and an empty ZIP archive", () => {

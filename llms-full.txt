@@ -4922,7 +4922,7 @@ The signed URL stays valid until it expires, so its holder can PUT other bytes a
 Sign the browser's PUT for a staging key, `copy` it to a key no browser has a URL for, check
 that copy, and delete the staging object: the checked bytes then cannot be replaced.
 
-`matchesContentType` knows PNG, JPEG, GIF, WebP, PDF and ZIP by their signature,
+`matchesContentType` knows PNG, JPEG, GIF, WebP, HEIC, PDF and ZIP by their signature,
 and plain text, CSV and JSON as UTF-8 without a NUL byte (`SNIFFABLE_CONTENT_TYPES`).
 An empty file and any other type never match.
 
