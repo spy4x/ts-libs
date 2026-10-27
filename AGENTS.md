@@ -177,6 +177,7 @@ anywhere in this repo's workflows — undo a throw-away checkout with `git check
 | `deno task ts:check`         | `deno check` over every `.ts`/`.tsx` in the tree           |
 | `deno task test`             | the unit tier — every test except `*.integration.test.ts`  |
 | `deno task test:integration` | the integration tier — only `*.integration.test.ts`        |
+| `deno task test:vips`        | `@spy4x/server/images` against the real `vips` (below)     |
 | `deno task services:up`      | start the eight integration services, wait until healthy   |
 | `deno task services:down`    | stop them and drop their volumes                           |
 | `deno task services:logs`    | logs of the eight containers                               |
@@ -282,6 +283,20 @@ database name; the plain Redis takes none, and the second Redis (`redis-auth`) u
 password. They hold throw-away data and listen on loopback only; the literal is meant to be
 unmistakable if it ever turns up in a log. It is the one credential-shaped
 string this repository commits.
+
+### The `vips` tests
+
+`@spy4x/server/images` runs the `vips` command line, which neither tier installs. Its test against
+the real tools is named `*.vips.test.ts`, which `deno task test` ignores; `deno task test:vips` runs
+it, and fails when `vips`, `vipsheader` or `exiftool` is missing. CI's `vips` step installs them
+into the Deno image first. Locally, run it in the same image:
+
+```bash
+podman run --rm --name ts-libs-vips --pids-limit=500 --memory=8g -v "$PWD:/w:Z" -w /w \
+  denoland/deno:2.9.7 sh -c 'apt-get update -qq && apt-get install -y -qq --no-install-recommends \
+  libvips-tools libheif-plugin-libde265 libheif-plugin-aomenc libheif-plugin-dav1d \
+  libheif-plugin-x265 libimage-exiftool-perl >/dev/null && deno task test:vips'
+```
 
 ## Code style
 

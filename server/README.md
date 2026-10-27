@@ -35,6 +35,7 @@ Runs on: server (Deno).
 | `@spy4x/server/static`                      | Static-file serving with a MIME table and path-traversal protection                                                                                                                                                                                           |
 | `@spy4x/server/healthcheck`                 | Loopback TCP or HTTP probe, exit 0/1, for distroless images                                                                                                                                                                                                   |
 | `@spy4x/server/storage`                     | The `FileStorage` port, the local and S3 providers, bucket binding, SigV4 presigning                                                                                                                                                                          |
+| `@spy4x/server/images`                      | An uploaded photo as upright, metadata-free AVIF and WebP widths, through the `vips` command line                                                                                                                                                             |
 | `@spy4x/server/auth`                        | Sign-in account model and `AuthStore`: see the `server/auth` section below                                                                                                                                                                                    |
 | `@spy4x/server/auth/postgres`               | The Postgres `AuthStore` and `SessionStore`, and the `AUTH_POSTGRES_SCHEMA` tables                                                                                                                                                                            |
 | `@spy4x/server/auth/memory-store`           | The in-memory `AuthStore`, held to the same contract as the Postgres one, for tests                                                                                                                                                                           |
@@ -534,7 +535,7 @@ The signed URL stays valid until it expires, so its holder can PUT other bytes a
 Sign the browser's PUT for a staging key, `copy` it to a key no browser has a URL for, check
 that copy, and delete the staging object: the checked bytes then cannot be replaced.
 
-`matchesContentType` knows PNG, JPEG, GIF, WebP, PDF and ZIP by their signature,
+`matchesContentType` knows PNG, JPEG, GIF, WebP, HEIC, PDF and ZIP by their signature,
 and plain text, CSV and JSON as UTF-8 without a NUL byte (`SNIFFABLE_CONTENT_TYPES`).
 An empty file and any other type never match.
 
@@ -671,6 +672,42 @@ unvalidated string yields an unvalidated path, by contract.
   identifiers (`user_id`, `expires_at`) into a client configured with a camel-case
   transform; with the function out of scope there is no mixed convention here, and
   the package reads no database at all.
+
+## `server/images`
+
+`processImage(input, outputDir, options?)` turns the photo at `input`, a JPEG, PNG, WebP or HEIC,
+into AVIF and WebP files at 480, 960 and 1600 pixels wide (`widths` names others), never wider
+than the photo. Each is turned upright by the photo's orientation and keeps no metadata: no EXIF,
+no XMP, no GPS position, no ICC profile (colours are turned to sRGB first). It answers
+`{ success, output, error }`: the variants with their paths, types, widths and heights, AVIF first
+and narrowest first, ready for `responsiveImage` of `@spy4x/platform/universal/srcset`.
+
+```ts
+import { processImage } from "@spy4x/server/images"
+
+const result = await processImage("/tmp/upload-1", "/tmp/upload-1-out", {
+  signal: AbortSignal.timeout(120_000),
+})
+if (result.success) { for (const v of result.output) await store(v.path, v.type, v.width) }
+```
+
+- **A refusal** (`ImageRefusal`) is final: a file libvips cannot read, a format other than the
+  four (libvips names its loader, whatever the file is called), or more than `maxPixels` (100
+  million by default), refused before the pixels are decoded.
+- **A throw** is worth a retry: `vips` missing, stopped by `signal`, or failing to write a
+  variant. A job keeps the original until the variants exist. Variants written before the failure
+  stay in `outputDir`; remove the folder or run again, which writes the same names.
+- **Check the bytes first.** Run `matchesContentType` on the upload before `processImage`: libvips
+  picks a loader by content and ignores the type the browser claimed.
+- **Header fields are read one at a time** (`vipsheader -f`), since `vipsheader -a` also prints
+  the photo's EXIF text, where an uploader could forge an `orientation:` line.
+- **Same input, same files.** A second run on the same photo writes the same bytes to the same
+  names, so a retried job does not pile up variants.
+- **What it needs.** libvips 8.15 or newer with its command-line tools and libheif. On Debian 13:
+  `libvips-tools`, `libheif-plugin-libde265` (reads HEIC), `libheif-plugin-aomenc` (writes AVIF).
+  Every call sets `VIPS_BLOCK_UNTRUSTED=1`, which blocks libvips's loaders that are not meant
+  for untrusted files, and refuses a path that `vips` would read as an option (a leading `-` or
+  a `[`).
 
 ## `server/auth`
 

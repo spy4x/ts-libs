@@ -170,6 +170,17 @@ steps:
     commands:
       - deno task test:integration
 
+  # `@spy4x/server/images` against the real `vips` and `exiftool` (#762): `deno task test:vips`.
+  # Neither is in the Deno image, so the step installs them from Debian first: libvips with the
+  # HEIC decoder and AVIF codecs it reads and writes, the HEVC encoder the test makes its HEIC
+  # sample with, and exiftool, which checks that no metadata is left.
+  vips:
+    image: denoland/deno:2.9.7@sha256:fa335acdf6b72106eda2cb6a8cb5f4187e7630e357467489db4b2e7352d5e432
+    commands:
+      - apt-get update -qq
+      - apt-get install -y -qq --no-install-recommends libvips-tools libheif-plugin-libde265 libheif-plugin-aomenc libheif-plugin-dav1d libheif-plugin-x265 libimage-exiftool-perl
+      - deno task test:vips
+
   # Guards against an accidental release: a `v*` tag publishes to JSR with the global token, so
   # this step fails the build unless the tagged commit is already on `main` (reviewed, green CI).
   # It is not access control: Woodpecker runs the tagged commit's own `.woodpecker.yml`, so a tag

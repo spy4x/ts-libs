@@ -1296,6 +1296,10 @@ removeSortRule	function	@spy4x/platform/universal/sort	Removes one sort priority
 serializeSort	function	@spy4x/platform/universal/sort	Write sort rules into a URL parameter.
 sortRows	function	@spy4x/platform/universal/sort	Sort rows by every rule in order.
 toggleSort	function	@spy4x/platform/universal/sort	Advance one column through `asc` → `desc` → `off`.
+ResponsiveImage	interface	@spy4x/platform/universal/srcset	What responsiveImage answers: a `<source>` per preferred type, and the `<img>`'s own.
+ResponsiveImageSource	interface	@spy4x/platform/universal/srcset	One `<source>` of a `<picture>`: a type and its `srcset`.
+ResponsiveImageVariant	interface	@spy4x/platform/universal/srcset	One stored width of an image: where it is, its size in pixels and its `Content-Type`.
+responsiveImage	function	@spy4x/platform/universal/srcset	The `<picture>` and `<img>` attributes for `variants`.
 Interval	interface	@spy4x/platform/universal/statistics	A statistic's value on the data and its bootstrap interval.
 bootstrap	function	@spy4x/platform/universal/statistics	Percentile bootstrap interval of `statistic` over `values`.
 bootstrapDifference	function	@spy4x/platform/universal/statistics	Bootstrap interval of `statistic(b) - statistic(a)`, resampling each group on its own, so the two groups may differ in size.
@@ -2026,6 +2030,12 @@ PostgresIdempotencyStore	class	@spy4x/server/idempotency	IdempotencyStore over t
 createIdempotencyMiddleware	function	@spy4x/server/idempotency	Makes a command safe to send twice.
 fingerprint	function	@spy4x/server/idempotency	A stable SHA-256 hex fingerprint of a command's name and input.
 isIdempotencyKey	function	@spy4x/server/idempotency	Whether `key` is usable: 1 to 128 printable ASCII characters.
+IMAGE_MAX_PIXELS	constant	@spy4x/server/images	The largest image read unless the caller names another limit: 100 megapixels.
+IMAGE_WIDTHS	constant	@spy4x/server/images	The widths made unless the caller names others.
+ImageRefusal	enum	@spy4x/server/images	Why an image was not processed.
+ImageResult	type	@spy4x/server/images	`{ success, output, error }`: the variants, AVIF then WebP, narrowest first, or the refusal.
+ImageVariant	interface	@spy4x/server/images	One stored variant: its file, `Content-Type` and size in pixels.
+processImage	function	@spy4x/server/images	Makes the variants of the image at `input` in `outputDir`, named `<width>.avif` and `<width>.webp`, and answers them, or why the image was refused.
 RateLimitRedisScriptStore	interface	@spy4x/server/kv	The part of RedisKvStore the store needs.
 RateLimitRedisStore	interface	@spy4x/server/kv	The part of RedisKvStore the adapter needs.
 RedisKvStore	class	@spy4x/server/kv	A key-value store scoped to one Redis connection and one key prefix.
@@ -2672,4 +2682,4 @@ firstIssueMessage	function	@spy4x/validation/validate	First issue message in a v
 isArkErrors	function	@spy4x/validation/validate	Whether a value is an arktype rejection, without relying on `instanceof`.
 toValidationError	function	@spy4x/validation/validate	Build a ValidationError from arktype's issues.
 validate	function	@spy4x/validation/validate	Parse `value` with an arktype schema exactly once.
-# export surface: sha256 3eebaf332b048f763c006e90c529b54332210a4cff9635b5702f86cf82fa5527
+# export surface: sha256 3bc0f18d2118a84978a1d8cf6f810a624299900aeac0e76b6e0cbeb718fa63cc

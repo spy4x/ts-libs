@@ -55,7 +55,7 @@
     // the unit run would pick up the integration suite and fail with no container.
     // `.volumes` is named here as well because `--ignore` replaces the root `exclude` for this
     // run instead of adding to it; without it a `*.test.ts` under `.volumes` would be run.
-    "test": "deno test --no-prompt --unstable-kv --allow-read --allow-env --ignore=**/*.integration.test.ts,.volumes",
+    "test": "deno test --no-prompt --unstable-kv --allow-read --allow-env --ignore=**/*.integration.test.ts,**/*.vips.test.ts,.volumes",
     // The integration tier. The glob is the only thing that selects it, so a file
     // joins the tier by its name alone.
     //
@@ -72,6 +72,11 @@
     // `.volumes/it/` through `createScratchFolder` (#73), never `Deno.makeTempDir()`, which
     // writes outside this grant and stays refused.
     "test:integration": "deno test --no-prompt --allow-read --allow-env --allow-net --allow-write=.volumes **/*.integration.test.ts",
+    // `@spy4x/server/images` against the real `vips` and `exiftool` (#762), which neither tier
+    // installs: CI's `vips` step adds them to the Deno image, and AGENTS.md gives the local
+    // command. Files named `*.vips.test.ts`; `test` ignores them. Folders come from
+    // `createScratchFolder`, under `.volumes`.
+    "test:vips": "deno test --no-prompt --allow-read --allow-env --allow-write=.volumes --allow-run=vips,vipsheader,exiftool **/*.vips.test.ts",
     "services:up": "docker compose -f infra/compose.integration.yml up -d --wait",
     "services:down": "docker compose -f infra/compose.integration.yml down -v",
     "services:logs": "docker compose -f infra/compose.integration.yml logs",
