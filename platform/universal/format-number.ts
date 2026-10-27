@@ -85,9 +85,14 @@ const BYTE_UNITS = ["KB", "MB", "GB", "TB"] as const
  * value that rounds up to 1024 of one unit is shown as 1 of the next: `1024 * 1024 - 1` is `"1 MB"`,
  * not `"1024 KB"`. `TB` is the largest unit; anything bigger is shown as that many terabytes.
  *
+ * With a non-English `locale`, the number and the unit follow that language through
+ * `Intl.NumberFormat` (`"1,5 кБ"` in `ru`); English keeps the short `KB` form above.
+ *
  * @param bytes A non-negative byte count, e.g. a `File`'s `size`.
+ * @param locale A BCP 47 language tag, e.g. the interface language. Omitted or English → English.
  */
-export function formatBytes(bytes: number): string {
+export function formatBytes(bytes: number, locale?: string): string {
+  if (locale && !/^en\b/i.test(locale)) return formatBytesIntl(bytes, locale)
   if (bytes < 1024) return `${bytes} B`
   let value = bytes / 1024
   let unitIndex = 0
@@ -99,4 +104,20 @@ export function formatBytes(bytes: number): string {
   return `${Number.isInteger(rounded) ? rounded.toFixed(0) : rounded.toFixed(1)} ${
     BYTE_UNITS[unitIndex]
   }`
+}
+
+const INTL_BYTE_UNITS = [`kilobyte`, `megabyte`, `gigabyte`, `terabyte`] as const
+
+/** {@link formatBytes} in a non-English language, with the same steps and rounding. */
+function formatBytesIntl(bytes: number, locale: string): string {
+  const format = (value: number, unit: string) =>
+    new Intl.NumberFormat(locale, { style: `unit`, unit, maximumFractionDigits: 1 }).format(value)
+  if (bytes < 1024) return format(bytes, `byte`)
+  let value = bytes / 1024
+  let unitIndex = 0
+  while (round(value, 1) >= 1024 && unitIndex < INTL_BYTE_UNITS.length - 1) {
+    value /= 1024
+    unitIndex++
+  }
+  return format(round(value, 1), INTL_BYTE_UNITS[unitIndex])
 }
