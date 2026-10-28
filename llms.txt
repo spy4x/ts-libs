@@ -540,6 +540,7 @@ FaqQuestionJsonLd	interface	@spy4x/platform	A schema.org `Question` inside an `F
 HONEYPOT_FIELD_NAME	constant	@spy4x/platform	Default `name` of the honeypot field.
 HOURS_IN_DAY	constant	@spy4x/platform	Hours in one day.
 InferSchema	type	@spy4x/platform	Value a schema accepts and produces.
+ItemListJsonLd	interface	@spy4x/platform	A schema.org `ItemList` of the items a category or catalog page links to.
 JsonLdBlog	interface	@spy4x/platform	The blog a post belongs to, described in full so the post's page stands alone.
 JsonLdPerson	interface	@spy4x/platform	A person named as a post's author, or as its publisher.
 JsonLdPersonNode	interface	@spy4x/platform	A schema.org `Person` or `Organization` node, or a reference to one by `@id`.
@@ -565,11 +566,16 @@ ONE_WEEK_IN_MILLISECONDS	constant	@spy4x/platform	One week, in milliseconds.
 ONE_WEEK_IN_SECONDS	constant	@spy4x/platform	One week, in seconds.
 ONE_YEAR_IN_MILLISECONDS	constant	@spy4x/platform	One year (12 nominal months), in milliseconds.
 ONE_YEAR_IN_SECONDS	constant	@spy4x/platform	One year (12 nominal months), in seconds.
+OfferJsonLd	interface	@spy4x/platform	A schema.org `Offer` for one item, new, sold by the page's shop.
 OperationResult	type	@spy4x/platform	Result of an operation that can fail: exactly one of `result` / `error` is non-null.
 OperationState	interface	@spy4x/platform	In-flight state of an operation, for a store or a form to render.
 OtherError	interface	@spy4x/platform	An error this package has no category for.
 ParsedDsn	interface	@spy4x/platform	Where a report goes: the envelope URL and the public key a DSN carries.
 PayloadError	interface	@spy4x/platform	A payload a schema rejected: a response body, or a remote feed item.
+ProductGroupJsonLd	interface	@spy4x/platform	A schema.org `ProductGroup` node: an item whose page offers several variants.
+ProductJsonLd	interface	@spy4x/platform	A schema.org `Product` node: an item with no variants, or one variant of a group.
+ProductPage	interface	@spy4x/platform	What productJsonLd describes: one item page, with or without variants.
+ProductVariant	interface	@spy4x/platform	One variant of a product, such as one colour in one size, selectable on the product's page.
 QuickAddDue	interface	@spy4x/platform	When the task is due: a calendar date in the given time zone, and a wall-clock time if typed.
 QuickAddOptions	interface	@spy4x/platform	Options of parseQuickAdd.
 QuickAddPriority	enum	@spy4x/platform	Task priority.
@@ -630,6 +636,7 @@ isRecord	function	@spy4x/platform	True for a plain keyed object: not `null`, not
 isSilentError	function	@spy4x/platform	Whether an error should stay quiet.
 isUuid	function	@spy4x/platform	True for a lower-case UUID string.
 isValidDate	function	@spy4x/platform	Whether the input is a usable date: a `Date` or an ISO `YYYY-MM-DD`-prefixed string that `Date` can parse.
+itemListJsonLd	function	@spy4x/platform	The `ItemList` node for a category or catalog page: one `ListItem` per item, with its 1-based `position` and the absolute `url` of the item's own page, in the order the page shows them.
 jsonLdText	function	@spy4x/platform	Serialise JSON-LD for a `<script>` body.
 levenshtein	function	@spy4x/platform	Levenshtein edit distance between two strings, computed over code points.
 llmsTxt	function	@spy4x/platform	The text of an `/llms.txt` in the format llmstxt.org describes: `# Title`, a `> summary` line, then each section as a `## Section` heading followed by `- [Title](url): description` lines.
@@ -645,6 +652,7 @@ parseDsn	function	@spy4x/platform	The DSN's endpoint and key, or `null` when `ds
 parseQuickAdd	function	@spy4x/platform	Read the tokens out of a quick-add line.
 parseSort	function	@spy4x/platform	Read sort rules out of a URL parameter.
 pluralize	function	@spy4x/platform	Naive English pluraliser for UI copy.
+productJsonLd	function	@spy4x/platform	The schema.org node Google reads for an item page: a `Product` for an item with no variants, or a `ProductGroup` whose `hasVariant` lists one `Product` per variant.
 readingMinutes	function	@spy4x/platform	Whole minutes a reader needs for `text`, at least 1.
 removeSortRule	function	@spy4x/platform	Removes one sort priority while preserving all remaining priorities.
 responseError	function	@spy4x/platform	Turn a failed response into a structured error.
@@ -1266,12 +1274,18 @@ Crumb	interface	@spy4x/platform/universal/seo	One entry in the breadcrumb trail 
 FaqItem	interface	@spy4x/platform/universal/seo	One question and its answer, as a page shows them.
 FaqPageJsonLd	interface	@spy4x/platform/universal/seo	A schema.org `FAQPage` node.
 FaqQuestionJsonLd	interface	@spy4x/platform/universal/seo	A schema.org `Question` inside an `FAQPage`.
+ItemListJsonLd	interface	@spy4x/platform/universal/seo	A schema.org `ItemList` of the items a category or catalog page links to.
 JsonLdBlog	interface	@spy4x/platform/universal/seo	The blog a post belongs to, described in full so the post's page stands alone.
 JsonLdPerson	interface	@spy4x/platform/universal/seo	A person named as a post's author, or as its publisher.
 JsonLdPersonNode	interface	@spy4x/platform/universal/seo	A schema.org `Person` or `Organization` node, or a reference to one by `@id`.
 LlmsTxtDocument	interface	@spy4x/platform/universal/seo	What an `llms.txt` says: the site's name, a one-paragraph summary and its sections.
 LlmsTxtLink	interface	@spy4x/platform/universal/seo	One link in an `llms.txt` section.
 LlmsTxtSection	interface	@spy4x/platform/universal/seo	One `## Section` of an `llms.txt` and its links.
+OfferJsonLd	interface	@spy4x/platform/universal/seo	A schema.org `Offer` for one item, new, sold by the page's shop.
+ProductGroupJsonLd	interface	@spy4x/platform/universal/seo	A schema.org `ProductGroup` node: an item whose page offers several variants.
+ProductJsonLd	interface	@spy4x/platform/universal/seo	A schema.org `Product` node: an item with no variants, or one variant of a group.
+ProductPage	interface	@spy4x/platform/universal/seo	What productJsonLd describes: one item page, with or without variants.
+ProductVariant	interface	@spy4x/platform/universal/seo	One variant of a product, such as one colour in one size, selectable on the product's page.
 RssChannel	interface	@spy4x/platform/universal/seo	The feed itself: what an RSS reader shows as the source of the items.
 RssItem	interface	@spy4x/platform/universal/seo	One post in an RSS feed.
 SitemapEntry	interface	@spy4x/platform/universal/seo	One page in a `sitemap.xml`.
@@ -1280,9 +1294,11 @@ breadcrumbItems	function	@spy4x/platform/universal/seo	`itemListElement` for a s
 breadcrumbListJsonLd	function	@spy4x/platform/universal/seo	The complete `BreadcrumbList` node, `@id`-anchored to the page it describes.
 canonicalUrl	function	@spy4x/platform/universal/seo	Parse a canonical address into the normalised `URL` that will be published.
 faqPageJsonLd	function	@spy4x/platform/universal/seo	The `FAQPage` node for the questions a page shows, in the order it shows them.
+itemListJsonLd	function	@spy4x/platform/universal/seo	The `ItemList` node for a category or catalog page: one `ListItem` per item, with its 1-based `position` and the absolute `url` of the item's own page, in the order the page shows them.
 jsonLdText	function	@spy4x/platform/universal/seo	Serialise JSON-LD for a `<script>` body.
 llmsTxt	function	@spy4x/platform/universal/seo	The text of an `/llms.txt` in the format llmstxt.org describes: `# Title`, a `> summary` line, then each section as a `## Section` heading followed by `- [Title](url): description` lines.
 normalizeCanonical	function	@spy4x/platform/universal/seo	The canonical address as it should be published: one clean `http`/`https` address.
+productJsonLd	function	@spy4x/platform/universal/seo	The schema.org node Google reads for an item page: a `Product` for an item with no variants, or a `ProductGroup` whose `hasVariant` lists one `Product` per variant.
 rssXml	function	@spy4x/platform/universal/seo	The text of an RSS 2.0 feed of `items`, in the order given.
 sitemapXml	function	@spy4x/platform/universal/seo	The text of a `sitemap.xml` that lists `entries` in the order given.
 DEFAULT_SETTINGS_MAX_BYTES	constant	@spy4x/platform/universal/settings	The default cap on a saved value: 4 KiB of UTF-8 JSON, plenty for a handful of preferences.
@@ -2690,4 +2706,4 @@ firstIssueMessage	function	@spy4x/validation/validate	First issue message in a v
 isArkErrors	function	@spy4x/validation/validate	Whether a value is an arktype rejection, without relying on `instanceof`.
 toValidationError	function	@spy4x/validation/validate	Build a ValidationError from arktype's issues.
 validate	function	@spy4x/validation/validate	Parse `value` with an arktype schema exactly once.
-# export surface: sha256 b5c7312faf13983e1c3795d209dace2c65d8f7beba78de13b2249e047e27fcb4
+# export surface: sha256 3961830d574a3a4584b7779598d84cb05f3492c7b915e66f1db8dd71e3c24396
