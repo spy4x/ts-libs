@@ -24,6 +24,7 @@ Runs on: server (Deno).
 | `./ntfy`            | `NtfyClient`, `ntfyConfigFromEnv`, `NotificationSeverity`, `NtfyPriority`      |
 | `./healthchecks`    | `HealthchecksClient`, `healthchecksConfigFromEnv`, `HealthchecksOutcome`       |
 | `./cloudflare`      | `purgeUrls` — Cloudflare cache purge by URL                                    |
+| `./indexnow`        | `submitIndexNow` — tell search engines which pages changed                     |
 | `./webhooks`        | `verifyWebhookRequest` — inbound HMAC-SHA256 verification, Stripe's layout too |
 | `./push`            | `createWebPushSender`, `generateVapidKeyPair` — Web Push to a user's devices   |
 | `./push-file-store` | `createFilePushSubscriptionStore` — push subscriptions in one JSON file        |
@@ -252,6 +253,21 @@ a Cloudflare zone and returns `{ success, output, error }`. It never throws.
 - **Empty list.** An empty `urls` succeeds with `output: "nothing to purge"` and sends no request.
 - **Fail open.** The caller decides what a failure means; a deploy script would normally log
   `error` and carry on.
+
+### `submitIndexNow` — IndexNow
+
+`submitIndexNow({ host, key, keyLocation?, urls, fetch?, requestTimeoutMs? })` posts up to 10,000
+changed addresses to `https://api.indexnow.org/indexnow`, which shares them with every engine that
+takes part, and returns `{ success, output, error }`. It never throws.
+
+- **Checks first.** The key must be 8 to 128 letters, digits and dashes; every URL and the
+  `keyLocation` must be `http`/`https` on `host`; more than 10,000 URLs is refused, not split. A
+  refused call sends no request.
+- **Answers.** `200`, and `202` (key not yet checked), succeed. Any other status fails with the
+  status and IndexNow's meaning for it (`403`: the key file is missing or does not hold the key).
+  The body is never read.
+- **Timeout.** The request runs under `AbortSignal.timeout(requestTimeoutMs)`, 10 s by default.
+- **Fail open.** Callers log `error` and carry on: a missed ping only delays crawling.
 
 ### `verifyWebhookRequest`
 

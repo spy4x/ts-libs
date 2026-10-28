@@ -31,6 +31,9 @@ export type {
 export { PURGE_BATCH_SIZE, purgeUrls } from "./cloudflare.ts"
 export type { CloudflarePurgeOptions, CloudflarePurgeResult } from "./cloudflare.ts"
 
+export { INDEXNOW_MAX_URLS, submitIndexNow } from "./indexnow.ts"
+export type { IndexNowOptions, IndexNowResult } from "./indexnow.ts"
+
 export { NotificationSeverity, NtfyClient, ntfyConfigFromEnv, NtfyPriority } from "./ntfy.ts"
 export type {
   NtfyClientConfig,
