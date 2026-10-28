@@ -5,6 +5,7 @@ import {
   nginxAddHeaders,
   securityHeaderList,
   securityHeaders,
+  withScriptNonce,
   withSecurityHeaders,
 } from "./security-headers.ts"
 
@@ -151,6 +152,41 @@ Deno.test(`forms may post to the app's own origin only, unless formAction adds a
     .toContain(`form-action 'self' https://app.example.com`)
 })
 
+Deno.test(`writes style-src-attr only when styleSrcAttr lists a source, and leaves style-src alone`, async () => {
+  const csp = async (options?: Parameters<typeof securityHeaderList>[0]) =>
+    new Map(await securityHeaderList(options)).get(`content-security-policy`)?.split(`; `)
+  const without = await csp()
+  expect(without?.some((d) => d.startsWith(`style-src-attr`))).toBe(false)
+  expect(
+    (await csp({ extraSources: { styleSrcAttr: [] } }))?.some((d) =>
+      d.startsWith(`style-src-attr`)
+    ),
+  ).toBe(false)
+  const withAttr = await csp({ extraSources: { styleSrcAttr: [`'unsafe-inline'`] } })
+  expect(withAttr).toContain(`style-src-attr 'unsafe-inline'`)
+  expect(withAttr).toContain(`style-src 'self'`)
+})
+
+Deno.test(`allows one render's nonce in script-src and changes nothing else`, async () => {
+  const list = await securityHeaderList({ extraSources: { scriptSrc: [`https://a.example.com`] } })
+  const csp = (headers: [string, string][]) =>
+    new Map(headers).get(`content-security-policy`)?.split(`; `)
+  for (const nonce of [`0f9a3c`, `aB3+/x_-==`]) {
+    const allowed = withScriptNonce(list, nonce)
+    expect(csp(allowed)).toContain(`script-src 'self' https://a.example.com 'nonce-${nonce}'`)
+    expect(csp(allowed)?.filter((d) => d.includes(`nonce-`))).toHaveLength(1)
+    expect(allowed.filter(([name]) => name !== `content-security-policy`))
+      .toEqual(list.filter(([name]) => name !== `content-security-policy`))
+  }
+})
+
+Deno.test(`ignores a nonce that is not base64 or hex, so it cannot add a source or a directive`, async () => {
+  const list = await securityHeaderList()
+  for (const nonce of [`abc'; script-src *`, `abc *`, `abc;x`, ``, `ab=c`, 42, undefined, null]) {
+    expect(withScriptNonce(list, nonce)).toEqual(list)
+  }
+})
+
 const NOT_ONE_SOURCE: [why: string, value: string][] = [
   [`a second directive`, `https://a.example.com;script-src`],
   [`a second policy`, `https://a.example.com,default-src`],
@@ -184,6 +220,7 @@ Deno.test(`refuses a value that is not one source in every directive, in the lis
     `workerSrc`,
     `manifestSrc`,
     `formAction`,
+    `styleSrcAttr`,
   ] as const
   for (const key of keys) {
     const options = { extraSources: { [key]: [`https://a.example.com;script-src`] } }

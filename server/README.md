@@ -153,8 +153,8 @@ try {
 
 ## `server/http/security-headers`
 
-`securityHeaders`, `securityHeaderList`, `withSecurityHeaders`, `nginxAddHeaders`,
-`inlineBlockHashes` and the types
+`securityHeaders`, `securityHeaderList`, `withSecurityHeaders`, `withScriptNonce`,
+`nginxAddHeaders`, `inlineBlockHashes` and the types
 `SecurityHeadersOptions`, `ExtraSources` and `NginxAddHeadersOptions`.
 
 `await securityHeaders({ shellHtml, extraSources })` returns Hono middleware over `secureHeaders`:
@@ -166,7 +166,9 @@ worker from the app's own origin needs nothing extra. `extraSources` appends sou
 (`scriptSrc`, `styleSrc`, `imgSrc`, `connectSrc`, `fontSrc`, `mediaSrc`, `workerSrc`,
 `manifestSrc`, `formAction`) and never replaces the defaults. `formAction` also limits where a
 form's post may be redirected, so a page whose form ends on another origin names that origin there.
-Each value is one source: an empty value, or one with whitespace, `;`, `,` or a character outside
+`styleSrcAttr` writes a `style-src-attr` directive, only when it lists a source:
+`["'unsafe-inline'"]` allows `style` attributes (colours a component sets from data) while
+`<style>` blocks and stylesheets stay on `style-src`. Each value is one source: an empty value, or one with whitespace, `;`, `,` or a character outside
 printable ASCII, throws, because it would add a source or a whole directive. The error names the
 key and the position, never the value.
 
@@ -179,6 +181,11 @@ is removed. It returns a copy, because a response from `fetch` or `Response.redi
 header is set on it; the copy takes over the body, status and status text. A WebSocket upgrade
 (status 101), or any other status outside 200 to 599, cannot be rebuilt and is returned unchanged,
 without the headers.
+
+`withScriptNonce(headers, nonce)` returns a copy of the list whose `script-src` also allows
+`'nonce-<nonce>'`, for a page rendered with a nonce of its own, such as the one Fresh gives each
+inline script it writes. Only a nonce of base64 or hex characters is used; any other value,
+a non-string included, returns the list unchanged.
 
 ```ts
 const headers = await securityHeaderList({

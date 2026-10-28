@@ -5,7 +5,8 @@
  * inline blocks in the built page, so the policy needs no `unsafe-inline`.
  *
  * The same headers are available as data ({@link securityHeaderList}) for a server that is not
- * Hono, where {@link withSecurityHeaders} puts them on a `Response`, and as nginx configuration
+ * Hono, where {@link withSecurityHeaders} puts them on a `Response` and {@link withScriptNonce}
+ * allows one render's nonce, and as nginx configuration
  * ({@link nginxAddHeaders}) for a page nginx serves.
  *
  * @module
@@ -47,7 +48,8 @@ export type ExtraSources = Partial<
     | "mediaSrc"
     | "workerSrc"
     | "manifestSrc"
-    | "formAction",
+    | "formAction"
+    | "styleSrcAttr",
     readonly string[]
   >
 >
@@ -63,7 +65,10 @@ export interface SecurityHeadersOptions {
    * Sources to allow beyond `'self'`, such as `https://cdn.example.com` in `imgSrc`. A service
    * worker served from the app's own origin needs none: `workerSrc` falls back to `script-src`.
    * `formAction` also limits where a form's post may be redirected, so a page whose form ends on
-   * another origin names that origin there.
+   * another origin names that origin there. `styleSrcAttr` adds a `style-src-attr` directive, which
+   * has no default and is written only when the list is not empty: `["'unsafe-inline'"]` allows
+   * `style` attributes, such as colours a component sets from data, while `<style>` blocks and
+   * stylesheets stay on `style-src`.
    */
   extraSources?: ExtraSources
 }
@@ -127,6 +132,7 @@ export async function securityHeaderList(
       ...optional(`mediaSrc`),
       ...optional(`workerSrc`),
       ...optional(`manifestSrc`),
+      ...(extra.styleSrcAttr?.length ? { styleSrcAttr: more(`styleSrcAttr`) } : {}),
     },
     xFrameOptions: `DENY`,
     referrerPolicy: `no-referrer`,
@@ -136,6 +142,40 @@ export async function securityHeaderList(
   // list is read once from an empty one.
   const app = new Hono().use(middleware).get(`/`, (c) => c.body(null))
   return [...(await app.request(`/`)).headers]
+}
+
+/** A CSP nonce: base64 or base64url characters with up to two `=`, which hex also matches. */
+const NONCE = /^[A-Za-z0-9+/_-]+={0,2}$/
+
+/**
+ * A copy of `headers` whose Content-Security-Policy also allows scripts that carry `nonce`, for a
+ * page rendered with a nonce made for that render (Fresh puts one on each inline script it writes).
+ * `'nonce-<nonce>'` is appended to `script-src`; every other header and directive is kept.
+ *
+ * Only a nonce of base64 or hex characters is used. Any other value, a non-string included, returns
+ * the list unchanged, because it could add a source or a directive to the policy.
+ *
+ * @example
+ * ```ts
+ * const headers = await securityHeaderList()
+ * const page = withSecurityHeaders(response, withScriptNonce(headers, renderNonce))
+ * ```
+ */
+export function withScriptNonce(
+  headers: Iterable<readonly [name: string, value: string]>,
+  nonce: unknown,
+): [name: string, value: string][] {
+  const list = [...headers].map(([name, value]): [string, string] => [name, value])
+  if (typeof nonce !== `string` || !NONCE.test(nonce)) return list
+  return list.map(([name, value]) => {
+    if (name.toLowerCase() !== `content-security-policy`) return [name, value]
+    const directives = value.split(`; `).map((directive) =>
+      directive === `script-src` || directive.startsWith(`script-src `)
+        ? `${directive} 'nonce-${nonce}'`
+        : directive
+    )
+    return [name, directives.join(`; `)]
+  })
 }
 
 /**
