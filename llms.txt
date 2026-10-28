@@ -287,17 +287,20 @@ RetryPolicy	interface	@spy4x/integrations
 RetryRunOptions	interface	@spy4x/integrations	
 RetryRunResult	interface	@spy4x/integrations	
 Sleeper	type	@spy4x/integrations	Waits a duration.
+UMAMI_FILTER_NAMES	constant	@spy4x/integrations	The filters Umami's website reports take.
 UMAMI_LINK_NAME_MAX	constant	@spy4x/integrations	Umami's limits for a link: a name of 100 characters, a url of 500, a slug of 8 to 100.
 UMAMI_LINK_URL_MAX	constant	@spy4x/integrations	
+UMAMI_METRIC_TYPES	constant	@spy4x/integrations	What a breakdown can count by, in Umami's names.
+UMAMI_SERIES_UNITS	constant	@spy4x/integrations	The units a series can step by.
 UMAMI_SLUG_PATTERN	constant	@spy4x/integrations	A slug this client sends: 8 to 100 letters, digits, `-` and `_`, so it is safe in a path.
 UmamiCheckResult	interface	@spy4x/integrations	Outcome of checkUmami: `output` says what was seen on success, `error` on failure.
 UmamiConnection	interface	@spy4x/integrations	Where an Umami instance is, and how to reach it.
-UmamiFilterName	type	@spy4x/integrations	The filters Umami's website reports take, each matching one value exactly.
+UmamiFilterName	type	@spy4x/integrations	One of UMAMI_FILTER_NAMES.
 UmamiLink	interface	@spy4x/integrations	A link as Umami stores it.
 UmamiLinkCreateOptions	interface	@spy4x/integrations	Options for createUmamiLink.
 UmamiLinkResult	type	@spy4x/integrations	Outcome of createUmamiLink: the link on success, why not on failure.
 UmamiMetric	interface	@spy4x/integrations	One row of a breakdown: a value (`x`, such as a path or an event name) and its count (`y`).
-UmamiMetricType	type	@spy4x/integrations	What a breakdown counts by: page views and visits by these, events by `event` (Umami's names).
+UmamiMetricType	type	@spy4x/integrations	One of UMAMI_METRIC_TYPES: page views and visits by these, events by `event`.
 UmamiPageviews	interface	@spy4x/integrations	UmamiSeries, with the previous period's when `compare` was asked for.
 UmamiPoint	interface	@spy4x/integrations	One point of a series: the start of its unit as Umami prints it (`x`), and a count (`y`).
 UmamiPropertyValue	interface	@spy4x/integrations	How many events carried one value of a property.
@@ -306,7 +309,7 @@ UmamiSeries	interface	@spy4x/integrations	Page views and visitors per unit of ti
 UmamiStats	interface	@spy4x/integrations	UmamiTotals of the period and of the period of the same length just before it.
 UmamiTotals	interface	@spy4x/integrations	A website's totals over a period: Umami's `/stats`.
 UmamiWebsiteCheck	type	@spy4x/integrations	Outcome of checkUmamiWebsite.
-UmamiWebsiteProblem	type	@spy4x/integrations	Why checkUmamiWebsite failed.
+UmamiWebsiteProblem	type	@spy4x/integrations	Why checkUmamiWebsite failed: `settings` for options that cannot work (no `http`/`https` base address, an empty token, a bad timeout), `website` for a website id that is no UUID or that the token cannot see, `token` for a token Umami refuses, `unreachable` for anything else.
 UmamiWebsiteRead	interface	@spy4x/integrations	What every read of a website's numbers needs.
 WebhookRejectReason	type	@spy4x/integrations	Why a delivery was rejected.
 WebhookVerifierConfig	interface	@spy4x/integrations	Shared secret and header names verifyWebhookRequest needs to check a delivery.
@@ -416,17 +419,20 @@ TelegramWebhookOptions	interface	@spy4x/integrations/telegram	Options of createT
 createTelegramWebhookHandler	function	@spy4x/integrations/telegram	Builds a webhook endpoint: `(request) => response`, for any server that speaks `Request`.
 parseTelegramUpdate	function	@spy4x/integrations/telegram	Checks an untrusted value against TelegramUpdate.
 pollTelegramUpdates	function	@spy4x/integrations/telegram	Long polling for development, where Telegram cannot reach a webhook.
+UMAMI_FILTER_NAMES	constant	@spy4x/integrations/umami	The filters Umami's website reports take.
 UMAMI_LINK_NAME_MAX	constant	@spy4x/integrations/umami	Umami's limits for a link: a name of 100 characters, a url of 500, a slug of 8 to 100.
 UMAMI_LINK_URL_MAX	constant	@spy4x/integrations/umami	
+UMAMI_METRIC_TYPES	constant	@spy4x/integrations/umami	What a breakdown can count by, in Umami's names.
+UMAMI_SERIES_UNITS	constant	@spy4x/integrations/umami	The units a series can step by.
 UMAMI_SLUG_PATTERN	constant	@spy4x/integrations/umami	A slug this client sends: 8 to 100 letters, digits, `-` and `_`, so it is safe in a path.
 UmamiCheckResult	interface	@spy4x/integrations/umami	Outcome of checkUmami: `output` says what was seen on success, `error` on failure.
 UmamiConnection	interface	@spy4x/integrations/umami	Where an Umami instance is, and how to reach it.
-UmamiFilterName	type	@spy4x/integrations/umami	The filters Umami's website reports take, each matching one value exactly.
+UmamiFilterName	type	@spy4x/integrations/umami	One of UMAMI_FILTER_NAMES.
 UmamiLink	interface	@spy4x/integrations/umami	A link as Umami stores it.
 UmamiLinkCreateOptions	interface	@spy4x/integrations/umami	Options for createUmamiLink.
 UmamiLinkResult	type	@spy4x/integrations/umami	Outcome of createUmamiLink: the link on success, why not on failure.
 UmamiMetric	interface	@spy4x/integrations/umami	One row of a breakdown: a value (`x`, such as a path or an event name) and its count (`y`).
-UmamiMetricType	type	@spy4x/integrations/umami	What a breakdown counts by: page views and visits by these, events by `event` (Umami's names).
+UmamiMetricType	type	@spy4x/integrations/umami	One of UMAMI_METRIC_TYPES: page views and visits by these, events by `event`.
 UmamiPageviews	interface	@spy4x/integrations/umami	UmamiSeries, with the previous period's when `compare` was asked for.
 UmamiPoint	interface	@spy4x/integrations/umami	One point of a series: the start of its unit as Umami prints it (`x`), and a count (`y`).
 UmamiPropertyValue	interface	@spy4x/integrations/umami	How many events carried one value of a property.
@@ -435,7 +441,7 @@ UmamiSeries	interface	@spy4x/integrations/umami	Page views and visitors per unit
 UmamiStats	interface	@spy4x/integrations/umami	UmamiTotals of the period and of the period of the same length just before it.
 UmamiTotals	interface	@spy4x/integrations/umami	A website's totals over a period: Umami's `/stats`.
 UmamiWebsiteCheck	type	@spy4x/integrations/umami	Outcome of checkUmamiWebsite.
-UmamiWebsiteProblem	type	@spy4x/integrations/umami	Why checkUmamiWebsite failed.
+UmamiWebsiteProblem	type	@spy4x/integrations/umami	Why checkUmamiWebsite failed: `settings` for options that cannot work (no `http`/`https` base address, an empty token, a bad timeout), `website` for a website id that is no UUID or that the token cannot see, `token` for a token Umami refuses, `unreachable` for anything else.
 UmamiWebsiteRead	interface	@spy4x/integrations/umami	What every read of a website's numbers needs.
 checkUmami	function	@spy4x/integrations/umami	Asks Umami's `GET /api/heartbeat` whether the instance answers.
 checkUmamiWebsite	function	@spy4x/integrations/umami	Checks that the token is accepted and can view the website, and says which of the two failed: `token` when Umami refuses the token, `website` when the token works but no website with that id is visible to it, `unreachable` for anything else.
@@ -2765,4 +2771,4 @@ firstIssueMessage	function	@spy4x/validation/validate	First issue message in a v
 isArkErrors	function	@spy4x/validation/validate	Whether a value is an arktype rejection, without relying on `instanceof`.
 toValidationError	function	@spy4x/validation/validate	Build a ValidationError from arktype's issues.
 validate	function	@spy4x/validation/validate	Parse `value` with an arktype schema exactly once.
-# export surface: sha256 c1ceee07e22014fb123eeb97d8c3572d2ce2bc8112fa33c097b6736488b2a42f
+# export surface: sha256 f3e81165bd27045c83c62a02cfe37c6c438c59325dd1156eff5d71e0df5da7dc

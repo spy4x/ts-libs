@@ -1741,8 +1741,11 @@ places apart. Each function returns `{ success, output, error }` and never throw
 Each read takes `{ baseUrl, token, websiteId, startAt, endAt, filters?, fetch?, requestTimeoutMs? }`
 (times in milliseconds) and returns `{ success, output, error }`, plus the HTTP `status` on a
 failure (`null` when Umami did not answer), so a caller tells a refused token from an outage.
-`filters` narrows every count to events that match, such as `{ utmSource: "zalo-a" }` or
-`{ path: "/shirts/linen" }`.
+`filters` narrows every count to events whose value equals the one given, such as
+`{ utmSource: "zalo-a" }` or `{ path: "/shirts/linen" }`. Each is sent as Umami's `eq.<value>`, so a
+value that starts like one of Umami's operators (`c.`, `re.`) is still matched as written. A value
+with a comma (which Umami reads as a list), an empty one, or a name outside `UMAMI_FILTER_NAMES` is
+refused before any request, as are a `type`, `unit`, `limit` or time zone Umami does not take.
 
 - **`readUmamiStats`**: the period's `pageviews`, `visitors`, `visits`, `bounces` and `totaltime`,
   and the same under `comparison` for the period of the same length just before.
@@ -1754,8 +1757,8 @@ failure (`null` when Umami did not answer), so a caller tells a refused token fr
 - **`readUmamiEventValues({ eventName, propertyName })`**: how many events carried each value of a
   property, such as the item of an `order-telegram` event.
 - **`checkUmamiWebsite({ baseUrl, token, websiteId })`** says why a website cannot be read:
-  `problem` is `token` (Umami refuses it), `website` (the token works, but sees no website with that
-  id) or `unreachable`.
+  `problem` is `settings` (a base address or token that cannot work), `token` (Umami refuses it),
+  `website` (an id that is no UUID, or one the working token does not see) or `unreachable`.
 
 ### `verifyWebhookRequest`
 

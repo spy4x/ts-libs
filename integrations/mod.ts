@@ -42,8 +42,11 @@ export {
   readUmamiMetrics,
   readUmamiPageviews,
   readUmamiStats,
+  UMAMI_FILTER_NAMES,
   UMAMI_LINK_NAME_MAX,
   UMAMI_LINK_URL_MAX,
+  UMAMI_METRIC_TYPES,
+  UMAMI_SERIES_UNITS,
   UMAMI_SLUG_PATTERN,
   umamiLinkUrl,
 } from "./umami.ts"

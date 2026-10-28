@@ -323,20 +323,28 @@ export const checkUmami = async (options: UmamiConnection): Promise<UmamiCheckRe
 /** A report answer is a few hundred rows at most; anything past this is not one. */
 const MAX_REPORT_BYTES = 512 * 1024
 
-/** The filters Umami's website reports take, each matching one value exactly. */
-export type UmamiFilterName =
-  | "path"
-  | "referrer"
-  | "title"
-  | "query"
-  | "hostname"
-  | "event"
-  | "tag"
-  | "utmSource"
-  | "utmMedium"
-  | "utmCampaign"
-  | "utmContent"
-  | "utmTerm"
+/** The filters Umami's website reports take. */
+export const UMAMI_FILTER_NAMES = [
+  "path",
+  "referrer",
+  "title",
+  "query",
+  "hostname",
+  "event",
+  "tag",
+  "utmSource",
+  "utmMedium",
+  "utmCampaign",
+  "utmContent",
+  "utmTerm",
+] as const
+
+/**
+ * One of {@link UMAMI_FILTER_NAMES}. Each filter matches one value exactly: the client sends it as
+ * Umami's `eq.<value>`, so a value that starts like an operator (`c.`, `re.`) is still matched as
+ * written. A value may not hold a comma, which Umami would read as a list of values.
+ */
+export type UmamiFilterName = typeof UMAMI_FILTER_NAMES[number]
 
 /** What every read of a website's numbers needs. */
 export interface UmamiWebsiteRead extends UmamiConnection {
@@ -348,7 +356,10 @@ export interface UmamiWebsiteRead extends UmamiConnection {
   startAt: number
   /** The period's end, in milliseconds since the epoch. */
   endAt: number
-  /** Narrows every count to events that match, such as `{ utmSource: "zalo-a" }`. */
+  /**
+   * Narrows every count to events whose value equals the one given, such as
+   * `{ utmSource: "zalo-a" }`. A value with a comma, or an empty one, is refused.
+   */
   filters?: Partial<Record<UmamiFilterName, string>>
 }
 
@@ -383,27 +394,34 @@ export interface UmamiMetric {
   y: number
 }
 
-/** What a breakdown counts by: page views and visits by these, events by `event` (Umami's names). */
-export type UmamiMetricType =
-  | "path"
-  | "entry"
-  | "exit"
-  | "referrer"
-  | "title"
-  | "query"
-  | "hostname"
-  | "event"
-  | "tag"
-  | "utmSource"
-  | "utmMedium"
-  | "utmCampaign"
-  | "utmContent"
-  | "utmTerm"
-  | "browser"
-  | "os"
-  | "device"
-  | "language"
-  | "country"
+/** What a breakdown can count by, in Umami's names. */
+export const UMAMI_METRIC_TYPES = [
+  "path",
+  "entry",
+  "exit",
+  "referrer",
+  "title",
+  "query",
+  "hostname",
+  "event",
+  "tag",
+  "utmSource",
+  "utmMedium",
+  "utmCampaign",
+  "utmContent",
+  "utmTerm",
+  "browser",
+  "os",
+  "device",
+  "language",
+  "country",
+] as const
+
+/** One of {@link UMAMI_METRIC_TYPES}: page views and visits by these, events by `event`. */
+export type UmamiMetricType = typeof UMAMI_METRIC_TYPES[number]
+
+/** The units a series can step by. */
+export const UMAMI_SERIES_UNITS = ["hour", "day", "month"] as const
 
 /** One point of a series: the start of its unit as Umami prints it (`x`), and a count (`y`). */
 export interface UmamiPoint {
@@ -429,8 +447,12 @@ export interface UmamiPropertyValue {
   total: number
 }
 
-/** Why {@link checkUmamiWebsite} failed. */
-export type UmamiWebsiteProblem = "token" | "website" | "unreachable"
+/**
+ * Why {@link checkUmamiWebsite} failed: `settings` for options that cannot work (no `http`/`https`
+ * base address, an empty token, a bad timeout), `website` for a website id that is no UUID or that
+ * the token cannot see, `token` for a token Umami refuses, `unreachable` for anything else.
+ */
+export type UmamiWebsiteProblem = "settings" | "token" | "website" | "unreachable"
 
 /** Outcome of {@link checkUmamiWebsite}. */
 export type UmamiWebsiteCheck =
@@ -552,20 +574,45 @@ const readWebsite = <T>(
     return Promise.resolve(readFailure("invalid options: expected an options object"))
   }
   const { websiteId, startAt, endAt, filters = {} } = options
+  const refuse = (why: string) => Promise.resolve(readFailure(`invalid options: ${why}`))
   if (typeof websiteId !== "string" || !UUID_PATTERN.test(websiteId)) {
-    return Promise.resolve(readFailure("invalid options: websiteId must be a UUID"))
+    return refuse("websiteId must be a UUID")
   }
   if (!Number.isFinite(startAt) || !Number.isFinite(endAt) || startAt > endAt) {
-    return Promise.resolve(
-      readFailure("invalid options: startAt and endAt must be times, startAt first"),
-    )
+    return refuse("startAt and endAt must be times, startAt first")
+  }
+  if (typeof filters !== "object" || filters === null) return refuse("filters must be an object")
+  const sent: Record<string, string> = {}
+  for (const [name, value] of Object.entries(filters)) {
+    if (!(UMAMI_FILTER_NAMES as readonly string[]).includes(name)) {
+      return refuse(`filters.${name} is not a filter Umami takes`)
+    }
+    if (typeof value !== "string" || value === "" || value.includes(",")) {
+      return refuse(`filters.${name} must be a value without a comma`)
+    }
+    // `eq.` makes Umami match the value as written, whatever it starts with.
+    sent[name] = `eq.${value}`
   }
   return getJson(
     options,
     `websites/${websiteId}/${report}`,
-    { startAt: Math.trunc(startAt), endAt: Math.trunc(endAt), ...query, ...filters },
+    { ...sent, startAt: Math.trunc(startAt), endAt: Math.trunc(endAt), ...query },
     parse,
   )
+}
+
+/** A non-empty string, for a name the request needs. */
+const isName = (value: unknown): value is string => typeof value === "string" && value.trim() !== ""
+
+/** Whether `Intl` knows the time zone. */
+const isTimeZone = (value: unknown): value is string => {
+  if (!isName(value)) return false
+  try {
+    new Intl.DateTimeFormat("en", { timeZone: value })
+    return true
+  } catch {
+    return false
+  }
 }
 
 /**
@@ -600,13 +647,21 @@ export const readUmamiStats = (options: UmamiWebsiteRead): Promise<UmamiReadResu
  */
 export const readUmamiMetrics = (
   options: UmamiWebsiteRead & { type: UmamiMetricType; limit?: number },
-): Promise<UmamiReadResult<UmamiMetric[]>> =>
-  readWebsite(
+): Promise<UmamiReadResult<UmamiMetric[]>> => {
+  if (!(UMAMI_METRIC_TYPES as readonly unknown[]).includes(options?.type)) {
+    return Promise.resolve(readFailure("invalid options: type is not a breakdown Umami offers"))
+  }
+  const limit = options.limit
+  if (limit !== undefined && (!Number.isInteger(limit) || limit <= 0)) {
+    return Promise.resolve(readFailure("invalid options: limit must be a positive whole number"))
+  }
+  return readWebsite(
     options,
     "metrics",
-    { type: options?.type, limit: options?.limit },
+    { type: options.type, limit },
     (body) => parseRows(body, "x", "y"),
   )
+}
 
 /**
  * Reads page views and visitors per `unit` of a period, in `timezone` (Umami's
@@ -615,19 +670,25 @@ export const readUmamiMetrics = (
  */
 export const readUmamiPageviews = (
   options: UmamiWebsiteRead & {
-    unit: "hour" | "day" | "month"
+    unit: typeof UMAMI_SERIES_UNITS[number]
     /** An IANA time zone, such as `"Asia/Ho_Chi_Minh"`. */
     timezone: string
     compare?: boolean
   },
-): Promise<UmamiReadResult<UmamiPageviews>> =>
-  readWebsite(
+): Promise<UmamiReadResult<UmamiPageviews>> => {
+  if (!(UMAMI_SERIES_UNITS as readonly unknown[]).includes(options?.unit)) {
+    return Promise.resolve(readFailure("invalid options: unit must be hour, day or month"))
+  }
+  if (!isTimeZone(options.timezone)) {
+    return Promise.resolve(readFailure("invalid options: timezone is not a time zone"))
+  }
+  return readWebsite(
     options,
     "pageviews",
     {
-      unit: options?.unit,
-      timezone: options?.timezone,
-      compare: options?.compare ? "prev" : undefined,
+      unit: options.unit,
+      timezone: options.timezone,
+      compare: options.compare ? "prev" : undefined,
     },
     (body) => {
       const series = parseSeries(body)
@@ -638,6 +699,7 @@ export const readUmamiPageviews = (
       return previous ? { ...series, compare: previous } : undefined
     },
   )
+}
 
 /**
  * Reads how many custom events carried each value of one property, most first, such as the item
@@ -646,13 +708,19 @@ export const readUmamiPageviews = (
  */
 export const readUmamiEventValues = (
   options: UmamiWebsiteRead & { eventName: string; propertyName: string },
-): Promise<UmamiReadResult<UmamiPropertyValue[]>> =>
-  readWebsite(
+): Promise<UmamiReadResult<UmamiPropertyValue[]>> => {
+  if (!isName(options?.eventName) || !isName(options.propertyName)) {
+    return Promise.resolve(
+      readFailure("invalid options: eventName and propertyName must not be empty"),
+    )
+  }
+  return readWebsite(
     options,
     "event-data/values",
-    { eventName: options?.eventName, propertyName: options?.propertyName },
+    { eventName: options.eventName, propertyName: options.propertyName },
     (body) => parseRows(body, "value", "total"),
   )
+}
 
 /**
  * Checks that the token is accepted and can view the website, and says which of the two failed:
@@ -669,11 +737,14 @@ export const checkUmamiWebsite = async (
     problem,
   })
   if (typeof options !== "object" || options === null) {
-    return fail("invalid options: expected an options object", "unreachable")
+    return fail("invalid options: expected an options object", "settings")
   }
   if (typeof options.websiteId !== "string" || !UUID_PATTERN.test(options.websiteId)) {
     return fail("invalid options: websiteId must be a UUID", "website")
   }
+  const connection = checkConnection(options)
+  if (typeof connection === "string") return fail(connection, "settings")
+  if (!isName(options.token)) return fail("invalid options: token is empty", "settings")
   const website = await getJson(
     options,
     `websites/${options.websiteId}`,

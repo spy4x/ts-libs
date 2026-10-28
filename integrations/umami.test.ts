@@ -260,7 +260,7 @@ Deno.test("readUmamiStats reads the period's totals and the previous period's", 
   assertEquals(calls[0].authorization, `Bearer ${TOKEN}`)
   assertEquals(
     calls[0].url,
-    `${BASE}/api/websites/${WEBSITE}/stats?startAt=1000&endAt=2000&utmSource=zalo-a`,
+    `${BASE}/api/websites/${WEBSITE}/stats?utmSource=eq.zalo-a&startAt=1000&endAt=2000`,
   )
 })
 
@@ -412,4 +412,64 @@ Deno.test("checkUmamiWebsite calls an outage unreachable without asking about th
   })
   assert(!result.success && result.problem === "unreachable")
   assertEquals(calls.length, 1)
+})
+
+Deno.test("a filter is sent as an exact match, even when it looks like an operator", async () => {
+  const { calls, fetcher } = stub(() => json([]))
+  await readUmamiMetrics({ ...READ, type: "event", filters: { path: "c.shirts" }, fetch: fetcher })
+  assertEquals(new URL(calls[0].url).searchParams.get("path"), "eq.c.shirts")
+})
+
+Deno.test("a filter with a comma, an empty one or an unknown name is refused unsent", async () => {
+  const { calls, fetcher } = stub(() => json([]))
+  const comma = await readUmamiMetrics({
+    ...READ,
+    type: "event",
+    filters: { utmSource: "zalo-a,facebook" },
+    fetch: fetcher,
+  })
+  const empty = await readUmamiStats({ ...READ, filters: { utmSource: "" }, fetch: fetcher })
+  const unknown = await readUmamiStats({
+    ...READ,
+    filters: { startAt: "0" } as unknown as Record<"path", string>,
+    fetch: fetcher,
+  })
+  assertStringIncludes(comma.error, "without a comma")
+  assertStringIncludes(empty.error, "without a comma")
+  assertStringIncludes(unknown.error, "not a filter Umami takes")
+  assertEquals(calls.length, 0)
+})
+
+Deno.test("a read refuses a bad type, limit, unit, time zone or event name unsent", async () => {
+  const { calls, fetcher } = stub(() => json([]))
+  const results = await Promise.all([
+    readUmamiMetrics({ ...READ, type: "city" as "path", fetch: fetcher }),
+    readUmamiMetrics({ ...READ, type: "path", limit: 0, fetch: fetcher }),
+    readUmamiMetrics({ ...READ, type: "path", limit: 2.5, fetch: fetcher }),
+    readUmamiPageviews({ ...READ, unit: "week" as "day", timezone: "UTC", fetch: fetcher }),
+    readUmamiPageviews({ ...READ, unit: "day", timezone: "Mars/Olympus", fetch: fetcher }),
+    readUmamiEventValues({ ...READ, eventName: " ", propertyName: "item", fetch: fetcher }),
+    readUmamiEventValues({ ...READ, eventName: "order-zalo", propertyName: "", fetch: fetcher }),
+  ])
+  for (const result of results) assertStringIncludes(result.error, "invalid options")
+  assertEquals(calls.length, 0)
+})
+
+Deno.test("checkUmamiWebsite calls options that cannot work a settings problem", async () => {
+  const { calls, fetcher } = stub(() => json({}))
+  const noUrl = await checkUmamiWebsite({
+    baseUrl: "ftp://stats.example.com",
+    token: TOKEN,
+    websiteId: WEBSITE,
+    fetch: fetcher,
+  })
+  const noToken = await checkUmamiWebsite({
+    baseUrl: BASE,
+    token: " ",
+    websiteId: WEBSITE,
+    fetch: fetcher,
+  })
+  assert(!noUrl.success && noUrl.problem === "settings")
+  assert(!noToken.success && noToken.problem === "settings")
+  assertEquals(calls.length, 0)
 })
