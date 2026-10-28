@@ -151,6 +151,21 @@ Deno.test(`forms may post to the app's own origin only, unless formAction adds a
     .toContain(`form-action 'self' https://app.example.com`)
 })
 
+Deno.test(`writes style-src-attr only when styleSrcAttr lists a source, and leaves style-src alone`, async () => {
+  const csp = async (options?: Parameters<typeof securityHeaderList>[0]) =>
+    new Map(await securityHeaderList(options)).get(`content-security-policy`)?.split(`; `)
+  const without = await csp()
+  expect(without?.some((d) => d.startsWith(`style-src-attr`))).toBe(false)
+  expect(
+    (await csp({ extraSources: { styleSrcAttr: [] } }))?.some((d) =>
+      d.startsWith(`style-src-attr`)
+    ),
+  ).toBe(false)
+  const withAttr = await csp({ extraSources: { styleSrcAttr: [`'unsafe-inline'`] } })
+  expect(withAttr).toContain(`style-src-attr 'unsafe-inline'`)
+  expect(withAttr).toContain(`style-src 'self'`)
+})
+
 const NOT_ONE_SOURCE: [why: string, value: string][] = [
   [`a second directive`, `https://a.example.com;script-src`],
   [`a second policy`, `https://a.example.com,default-src`],
@@ -184,6 +199,7 @@ Deno.test(`refuses a value that is not one source in every directive, in the lis
     `workerSrc`,
     `manifestSrc`,
     `formAction`,
+    `styleSrcAttr`,
   ] as const
   for (const key of keys) {
     const options = { extraSources: { [key]: [`https://a.example.com;script-src`] } }

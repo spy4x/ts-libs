@@ -47,7 +47,8 @@ export type ExtraSources = Partial<
     | "mediaSrc"
     | "workerSrc"
     | "manifestSrc"
-    | "formAction",
+    | "formAction"
+    | "styleSrcAttr",
     readonly string[]
   >
 >
@@ -63,7 +64,10 @@ export interface SecurityHeadersOptions {
    * Sources to allow beyond `'self'`, such as `https://cdn.example.com` in `imgSrc`. A service
    * worker served from the app's own origin needs none: `workerSrc` falls back to `script-src`.
    * `formAction` also limits where a form's post may be redirected, so a page whose form ends on
-   * another origin names that origin there.
+   * another origin names that origin there. `styleSrcAttr` adds a `style-src-attr` directive, which
+   * has no default and is written only when the list is not empty: `["'unsafe-inline'"]` allows
+   * `style` attributes, such as colours a component sets from data, while `<style>` blocks and
+   * stylesheets stay on `style-src`.
    */
   extraSources?: ExtraSources
 }
@@ -127,6 +131,7 @@ export async function securityHeaderList(
       ...optional(`mediaSrc`),
       ...optional(`workerSrc`),
       ...optional(`manifestSrc`),
+      ...(extra.styleSrcAttr?.length ? { styleSrcAttr: more(`styleSrcAttr`) } : {}),
     },
     xFrameOptions: `DENY`,
     referrerPolicy: `no-referrer`,

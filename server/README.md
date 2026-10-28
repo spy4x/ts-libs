@@ -166,7 +166,9 @@ worker from the app's own origin needs nothing extra. `extraSources` appends sou
 (`scriptSrc`, `styleSrc`, `imgSrc`, `connectSrc`, `fontSrc`, `mediaSrc`, `workerSrc`,
 `manifestSrc`, `formAction`) and never replaces the defaults. `formAction` also limits where a
 form's post may be redirected, so a page whose form ends on another origin names that origin there.
-Each value is one source: an empty value, or one with whitespace, `;`, `,` or a character outside
+`styleSrcAttr` writes a `style-src-attr` directive, only when it lists a source:
+`["'unsafe-inline'"]` allows `style` attributes (colours a component sets from data) while
+`<style>` blocks and stylesheets stay on `style-src`. Each value is one source: an empty value, or one with whitespace, `;`, `,` or a character outside
 printable ASCII, throws, because it would add a source or a whole directive. The error names the
 key and the position, never the value.
 
