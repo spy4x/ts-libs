@@ -541,14 +541,10 @@ export interface ProductVariant {
    * `?color=red&size=m`. Google crawls it to see the variant's own price and stock.
    */
   url: string
-  /** Defaults to the product's name followed by the colour and size, such as `Linen shirt (Red, M)`. */
-  name?: string
   color?: string
   size?: string
   /** Defaults to the product's images. */
   images?: readonly string[]
-  /** Defaults to the product's price, in the same currency. */
-  price?: number
   /** Defaults to the product's `inStock`. */
   inStock?: boolean
 }
@@ -561,7 +557,7 @@ export interface ProductPage {
   description?: string
   /** Absolute or page-relative addresses of the item's photos. Google requires at least one. */
   images: readonly string[]
-  /** The item's stock-keeping unit; with variants, it is the group's `productGroupID`. */
+  /** The item's stock-keeping unit. Required with variants: it is the group's `productGroupID`. */
   sku?: string
   brand?: string
   /** The item's category as the shop names it, such as `Clothing > Shirts`. */
@@ -576,7 +572,10 @@ export interface ProductPage {
   inStock: boolean
   /** Who sells the item: an `@id` reference to a node the page already has, or a full node. */
   seller?: { id: string } | JsonLdPerson
-  /** Every variant the page lets a buyer choose, sold-out ones included. */
+  /**
+   * Every variant the page lets a buyer choose, sold-out ones included. Each is named after the
+   * product, its colour and its size, such as `Linen shirt (Red, M)`, and costs the product's price.
+   */
   variants?: readonly ProductVariant[]
 }
 
@@ -613,10 +612,10 @@ export interface ProductGroupJsonLd {
   name: string
   description?: string
   url: string
-  productGroupID?: string
+  productGroupID: string
   brand?: { "@type": "Brand"; name: string }
   category?: string
-  variesBy: string[]
+  variesBy?: string[]
   hasVariant: ProductJsonLd[]
 }
 
@@ -649,15 +648,16 @@ function offerPrice(amount: number, currency: string, label: string): number {
  * every variant (https://developers.google.com/search/docs/appearance/structured-data/product-variants):
  * the group carries the shared fields and `variesBy`, and each variant its own `sku`, colour, size,
  * images and offer, whose `url` preselects it. Sold-out variants stay listed, as `OutOfStock`.
- * `variesBy` names `color` and `size` when any variant sets them.
+ * `variesBy` names `color` and `size` when any variant sets them, and is left out when none does.
+ * The group's `productGroupID` is the product's `sku`, which Google requires for a group.
  *
  * Every offer is new (`NewCondition`) and priced exactly in the currency's own decimals — none
  * for `VND`, two for `USD` — from a whole number in its smallest unit. Like the other nodes here it
  * carries no `@context`; print it with {@link jsonLdText}. Its `@id` is the canonical address plus
  * `#product`.
  *
- * @throws When an address is not an `http`/`https` URL, there is no image, or a price is not a
- *   whole, non-negative number.
+ * @throws When an address is not an `http`/`https` URL, there is no image, a price is not a
+ *   whole, non-negative number, or variants are given without a `sku`.
  */
 export function productJsonLd(page: ProductPage): ProductJsonLd | ProductGroupJsonLd {
   const canonical = canonicalUrl(page.url).href
@@ -708,6 +708,9 @@ export function productJsonLd(page: ProductPage): ProductJsonLd | ProductGroupJs
   }
 
   const variants = page.variants
+  if (page.sku === undefined || page.sku.trim() === "") {
+    throw new Error(`product with variants needs a sku for its productGroupID: ${canonical}`)
+  }
   const variesBy = (["color", "size"] as const)
     .filter((key) => variants.some((variant) => variant[key] !== undefined))
     .map((key) => `https://schema.org/${key}`)
@@ -718,21 +721,20 @@ export function productJsonLd(page: ProductPage): ProductJsonLd | ProductGroupJs
     name: page.name,
     ...shared,
     url: canonical,
-    ...(page.sku === undefined ? {} : { productGroupID: page.sku }),
-    variesBy,
+    productGroupID: page.sku,
+    ...(variesBy.length === 0 ? {} : { variesBy }),
     hasVariant: variants.map((variant) => {
       const traits = [variant.color, variant.size].filter((trait) => trait !== undefined)
       return {
         "@type": "Product",
-        name: variant.name ??
-          (traits.length === 0 ? page.name : `${page.name} (${traits.join(", ")})`),
+        name: traits.length === 0 ? page.name : `${page.name} (${traits.join(", ")})`,
         image: images(variant.images ?? page.images),
         sku: variant.sku,
         ...(variant.color === undefined ? {} : { color: variant.color }),
         ...(variant.size === undefined ? {} : { size: variant.size }),
         offers: offer(
           webUrl(variant.url, "variant url", base).href,
-          variant.price ?? page.price,
+          page.price,
           variant.inStock ?? page.inStock,
         ),
       }

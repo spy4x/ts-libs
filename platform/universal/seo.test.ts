@@ -760,7 +760,6 @@ describe("productJsonLd", () => {
           color: "Blue",
           size: "M",
           images: ["/img/linen-blue.jpg"],
-          price: 270000,
         },
       ],
     })
@@ -787,9 +786,6 @@ describe("productJsonLd", () => {
             "Blue",
             "M",
             "?color=blue&size=m",
-            {
-              price: 270000,
-            },
           ),
           image: ["https://shop.example/img/linen-blue.jpg"],
         },
@@ -803,6 +799,24 @@ describe("productJsonLd", () => {
       variants: [{ sku: "A", url: "?size=s", size: "S" }, { sku: "B", url: "?size=m", size: "M" }],
     }) as { variesBy: string[] }
     expect(node.variesBy).toEqual(["https://schema.org/size"])
+  })
+
+  it("refuses variants without a sku, which Google requires as the productGroupID", () => {
+    const variants = [{ sku: "A", url: "?size=s", size: "S" }]
+    expect(() => productJsonLd({ ...SHIRT, sku: undefined, variants })).toThrow(
+      "product with variants needs a sku for its productGroupID",
+    )
+    expect(() => productJsonLd({ ...SHIRT, sku: " ", variants })).toThrow(
+      "product with variants needs a sku for its productGroupID",
+    )
+  })
+
+  it("leaves variesBy out when no variant sets a colour or a size", () => {
+    const node = productJsonLd({
+      ...SHIRT,
+      variants: [{ sku: "A", url: "?v=a" }, { sku: "B", url: "?v=b", inStock: false }],
+    })
+    expect("variesBy" in node).toBe(false)
   })
 
   it("prints safely inside a script element through jsonLdText", () => {
