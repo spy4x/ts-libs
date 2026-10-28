@@ -5,6 +5,7 @@ import {
   nginxAddHeaders,
   securityHeaderList,
   securityHeaders,
+  withScriptNonce,
   withSecurityHeaders,
 } from "./security-headers.ts"
 
@@ -164,6 +165,26 @@ Deno.test(`writes style-src-attr only when styleSrcAttr lists a source, and leav
   const withAttr = await csp({ extraSources: { styleSrcAttr: [`'unsafe-inline'`] } })
   expect(withAttr).toContain(`style-src-attr 'unsafe-inline'`)
   expect(withAttr).toContain(`style-src 'self'`)
+})
+
+Deno.test(`allows one render's nonce in script-src and changes nothing else`, async () => {
+  const list = await securityHeaderList({ extraSources: { scriptSrc: [`https://a.example.com`] } })
+  const csp = (headers: [string, string][]) =>
+    new Map(headers).get(`content-security-policy`)?.split(`; `)
+  for (const nonce of [`0f9a3c`, `aB3+/x_-==`]) {
+    const allowed = withScriptNonce(list, nonce)
+    expect(csp(allowed)).toContain(`script-src 'self' https://a.example.com 'nonce-${nonce}'`)
+    expect(csp(allowed)?.filter((d) => d.includes(`nonce-`))).toHaveLength(1)
+    expect(allowed.filter(([name]) => name !== `content-security-policy`))
+      .toEqual(list.filter(([name]) => name !== `content-security-policy`))
+  }
+})
+
+Deno.test(`ignores a nonce that is not base64 or hex, so it cannot add a source or a directive`, async () => {
+  const list = await securityHeaderList()
+  for (const nonce of [`abc'; script-src *`, `abc *`, `abc;x`, ``, `ab=c`, 42, undefined, null]) {
+    expect(withScriptNonce(list, nonce)).toEqual(list)
+  }
 })
 
 const NOT_ONE_SOURCE: [why: string, value: string][] = [

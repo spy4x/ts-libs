@@ -4581,8 +4581,8 @@ try {
 
 ## `server/http/security-headers`
 
-`securityHeaders`, `securityHeaderList`, `withSecurityHeaders`, `nginxAddHeaders`,
-`inlineBlockHashes` and the types
+`securityHeaders`, `securityHeaderList`, `withSecurityHeaders`, `withScriptNonce`,
+`nginxAddHeaders`, `inlineBlockHashes` and the types
 `SecurityHeadersOptions`, `ExtraSources` and `NginxAddHeadersOptions`.
 
 `await securityHeaders({ shellHtml, extraSources })` returns Hono middleware over `secureHeaders`:
@@ -4609,6 +4609,11 @@ is removed. It returns a copy, because a response from `fetch` or `Response.redi
 header is set on it; the copy takes over the body, status and status text. A WebSocket upgrade
 (status 101), or any other status outside 200 to 599, cannot be rebuilt and is returned unchanged,
 without the headers.
+
+`withScriptNonce(headers, nonce)` returns a copy of the list whose `script-src` also allows
+`'nonce-<nonce>'`, for a page rendered with a nonce of its own, such as the one Fresh gives each
+inline script it writes. Only a nonce of base64 or hex characters is used; any other value,
+a non-string included, returns the list unchanged.
 
 ```ts
 const headers = await securityHeaderList({

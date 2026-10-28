@@ -2047,6 +2047,7 @@ inlineBlockHashes	function	@spy4x/server/http/security-headers	The base64 SHA-25
 nginxAddHeaders	function	@spy4x/server/http/security-headers	Renders headers as nginx configuration for an `include` file: one `add_header <name> "<value>" always;` line each, every line ended by a newline, so nginx sends them with error pages too.
 securityHeaderList	function	@spy4x/server/http/security-headers	The headers securityHeaders sets, as `[name, value]` pairs with the names in lower case, for a server the middleware cannot run in: pass the list to `new Headers(list)`, set each pair on a response, or render it with nginxAddHeaders.
 securityHeaders	function	@spy4x/server/http/security-headers	Middleware that sets the headers on every response.
+withScriptNonce	function	@spy4x/server/http/security-headers	A copy of `headers` whose Content-Security-Policy also allows scripts that carry `nonce`, for a page rendered with a nonce made for that render (Fresh puts one on each inline script it writes).
 withSecurityHeaders	function	@spy4x/server/http/security-headers	A copy of `response` that carries `headers`, for a server securityHeaders cannot run in (Fresh, `Deno.serve`, a worker).
 FORWARDED_HEADERS	constant	@spy4x/server/http/trusted-proxy	The three headers in which a request names the client it came from, and which clientIp reads when told to trust a proxy.
 IsProxyPeer	type	@spy4x/server/http/trusted-proxy	Tells whether a connection's peer address is one of the trusted proxies.
@@ -2728,4 +2729,4 @@ firstIssueMessage	function	@spy4x/validation/validate	First issue message in a v
 isArkErrors	function	@spy4x/validation/validate	Whether a value is an arktype rejection, without relying on `instanceof`.
 toValidationError	function	@spy4x/validation/validate	Build a ValidationError from arktype's issues.
 validate	function	@spy4x/validation/validate	Parse `value` with an arktype schema exactly once.
-# export surface: sha256 0f2e079564f08c2a7f3033b9ea06a586e0215a81cc672c1b869e546591fdcd7b
+# export surface: sha256 4e06f5bfe14597c0e0917e4536e2dd6a9c45e9f418d2be51d6cf4edf352c492c
