@@ -268,6 +268,9 @@ HealthchecksPing	interface	@spy4x/integrations	One ping to send through Healthch
 HealthchecksResult	type	@spy4x/integrations	Outcome of HealthchecksClient.ping.
 HealthchecksRetryOptions	interface	@spy4x/integrations	Overrides for the client's default retry policy.
 HealthchecksSuccess	interface	@spy4x/integrations	A ping that reached healthchecks.io and was accepted.
+INDEXNOW_MAX_URLS	constant	@spy4x/integrations	The most addresses IndexNow accepts in one submission.
+IndexNowOptions	interface	@spy4x/integrations	Options for submitIndexNow.
+IndexNowResult	interface	@spy4x/integrations	Outcome of a submission: `output` describes what happened on success, `error` on failure.
 NotificationSeverity	enum	@spy4x/integrations	Severity gate.
 NtfyClient	class	@spy4x/integrations	ntfy client.
 NtfyErrorCode	type	@spy4x/integrations	Failure reasons `push` can report.
@@ -299,6 +302,7 @@ purgeUrls	function	@spy4x/integrations	Purges `urls` from a Cloudflare zone, 30 
 releaseResponseBody	function	@spy4x/integrations	Releases a response's body without reading it.
 runWithRetry	function	@spy4x/integrations	Runs `attempt` under `policy`.
 settle	function	@spy4x/integrations	Consumes whatever a `Sleeper` returned.
+submitIndexNow	function	@spy4x/integrations	Submits `urls` to IndexNow and reports the outcome.
 verifyWebhookRequest	function	@spy4x/integrations	Verifies one inbound delivery.
 CloudflarePurgeOptions	interface	@spy4x/integrations/cloudflare	Options for purgeUrls.
 CloudflarePurgeResult	interface	@spy4x/integrations/cloudflare	Outcome of a purge: `output` describes what happened on success, `error` on failure.
@@ -313,6 +317,10 @@ HealthchecksResult	type	@spy4x/integrations/healthchecks	Outcome of Healthchecks
 HealthchecksRetryOptions	interface	@spy4x/integrations/healthchecks	Overrides for the client's default retry policy.
 HealthchecksSuccess	interface	@spy4x/integrations/healthchecks	A ping that reached healthchecks.io and was accepted.
 healthchecksConfigFromEnv	function	@spy4x/integrations/healthchecks	Reads a ping URL from an environment reader.
+INDEXNOW_MAX_URLS	constant	@spy4x/integrations/indexnow	The most addresses IndexNow accepts in one submission.
+IndexNowOptions	interface	@spy4x/integrations/indexnow	Options for submitIndexNow.
+IndexNowResult	interface	@spy4x/integrations/indexnow	Outcome of a submission: `output` describes what happened on success, `error` on failure.
+submitIndexNow	function	@spy4x/integrations/indexnow	Submits `urls` to IndexNow and reports the outcome.
 NotificationSeverity	enum	@spy4x/integrations/ntfy	Severity gate.
 NtfyClient	class	@spy4x/integrations/ntfy	ntfy client.
 NtfyErrorCode	type	@spy4x/integrations/ntfy	Failure reasons `push` can report.
@@ -2682,4 +2690,4 @@ firstIssueMessage	function	@spy4x/validation/validate	First issue message in a v
 isArkErrors	function	@spy4x/validation/validate	Whether a value is an arktype rejection, without relying on `instanceof`.
 toValidationError	function	@spy4x/validation/validate	Build a ValidationError from arktype's issues.
 validate	function	@spy4x/validation/validate	Parse `value` with an arktype schema exactly once.
-# export surface: sha256 5a87eae1180aac560173aca68f219c08bb164eb26a3bf08a7082c1ca5e667091
+# export surface: sha256 b5c7312faf13983e1c3795d209dace2c65d8f7beba78de13b2249e047e27fcb4
