@@ -18,19 +18,19 @@ Runs on: server (Deno).
 
 ## Entry points
 
-| Export              | What it is                                                                     |
-| ------------------- | ------------------------------------------------------------------------------ |
-| `.` (`mod.ts`)      | Barrel.                                                                        |
-| `./ntfy`            | `NtfyClient`, `ntfyConfigFromEnv`, `NotificationSeverity`, `NtfyPriority`      |
-| `./healthchecks`    | `HealthchecksClient`, `healthchecksConfigFromEnv`, `HealthchecksOutcome`       |
-| `./cloudflare`      | `purgeUrls` — Cloudflare cache purge by URL                                    |
-| `./indexnow`        | `submitIndexNow` — tell search engines which pages changed                     |
-| `./umami`           | `createUmamiLink`, `checkUmami`, `umamiLinkUrl` — self-hosted Umami links      |
-| `./webhooks`        | `verifyWebhookRequest` — inbound HMAC-SHA256 verification, Stripe's layout too |
-| `./push`            | `createWebPushSender`, `generateVapidKeyPair` — Web Push to a user's devices   |
-| `./push-file-store` | `createFilePushSubscriptionStore` — push subscriptions in one JSON file        |
-| `./push-reminders`  | `createReminderNotify`, `reminderPushMessage`, `reminderDeliveryOutcome`       |
-| `./telegram`        | `TelegramClient`, `TelegramBot`, `createTelegramWebhookHandler`, polling       |
+| Export              | What it is                                                                        |
+| ------------------- | --------------------------------------------------------------------------------- |
+| `.` (`mod.ts`)      | Barrel.                                                                           |
+| `./ntfy`            | `NtfyClient`, `ntfyConfigFromEnv`, `NotificationSeverity`, `NtfyPriority`         |
+| `./healthchecks`    | `HealthchecksClient`, `healthchecksConfigFromEnv`, `HealthchecksOutcome`          |
+| `./cloudflare`      | `purgeUrls` — Cloudflare cache purge by URL                                       |
+| `./indexnow`        | `submitIndexNow` — tell search engines which pages changed                        |
+| `./umami`           | `createUmamiLink`, `checkUmami`, `umamiLinkUrl`, `readUmami*` — self-hosted Umami |
+| `./webhooks`        | `verifyWebhookRequest` — inbound HMAC-SHA256 verification, Stripe's layout too    |
+| `./push`            | `createWebPushSender`, `generateVapidKeyPair` — Web Push to a user's devices      |
+| `./push-file-store` | `createFilePushSubscriptionStore` — push subscriptions in one JSON file           |
+| `./push-reminders`  | `createReminderNotify`, `reminderPushMessage`, `reminderDeliveryOutcome`          |
+| `./telegram`        | `TelegramClient`, `TelegramBot`, `createTelegramWebhookHandler`, polling          |
 
 ## Contracts
 
@@ -291,6 +291,27 @@ places apart. Each function returns `{ success, output, error }` and never throw
   (control characters removed, the token replaced by `<REDACTED:TOKEN>`, cut to 200 characters),
   and a transport failure names only the error class. Answers are read under a 64 KiB cap.
 - **Timeout.** Each request runs under `AbortSignal.timeout(requestTimeoutMs)`, 10 s by default.
+
+### `readUmamiStats`, `readUmamiMetrics`, `readUmamiPageviews`, `readUmamiEventValues`, `checkUmamiWebsite` — a website's numbers
+
+Each read takes `{ baseUrl, token, websiteId, startAt, endAt, filters?, fetch?, requestTimeoutMs? }`
+(times in milliseconds) and returns `{ success, output, error }`, plus the HTTP `status` on a
+failure (`null` when Umami did not answer), so a caller tells a refused token from an outage.
+`filters` narrows every count to events that match, such as `{ utmSource: "zalo-a" }` or
+`{ path: "/shirts/linen" }`.
+
+- **`readUmamiStats`**: the period's `pageviews`, `visitors`, `visits`, `bounces` and `totaltime`,
+  and the same under `comparison` for the period of the same length just before.
+- **`readUmamiMetrics({ type, limit? })`**: rows `{ x, y }`, largest first. For `type: "event"`, `y`
+  counts the custom events of each name; for the others (`path`, `utmSource` and the rest), the
+  visitors who viewed a page with that value.
+- **`readUmamiPageviews({ unit, timezone, compare? })`**: `pageviews` and `sessions` per unit, and
+  the previous period's under `compare`. Umami leaves out a unit with nothing in it.
+- **`readUmamiEventValues({ eventName, propertyName })`**: how many events carried each value of a
+  property, such as the item of an `order-telegram` event.
+- **`checkUmamiWebsite({ baseUrl, token, websiteId })`** says why a website cannot be read:
+  `problem` is `token` (Umami refuses it), `website` (the token works, but sees no website with that
+  id) or `unreachable`.
 
 ### `verifyWebhookRequest`
 
