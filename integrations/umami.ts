@@ -1,5 +1,6 @@
 /**
- * A small client for a self-hosted Umami (v3): short links and a reachability check.
+ * A small client for a self-hosted Umami (v3): short links, a reachability check, and reads of a
+ * website's numbers (totals, breakdowns, series and event properties).
  *
  * Umami's Links (`POST /api/links`) count every visit to `<umami>/q/<slug>` and then redirect to
  * the link's `url`. A product makes one link per place it shares an address in (a group, a social
@@ -17,8 +18,9 @@
  *    message, with control characters removed, the token replaced by `<REDACTED:TOKEN>` and the
  *    length capped. Answers are read under a 64 KiB cap.
  *
- * Shapes checked against Umami's source, `src/app/api/links/route.ts` and
- * `src/app/(collect)/q/[slug]/route.ts` (v3.4).
+ * Shapes checked against Umami's source, `src/app/api/links/route.ts`,
+ * `src/app/(collect)/q/[slug]/route.ts` and `src/app/api/websites/[websiteId]/{stats,metrics,
+ * pageviews,event-data/values}/route.ts` (v3.4).
  * @module
  */
 
@@ -312,4 +314,454 @@ export const checkUmami = async (options: UmamiConnection): Promise<UmamiCheckRe
       error: `request failed (${describeThrown(cause, requestTimeoutMs)})`,
     }
   }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Reading a website's numbers
+// ---------------------------------------------------------------------------------------------
+
+/** A report answer is a few hundred rows at most; anything past this is not one. */
+const MAX_REPORT_BYTES = 512 * 1024
+
+/** The filters Umami's website reports take. */
+export const UMAMI_FILTER_NAMES = [
+  "path",
+  "referrer",
+  "title",
+  "query",
+  "hostname",
+  "event",
+  "tag",
+  "utmSource",
+  "utmMedium",
+  "utmCampaign",
+  "utmContent",
+  "utmTerm",
+] as const
+
+/**
+ * One of {@link UMAMI_FILTER_NAMES}. Each filter matches one value exactly: the client sends it as
+ * Umami's `eq.<value>`, so a value that starts like an operator (`c.`, `re.`) is still matched as
+ * written. A value may not hold a comma, which Umami would read as a list of values.
+ */
+export type UmamiFilterName = typeof UMAMI_FILTER_NAMES[number]
+
+/** What every read of a website's numbers needs. */
+export interface UmamiWebsiteRead extends UmamiConnection {
+  /** A Bearer token of an Umami user who may view the website. Never logged. */
+  token: string
+  /** The website's id, from its settings in Umami. */
+  websiteId: string
+  /** The period's start, in milliseconds since the epoch. */
+  startAt: number
+  /** The period's end, in milliseconds since the epoch. */
+  endAt: number
+  /**
+   * Narrows every count to events whose value equals the one given, such as
+   * `{ utmSource: "zalo-a" }`. A value with a comma, or an empty one, is refused.
+   */
+  filters?: Partial<Record<UmamiFilterName, string>>
+}
+
+/**
+ * Outcome of a read. A failure carries the HTTP `status` Umami answered, or `null` when it did not
+ * answer or the options were wrong, so a caller can tell a refused token (`401`) from an outage.
+ */
+export type UmamiReadResult<T> =
+  | { success: true; output: T; error: "" }
+  | { success: false; output: null; error: string; status: number | null }
+
+/** A website's totals over a period: Umami's `/stats`. */
+export interface UmamiTotals {
+  pageviews: number
+  /** People, each counted once. */
+  visitors: number
+  /** Sessions: one person's pages until 30 minutes pass without one. */
+  visits: number
+  bounces: number
+  /** Seconds spent, summed over the visits. */
+  totaltime: number
+}
+
+/** {@link UmamiTotals} of the period and of the period of the same length just before it. */
+export interface UmamiStats extends UmamiTotals {
+  comparison: UmamiTotals
+}
+
+/** One row of a breakdown: a value (`x`, such as a path or an event name) and its count (`y`). */
+export interface UmamiMetric {
+  x: string
+  y: number
+}
+
+/** What a breakdown can count by, in Umami's names. */
+export const UMAMI_METRIC_TYPES = [
+  "path",
+  "entry",
+  "exit",
+  "referrer",
+  "title",
+  "query",
+  "hostname",
+  "event",
+  "tag",
+  "utmSource",
+  "utmMedium",
+  "utmCampaign",
+  "utmContent",
+  "utmTerm",
+  "browser",
+  "os",
+  "device",
+  "language",
+  "country",
+] as const
+
+/** One of {@link UMAMI_METRIC_TYPES}: page views and visits by these, events by `event`. */
+export type UmamiMetricType = typeof UMAMI_METRIC_TYPES[number]
+
+/** The units a series can step by. */
+export const UMAMI_SERIES_UNITS = ["hour", "day", "month"] as const
+
+/** One point of a series: the start of its unit as Umami prints it (`x`), and a count (`y`). */
+export interface UmamiPoint {
+  x: string
+  y: number
+}
+
+/** Page views and visitors per unit of time. */
+export interface UmamiSeries {
+  pageviews: UmamiPoint[]
+  /** People per unit, each counted once in it. */
+  sessions: UmamiPoint[]
+}
+
+/** {@link UmamiSeries}, with the previous period's when `compare` was asked for. */
+export interface UmamiPageviews extends UmamiSeries {
+  compare: UmamiSeries | null
+}
+
+/** How many events carried one value of a property. */
+export interface UmamiPropertyValue {
+  value: string
+  total: number
+}
+
+/**
+ * Why {@link checkUmamiWebsite} failed: `settings` for options that cannot work (no `http`/`https`
+ * base address, an empty token, a bad timeout), `website` for a website id that is no UUID or that
+ * the token cannot see, `token` for a token Umami refuses, `unreachable` for anything else.
+ */
+export type UmamiWebsiteProblem = "settings" | "token" | "website" | "unreachable"
+
+/** Outcome of {@link checkUmamiWebsite}. */
+export type UmamiWebsiteCheck =
+  | { success: true; output: { id: string; name: string }; error: "" }
+  | { success: false; output: null; error: string; problem: UmamiWebsiteProblem }
+
+const readFailure = (error: string, status: number | null = null) => ({
+  success: false as const,
+  output: null,
+  error,
+  status,
+})
+
+/** A count as Umami prints it: a number, or a whole number in a string. `undefined` otherwise. */
+const toCount = (value: unknown): number | undefined => {
+  if (typeof value === "number" && Number.isFinite(value)) return value
+  if (typeof value === "string" && /^-?\d+(\.\d+)?$/.test(value)) return Number(value)
+  return undefined
+}
+
+const parseTotals = (body: unknown): UmamiTotals | undefined => {
+  const row = (body ?? {}) as Record<string, unknown>
+  const totals = {
+    pageviews: toCount(row.pageviews),
+    visitors: toCount(row.visitors),
+    visits: toCount(row.visits),
+    bounces: toCount(row.bounces),
+    totaltime: toCount(row.totaltime),
+  }
+  return Object.values(totals).every((value) => value !== undefined)
+    ? totals as UmamiTotals
+    : undefined
+}
+
+/** Rows of `{ [label]: string, [count]: number }`, or `undefined` when the answer is not a list. */
+const parseRows = <L extends string, C extends string>(
+  body: unknown,
+  label: L,
+  count: C,
+): Array<Record<L, string> & Record<C, number>> | undefined => {
+  if (!Array.isArray(body)) return undefined
+  const rows: Array<Record<L, string> & Record<C, number>> = []
+  for (const item of body) {
+    const row = (item ?? {}) as Record<string, unknown>
+    const value = toCount(row[count])
+    const name = row[label] === null ? "" : row[label]
+    if (typeof name !== "string" || value === undefined) return undefined
+    rows.push({ [label]: name, [count]: value } as Record<L, string> & Record<C, number>)
+  }
+  return rows
+}
+
+const parseSeries = (body: unknown): UmamiSeries | undefined => {
+  const { pageviews, sessions } = (body ?? {}) as Record<string, unknown>
+  const views = parseRows(pageviews, "x", "y")
+  const people = parseRows(sessions, "x", "y")
+  return views && people ? { pageviews: views, sessions: people } : undefined
+}
+
+/**
+ * GETs `<base>/api/<path>` with the token and `query`, and parses the JSON answer with `parse`.
+ * Never throws; a failure names the status and Umami's cleaned message, never the token.
+ */
+const getJson = async <T>(
+  options: UmamiConnection & { token: string },
+  path: string,
+  query: Record<string, string | number | undefined>,
+  parse: (body: unknown) => T | undefined,
+): Promise<UmamiReadResult<T>> => {
+  if (typeof options !== "object" || options === null) {
+    return readFailure("invalid options: expected an options object")
+  }
+  const connection = checkConnection(options)
+  if (typeof connection === "string") return readFailure(connection)
+  const { base, doFetch, requestTimeoutMs } = connection
+  const { token } = options
+  if (typeof token !== "string" || token.trim() === "") {
+    return readFailure("invalid options: token is empty")
+  }
+  const params = new URLSearchParams()
+  for (const [name, value] of Object.entries(query)) {
+    if (value !== undefined) params.set(name, String(value))
+  }
+  const search = params.size === 0 ? "" : `?${params}`
+  try {
+    const response = await doFetch(`${base}/api/${path}${search}`, {
+      headers: { Authorization: `Bearer ${token}`, Accept: "application/json" },
+      signal: AbortSignal.timeout(requestTimeoutMs),
+    })
+    let body: unknown
+    try {
+      body = await readBoundedJson(response, { maxBytes: MAX_REPORT_BYTES, timeoutMs: 5_000 })
+    } catch {
+      body = undefined
+    }
+    if (!response.ok) {
+      return readFailure(
+        `read failed (${describeApiFailure(body, response.status, token)})`,
+        response.status,
+      )
+    }
+    const output = parse(body)
+    return output === undefined
+      ? readFailure(`read failed (HTTP ${response.status}: the answer is not the expected shape)`)
+      : { success: true, output, error: "" }
+  } catch (cause) {
+    return readFailure(`request failed (${describeThrown(cause, requestTimeoutMs)})`)
+  }
+}
+
+/** Checks the period and the website id, then reads `/api/websites/<id>/<report>`. */
+const readWebsite = <T>(
+  options: UmamiWebsiteRead,
+  report: string,
+  query: Record<string, string | number | undefined>,
+  parse: (body: unknown) => T | undefined,
+): Promise<UmamiReadResult<T>> => {
+  if (typeof options !== "object" || options === null) {
+    return Promise.resolve(readFailure("invalid options: expected an options object"))
+  }
+  const { websiteId, startAt, endAt, filters = {} } = options
+  const refuse = (why: string) => Promise.resolve(readFailure(`invalid options: ${why}`))
+  if (typeof websiteId !== "string" || !UUID_PATTERN.test(websiteId)) {
+    return refuse("websiteId must be a UUID")
+  }
+  if (!Number.isFinite(startAt) || !Number.isFinite(endAt) || startAt > endAt) {
+    return refuse("startAt and endAt must be times, startAt first")
+  }
+  if (typeof filters !== "object" || filters === null) return refuse("filters must be an object")
+  const sent: Record<string, string> = {}
+  for (const [name, value] of Object.entries(filters)) {
+    if (!(UMAMI_FILTER_NAMES as readonly string[]).includes(name)) {
+      return refuse(`filters.${name} is not a filter Umami takes`)
+    }
+    if (typeof value !== "string" || value === "" || value.includes(",")) {
+      return refuse(`filters.${name} must be a value without a comma`)
+    }
+    // `eq.` makes Umami match the value as written, whatever it starts with.
+    sent[name] = `eq.${value}`
+  }
+  return getJson(
+    options,
+    `websites/${websiteId}/${report}`,
+    { ...sent, startAt: Math.trunc(startAt), endAt: Math.trunc(endAt), ...query },
+    parse,
+  )
+}
+
+/** A non-empty string, for a name the request needs. */
+const isName = (value: unknown): value is string => typeof value === "string" && value.trim() !== ""
+
+/** Whether `Intl` knows the time zone. */
+const isTimeZone = (value: unknown): value is string => {
+  if (!isName(value)) return false
+  try {
+    new Intl.DateTimeFormat("en", { timeZone: value })
+    return true
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Reads a website's totals over a period, and the same totals over the period of the same length
+ * just before it (Umami's `GET /api/websites/<id>/stats`). Never throws.
+ *
+ * @example
+ * ```ts
+ * const now = Date.now()
+ * const result = await readUmamiStats({
+ *   baseUrl: "https://stats.example.com",
+ *   token,
+ *   websiteId,
+ *   startAt: now - 30 * 86_400_000,
+ *   endAt: now,
+ * })
+ * if (result.success) console.log(result.output.visits, result.output.comparison.visits)
+ * ```
+ */
+export const readUmamiStats = (options: UmamiWebsiteRead): Promise<UmamiReadResult<UmamiStats>> =>
+  readWebsite(options, "stats", {}, (body) => {
+    const totals = parseTotals(body)
+    const comparison = parseTotals((body as { comparison?: unknown } | undefined)?.comparison)
+    return totals && comparison ? { ...totals, comparison } : undefined
+  })
+
+/**
+ * Reads a breakdown of a website's period by `type`, largest first (Umami's
+ * `GET /api/websites/<id>/metrics`). For `event`, `y` counts the custom events of each name; for
+ * the others, the visitors who viewed a page with each value. At most `limit` rows, 500 by default.
+ * Never throws.
+ */
+export const readUmamiMetrics = (
+  options: UmamiWebsiteRead & { type: UmamiMetricType; limit?: number },
+): Promise<UmamiReadResult<UmamiMetric[]>> => {
+  if (!(UMAMI_METRIC_TYPES as readonly unknown[]).includes(options?.type)) {
+    return Promise.resolve(readFailure("invalid options: type is not a breakdown Umami offers"))
+  }
+  const limit = options.limit
+  if (limit !== undefined && (!Number.isInteger(limit) || limit <= 0)) {
+    return Promise.resolve(readFailure("invalid options: limit must be a positive whole number"))
+  }
+  return readWebsite(
+    options,
+    "metrics",
+    { type: options.type, limit },
+    (body) => parseRows(body, "x", "y"),
+  )
+}
+
+/**
+ * Reads page views and visitors per `unit` of a period, in `timezone` (Umami's
+ * `GET /api/websites/<id>/pageviews`). With `compare`, also the period of the same length just
+ * before it. Umami leaves out a unit with nothing in it. Never throws.
+ */
+export const readUmamiPageviews = (
+  options: UmamiWebsiteRead & {
+    unit: typeof UMAMI_SERIES_UNITS[number]
+    /** An IANA time zone, such as `"Asia/Ho_Chi_Minh"`. */
+    timezone: string
+    compare?: boolean
+  },
+): Promise<UmamiReadResult<UmamiPageviews>> => {
+  if (!(UMAMI_SERIES_UNITS as readonly unknown[]).includes(options?.unit)) {
+    return Promise.resolve(readFailure("invalid options: unit must be hour, day or month"))
+  }
+  if (!isTimeZone(options.timezone)) {
+    return Promise.resolve(readFailure("invalid options: timezone is not a time zone"))
+  }
+  return readWebsite(
+    options,
+    "pageviews",
+    {
+      unit: options.unit,
+      timezone: options.timezone,
+      compare: options.compare ? "prev" : undefined,
+    },
+    (body) => {
+      const series = parseSeries(body)
+      if (!series) return undefined
+      const compare = (body as { compare?: unknown }).compare
+      if (compare === undefined) return { ...series, compare: null }
+      const previous = parseSeries(compare)
+      return previous ? { ...series, compare: previous } : undefined
+    },
+  )
+}
+
+/**
+ * Reads how many custom events carried each value of one property, most first, such as the item
+ * of an `order-telegram` event (Umami's `GET /api/websites/<id>/event-data/values`). At most 100
+ * values. Never throws.
+ */
+export const readUmamiEventValues = (
+  options: UmamiWebsiteRead & { eventName: string; propertyName: string },
+): Promise<UmamiReadResult<UmamiPropertyValue[]>> => {
+  if (!isName(options?.eventName) || !isName(options.propertyName)) {
+    return Promise.resolve(
+      readFailure("invalid options: eventName and propertyName must not be empty"),
+    )
+  }
+  return readWebsite(
+    options,
+    "event-data/values",
+    { eventName: options.eventName, propertyName: options.propertyName },
+    (body) => parseRows(body, "value", "total"),
+  )
+}
+
+/**
+ * Checks that the token is accepted and can view the website, and says which of the two failed:
+ * `token` when Umami refuses the token, `website` when the token works but no website with that id
+ * is visible to it, `unreachable` for anything else. Never throws.
+ */
+export const checkUmamiWebsite = async (
+  options: UmamiConnection & { token: string; websiteId: string },
+): Promise<UmamiWebsiteCheck> => {
+  const fail = (error: string, problem: UmamiWebsiteProblem): UmamiWebsiteCheck => ({
+    success: false,
+    output: null,
+    error,
+    problem,
+  })
+  if (typeof options !== "object" || options === null) {
+    return fail("invalid options: expected an options object", "settings")
+  }
+  if (typeof options.websiteId !== "string" || !UUID_PATTERN.test(options.websiteId)) {
+    return fail("invalid options: websiteId must be a UUID", "website")
+  }
+  const connection = checkConnection(options)
+  if (typeof connection === "string") return fail(connection, "settings")
+  if (!isName(options.token)) return fail("invalid options: token is empty", "settings")
+  const website = await getJson(
+    options,
+    `websites/${options.websiteId}`,
+    {},
+    (body) => {
+      const { id, name } = (body ?? {}) as Record<string, unknown>
+      return typeof id === "string" && typeof name === "string" ? { id, name } : null
+    },
+  )
+  if (website.success && website.output !== null) {
+    return { success: true, output: website.output, error: "" }
+  }
+  // An admin's token answers `null` for an id that does not exist.
+  if (website.success) return fail("no website with this id", "website")
+  if (website.status === 404) return fail(website.error, "website")
+  if (website.status !== 401 && website.status !== 403) return fail(website.error, "unreachable")
+  const me = await getJson(options, "me", {}, (body) => body ?? null)
+  if (me.success) return fail("the token cannot view this website", "website")
+  return fail(me.error, me.status === 401 ? "token" : "unreachable")
 }

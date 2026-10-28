@@ -36,18 +36,39 @@ export type { IndexNowOptions, IndexNowResult } from "./indexnow.ts"
 
 export {
   checkUmami,
+  checkUmamiWebsite,
   createUmamiLink,
+  readUmamiEventValues,
+  readUmamiMetrics,
+  readUmamiPageviews,
+  readUmamiStats,
+  UMAMI_FILTER_NAMES,
   UMAMI_LINK_NAME_MAX,
   UMAMI_LINK_URL_MAX,
+  UMAMI_METRIC_TYPES,
+  UMAMI_SERIES_UNITS,
   UMAMI_SLUG_PATTERN,
   umamiLinkUrl,
 } from "./umami.ts"
 export type {
   UmamiCheckResult,
   UmamiConnection,
+  UmamiFilterName,
   UmamiLink,
   UmamiLinkCreateOptions,
   UmamiLinkResult,
+  UmamiMetric,
+  UmamiMetricType,
+  UmamiPageviews,
+  UmamiPoint,
+  UmamiPropertyValue,
+  UmamiReadResult,
+  UmamiSeries,
+  UmamiStats,
+  UmamiTotals,
+  UmamiWebsiteCheck,
+  UmamiWebsiteProblem,
+  UmamiWebsiteRead,
 } from "./umami.ts"
 
 export { NotificationSeverity, NtfyClient, ntfyConfigFromEnv, NtfyPriority } from "./ntfy.ts"
