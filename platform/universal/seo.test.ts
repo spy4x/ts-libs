@@ -8,9 +8,12 @@ import {
   breadcrumbListJsonLd,
   canonicalUrl,
   faqPageJsonLd,
+  itemListJsonLd,
   jsonLdText,
   llmsTxt,
   normalizeCanonical,
+  productJsonLd,
+  type ProductPage,
   rssXml,
   sitemapXml,
 } from "./seo.ts"
@@ -612,5 +615,251 @@ describe("blogPostingJsonLd", () => {
   it("prints safely inside a script element through jsonLdText", () => {
     const text = jsonLdText(blogPostingJsonLd({ ...POST, headline: "</script><script>x()" }))
     expect(text).not.toContain("</script>")
+  })
+})
+
+describe("sitemapXml images", () => {
+  it("writes each image as image:image and declares the image namespace", () => {
+    const xml = sitemapXml([
+      { url: "https://shop.example/shirt", images: ["https://cdn.shop.example/a.jpg?w=1&h=2"] },
+    ])
+
+    expect(xml).toBe(
+      `<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9" xmlns:image="http://www.google.com/schemas/sitemap-image/1.1">
+  <url>
+    <loc>https://shop.example/shirt</loc>
+    <image:image>
+      <image:loc>https://cdn.shop.example/a.jpg?w=1&amp;h=2</image:loc>
+    </image:image>
+  </url>
+</urlset>
+`,
+    )
+  })
+
+  it("parses as XML with the image extension's namespace bound", () => {
+    const xml = sitemapXml([
+      { url: "https://shop.example/a", images: ["https://cdn.shop.example/it's.jpg"] },
+    ])
+    const image = find(parseFeed(xml), "image")
+
+    expect(image?.namespace).toBe("http://www.google.com/schemas/sitemap-image/1.1")
+    expect(image === undefined ? undefined : textOf(image, "loc")).toBe(
+      "https://cdn.shop.example/it's.jpg",
+    )
+  })
+
+  it("leaves the namespace out when no entry has an image", () => {
+    expect(sitemapXml([{ url: "https://shop.example/a", images: [] }])).not.toContain("xmlns:image")
+  })
+
+  it("refuses a relative image address", () => {
+    expect(() => sitemapXml([{ url: "https://shop.example/a", images: ["/a.jpg"] }])).toThrow(
+      "sitemap image must be an absolute URL",
+    )
+  })
+})
+
+/** A shirt page in Vietnamese dong, with no variants. */
+const SHIRT: ProductPage = {
+  url: "https://shop.example/shirts/linen#top",
+  name: "Linen shirt",
+  description: "Loose linen shirt.",
+  images: ["/img/linen-1.jpg", "https://cdn.shop.example/linen-2.jpg"],
+  sku: "LIN-01",
+  brand: "Vi",
+  category: "Clothing > Shirts",
+  price: 250000,
+  currency: "VND",
+  inStock: true,
+  seller: { name: "Vi shop", url: "https://shop.example" },
+}
+
+describe("productJsonLd", () => {
+  it("describes an item with no variants as a Product with one new offer", () => {
+    expect(productJsonLd(SHIRT)).toEqual({
+      "@type": "Product",
+      "@id": "https://shop.example/shirts/linen#product",
+      name: "Linen shirt",
+      description: "Loose linen shirt.",
+      brand: { "@type": "Brand", name: "Vi" },
+      category: "Clothing > Shirts",
+      image: ["https://shop.example/img/linen-1.jpg", "https://cdn.shop.example/linen-2.jpg"],
+      sku: "LIN-01",
+      offers: {
+        "@type": "Offer",
+        url: "https://shop.example/shirts/linen",
+        price: 250000,
+        priceCurrency: "VND",
+        availability: "https://schema.org/InStock",
+        itemCondition: "https://schema.org/NewCondition",
+        seller: { "@type": "Organization", name: "Vi shop", url: "https://shop.example/" },
+      },
+    })
+  })
+
+  it("writes a VND price with no decimals and a USD price with two", () => {
+    const vnd = productJsonLd({ ...SHIRT, price: 199000 }) as { offers: { price: number } }
+    const usd = productJsonLd({ ...SHIRT, price: 1999, currency: "usd" }) as {
+      offers: { price: number; priceCurrency: string }
+    }
+
+    expect(jsonLdText(vnd.offers.price)).toBe("199000")
+    expect(jsonLdText(usd.offers.price)).toBe("19.99")
+    expect(usd.offers.priceCurrency).toBe("USD")
+  })
+
+  it("refuses a fractional, negative or unprintable price", () => {
+    expect(() => productJsonLd({ ...SHIRT, price: 19.99, currency: "USD" })).toThrow(
+      "product price must be a whole, non-negative number",
+    )
+    expect(() => productJsonLd({ ...SHIRT, price: -1 })).toThrow(
+      "product price must be a whole, non-negative number",
+    )
+    expect(() => productJsonLd({ ...SHIRT, price: Number.MAX_SAFE_INTEGER, currency: "USD" }))
+      .toThrow("cannot be written exactly as a JSON number")
+  })
+
+  it("marks a sold-out item OutOfStock", () => {
+    const node = productJsonLd({ ...SHIRT, inStock: false }) as { offers: { availability: string } }
+    expect(node.offers.availability).toBe("https://schema.org/OutOfStock")
+  })
+
+  it("refuses an item with no image or a javascript image", () => {
+    expect(() => productJsonLd({ ...SHIRT, images: [] })).toThrow(
+      "product needs at least one image",
+    )
+    expect(() => productJsonLd({ ...SHIRT, images: ["javascript:alert(1)"] })).toThrow(
+      "product image must be an http or https URL",
+    )
+  })
+
+  it("references a seller by @id when given one", () => {
+    const node = productJsonLd({ ...SHIRT, seller: { id: "https://shop.example/#org" } }) as {
+      offers: { seller: unknown }
+    }
+    expect(node.offers.seller).toEqual({ "@id": "https://shop.example/#org" })
+  })
+
+  it("describes colour × size variants as a ProductGroup listing sold-out ones too", () => {
+    const node = productJsonLd({
+      ...SHIRT,
+      variants: [
+        { sku: "LIN-01-RED-M", url: "?color=red&size=m", color: "Red", size: "M" },
+        {
+          sku: "LIN-01-RED-L",
+          url: "?color=red&size=l",
+          color: "Red",
+          size: "L",
+          inStock: false,
+        },
+        {
+          sku: "LIN-01-BLU-M",
+          url: "?color=blue&size=m",
+          color: "Blue",
+          size: "M",
+          images: ["/img/linen-blue.jpg"],
+          price: 270000,
+        },
+      ],
+    })
+
+    expect(node).toEqual({
+      "@type": "ProductGroup",
+      "@id": "https://shop.example/shirts/linen#product",
+      name: "Linen shirt",
+      description: "Loose linen shirt.",
+      brand: { "@type": "Brand", name: "Vi" },
+      category: "Clothing > Shirts",
+      url: "https://shop.example/shirts/linen",
+      productGroupID: "LIN-01",
+      variesBy: ["https://schema.org/color", "https://schema.org/size"],
+      hasVariant: [
+        variantNode("Linen shirt (Red, M)", "LIN-01-RED-M", "Red", "M", "?color=red&size=m"),
+        variantNode("Linen shirt (Red, L)", "LIN-01-RED-L", "Red", "L", "?color=red&size=l", {
+          availability: "https://schema.org/OutOfStock",
+        }),
+        {
+          ...variantNode(
+            "Linen shirt (Blue, M)",
+            "LIN-01-BLU-M",
+            "Blue",
+            "M",
+            "?color=blue&size=m",
+            {
+              price: 270000,
+            },
+          ),
+          image: ["https://shop.example/img/linen-blue.jpg"],
+        },
+      ],
+    })
+  })
+
+  it("names only the traits the variants vary by", () => {
+    const node = productJsonLd({
+      ...SHIRT,
+      variants: [{ sku: "A", url: "?size=s", size: "S" }, { sku: "B", url: "?size=m", size: "M" }],
+    }) as { variesBy: string[] }
+    expect(node.variesBy).toEqual(["https://schema.org/size"])
+  })
+
+  it("prints safely inside a script element through jsonLdText", () => {
+    const text = jsonLdText(productJsonLd({ ...SHIRT, name: "</script><script>x()" }))
+    expect(text).not.toContain("</script>")
+  })
+})
+
+/** The `Product` node `productJsonLd` writes for one variant of `SHIRT`. */
+function variantNode(
+  name: string,
+  sku: string,
+  color: string,
+  size: string,
+  query: string,
+  offer: Record<string, unknown> = {},
+) {
+  return {
+    "@type": "Product",
+    name,
+    image: ["https://shop.example/img/linen-1.jpg", "https://cdn.shop.example/linen-2.jpg"],
+    sku,
+    color,
+    size,
+    offers: {
+      "@type": "Offer",
+      url: `https://shop.example/shirts/linen${query}`,
+      price: 250000,
+      priceCurrency: "VND",
+      availability: "https://schema.org/InStock",
+      itemCondition: "https://schema.org/NewCondition",
+      seller: { "@type": "Organization", name: "Vi shop", url: "https://shop.example/" },
+      ...offer,
+    },
+  }
+}
+
+describe("itemListJsonLd", () => {
+  it("lists each item's page with its 1-based position, resolved against the list page", () => {
+    expect(
+      itemListJsonLd("https://shop.example/shirts?page=2#grid", [
+        "/shirts/linen",
+        "https://shop.example/shirts/cotton",
+      ]),
+    ).toEqual({
+      "@type": "ItemList",
+      "@id": "https://shop.example/shirts?page=2#itemlist",
+      itemListElement: [
+        { "@type": "ListItem", position: 1, url: "https://shop.example/shirts/linen" },
+        { "@type": "ListItem", position: 2, url: "https://shop.example/shirts/cotton" },
+      ],
+    })
+  })
+
+  it("refuses a javascript item address", () => {
+    expect(() => itemListJsonLd("https://shop.example/", ["javascript:alert(1)"])).toThrow(
+      "item list url must be an http or https URL",
+    )
   })
 })
