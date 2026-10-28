@@ -245,6 +245,22 @@ Deno.test("refuses a non-finite or non-positive maxWidth", () => {
   }
 })
 
+Deno.test("writes the letter's language and direction on the html element", () => {
+  assertStringIncludes(
+    htmlWrap({ body: "<p>hi</p>", lang: "ar", dir: "rtl" }),
+    '<html lang="ar" dir="rtl">',
+  )
+  assertStringIncludes(htmlWrap({ body: "<p>hi</p>", lang: "pt-br" }), '<html lang="pt-BR">')
+})
+
+Deno.test("refuses a lang or dir that could break out of the html element", () => {
+  for (const lang of ['en" onload="x', "", "not a tag"]) {
+    assertThrows(() => htmlWrap({ body: "", lang }), TypeError, "HtmlShellOptions.lang")
+  }
+  const dir = 'rtl" x="' as "rtl"
+  assertThrows(() => htmlWrap({ body: "", dir }), TypeError, "HtmlShellOptions.dir")
+})
+
 Deno.test("overrides the footer signature's wording via signaturePrefix", () => {
   const html = htmlWrap({ body: "<p>hi</p>", brand: "Ben & Co", signaturePrefix: "Courtesy of" })
   assertStringIncludes(html, "Courtesy of Ben &amp; Co</p>")

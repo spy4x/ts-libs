@@ -81,6 +81,17 @@ export interface HtmlShellOptions {
    * client does not fill the preview with body text. Omitted, the output is unchanged.
    */
   preheader?: string
+  /**
+   * The letter's language, a BCP 47 tag such as `de` or `pt-BR`, written to `<html lang>` so
+   * screen readers and clients read it in that language. Default `"en"`. A tag `Intl` does not
+   * accept throws, and the canonical form is written.
+   */
+  lang?: string
+  /**
+   * The letter's direction, written to `<html dir>`: `"rtl"` for Arabic or Hebrew. Omitted, no
+   * `dir` is written and the client's default, left to right, applies. Anything else throws.
+   */
+  dir?: "ltr" | "rtl"
 }
 
 /** The four colours {@link htmlWrap} draws the shell in. */
@@ -170,9 +181,10 @@ export function htmlWrap(options: HtmlShellOptions): string {
     } ${brandAnchor(options, brand, theme)}</p>`
 
   const preheader = options.preheader === undefined ? "" : `${preheaderSpan(options.preheader)}\n`
+  const html = htmlAttributes(options)
 
   return `<!doctype html>
-<html lang="en"><head><meta charset="utf-8"></head>
+<html ${html}><head><meta charset="utf-8"></head>
 <body style="margin:0;padding:24px;background:${theme.background};color:${theme.color};
              font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif;
              font-size:16px;line-height:1.6">
@@ -183,6 +195,28 @@ ${options.footer ?? ""}
 ${signature}
 </div>
 </body></html>`
+}
+
+/**
+ * The `lang` and `dir` attributes of `<html>`. The tag is the canonical form `Intl` gives, which
+ * holds only letters, digits and hyphens, so nothing it carries can close the attribute.
+ *
+ * @throws {TypeError} when `lang` is not a BCP 47 tag or `dir` is not `"ltr"` or `"rtl"`.
+ */
+function htmlAttributes(options: HtmlShellOptions): string {
+  let lang: string
+  try {
+    ;[lang] = Intl.getCanonicalLocales(options.lang ?? "en")
+  } catch {
+    throw new TypeError(
+      `HtmlShellOptions.lang must be a BCP 47 language tag, got ${JSON.stringify(options.lang)}`,
+    )
+  }
+  const dir = options.dir
+  if (dir !== undefined && dir !== "ltr" && dir !== "rtl") {
+    throw new TypeError(`HtmlShellOptions.dir must be "ltr" or "rtl", got ${JSON.stringify(dir)}`)
+  }
+  return dir === undefined ? `lang="${lang}"` : `lang="${lang}" dir="${dir}"`
 }
 
 /** Padding after the preheader so the client shows nothing of the body in the preview. */

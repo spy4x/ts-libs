@@ -234,7 +234,9 @@ value or `htmlWrap` throws, because a colour lands inside a double-quoted
 `style` attribute and an unvalidated one could close it early. `maxWidth`
 (default `480`) is the letter column's width in pixels, and `signaturePrefix`
 (default `"— Sent by"`) is the footer wording before the brand — pass `null`
-to drop the footer line while keeping the header brand block.
+to drop the footer line while keeping the header brand block. `lang` (default
+`"en"`) and `dir` (`"ltr"` or `"rtl"`, omitted by default) go on `<html>`, so a
+letter in Arabic reads right to left; a value outside those throws.
 
 `preheader` is the hidden preview line an inbox shows beside the subject: escaped,
 placed first in `<body>` in an invisible span and padded so the client does not
