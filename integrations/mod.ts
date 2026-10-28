@@ -34,6 +34,22 @@ export type { CloudflarePurgeOptions, CloudflarePurgeResult } from "./cloudflare
 export { INDEXNOW_MAX_URLS, submitIndexNow } from "./indexnow.ts"
 export type { IndexNowOptions, IndexNowResult } from "./indexnow.ts"
 
+export {
+  checkUmami,
+  createUmamiLink,
+  UMAMI_LINK_NAME_MAX,
+  UMAMI_LINK_URL_MAX,
+  UMAMI_SLUG_PATTERN,
+  umamiLinkUrl,
+} from "./umami.ts"
+export type {
+  UmamiCheckResult,
+  UmamiConnection,
+  UmamiLink,
+  UmamiLinkCreateOptions,
+  UmamiLinkResult,
+} from "./umami.ts"
+
 export { NotificationSeverity, NtfyClient, ntfyConfigFromEnv, NtfyPriority } from "./ntfy.ts"
 export type {
   NtfyClientConfig,

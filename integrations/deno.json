@@ -8,6 +8,7 @@
     "./healthchecks": "./healthchecks.ts",
     "./cloudflare": "./cloudflare.ts",
     "./indexnow": "./indexnow.ts",
+    "./umami": "./umami.ts",
     "./push": "./push.ts",
     "./push-file-store": "./push-file-store.ts",
     "./push-reminders": "./push-reminders.ts",

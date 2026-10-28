@@ -287,10 +287,20 @@ RetryPolicy	interface	@spy4x/integrations
 RetryRunOptions	interface	@spy4x/integrations	
 RetryRunResult	interface	@spy4x/integrations	
 Sleeper	type	@spy4x/integrations	Waits a duration.
+UMAMI_LINK_NAME_MAX	constant	@spy4x/integrations	Umami's limits for a link: a name of 100 characters, a url of 500, a slug of 8 to 100.
+UMAMI_LINK_URL_MAX	constant	@spy4x/integrations	
+UMAMI_SLUG_PATTERN	constant	@spy4x/integrations	A slug this client sends: 8 to 100 letters, digits, `-` and `_`, so it is safe in a path.
+UmamiCheckResult	interface	@spy4x/integrations	Outcome of checkUmami: `output` says what was seen on success, `error` on failure.
+UmamiConnection	interface	@spy4x/integrations	Where an Umami instance is, and how to reach it.
+UmamiLink	interface	@spy4x/integrations	A link as Umami stores it.
+UmamiLinkCreateOptions	interface	@spy4x/integrations	Options for createUmamiLink.
+UmamiLinkResult	type	@spy4x/integrations	Outcome of createUmamiLink: the link on success, why not on failure.
 WebhookRejectReason	type	@spy4x/integrations	Why a delivery was rejected.
 WebhookVerifierConfig	interface	@spy4x/integrations	Shared secret and header names verifyWebhookRequest needs to check a delivery.
 WebhookVerifyResult	type	@spy4x/integrations	Result of verifyWebhookRequest: the verified body, or why it was rejected.
+checkUmami	function	@spy4x/integrations	Asks Umami's `GET /api/heartbeat` whether the instance answers.
 createExponentialBackoff	function	@spy4x/integrations	Deprecated: Thin wrapper over `backoffDelay` from "@spy4x/platform/universal/async" (`#71`), kept for this module's existing 1-based-attempt, `Retry-After`-aware call shape. Exponential backoff, clamped and optionally jittered.
+createUmamiLink	function	@spy4x/integrations	Creates an Umami link and returns it.
 describeTransportError	function	@spy4x/integrations	Describes a transport failure **without** the request URL.
 healthchecksConfigFromEnv	function	@spy4x/integrations	Reads a ping URL from an environment reader.
 isPermanentStatus	function	@spy4x/integrations	Deprecated: No client in this package uses it; compare `status >= 400 && status < 500` in place. Statuses that will never succeed on a retry: the request itself is wrong.
@@ -303,6 +313,7 @@ releaseResponseBody	function	@spy4x/integrations	Releases a response's body with
 runWithRetry	function	@spy4x/integrations	Runs `attempt` under `policy`.
 settle	function	@spy4x/integrations	Consumes whatever a `Sleeper` returned.
 submitIndexNow	function	@spy4x/integrations	Submits `urls` to IndexNow and reports the outcome.
+umamiLinkUrl	function	@spy4x/integrations	The public address of a link: `<baseUrl>/q/<slug>`, which counts the visit and redirects.
 verifyWebhookRequest	function	@spy4x/integrations	Verifies one inbound delivery.
 CloudflarePurgeOptions	interface	@spy4x/integrations/cloudflare	Options for purgeUrls.
 CloudflarePurgeResult	interface	@spy4x/integrations/cloudflare	Outcome of a purge: `output` describes what happened on success, `error` on failure.
@@ -387,6 +398,17 @@ TelegramWebhookOptions	interface	@spy4x/integrations/telegram	Options of createT
 createTelegramWebhookHandler	function	@spy4x/integrations/telegram	Builds a webhook endpoint: `(request) => response`, for any server that speaks `Request`.
 parseTelegramUpdate	function	@spy4x/integrations/telegram	Checks an untrusted value against TelegramUpdate.
 pollTelegramUpdates	function	@spy4x/integrations/telegram	Long polling for development, where Telegram cannot reach a webhook.
+UMAMI_LINK_NAME_MAX	constant	@spy4x/integrations/umami	Umami's limits for a link: a name of 100 characters, a url of 500, a slug of 8 to 100.
+UMAMI_LINK_URL_MAX	constant	@spy4x/integrations/umami	
+UMAMI_SLUG_PATTERN	constant	@spy4x/integrations/umami	A slug this client sends: 8 to 100 letters, digits, `-` and `_`, so it is safe in a path.
+UmamiCheckResult	interface	@spy4x/integrations/umami	Outcome of checkUmami: `output` says what was seen on success, `error` on failure.
+UmamiConnection	interface	@spy4x/integrations/umami	Where an Umami instance is, and how to reach it.
+UmamiLink	interface	@spy4x/integrations/umami	A link as Umami stores it.
+UmamiLinkCreateOptions	interface	@spy4x/integrations/umami	Options for createUmamiLink.
+UmamiLinkResult	type	@spy4x/integrations/umami	Outcome of createUmamiLink: the link on success, why not on failure.
+checkUmami	function	@spy4x/integrations/umami	Asks Umami's `GET /api/heartbeat` whether the instance answers.
+createUmamiLink	function	@spy4x/integrations/umami	Creates an Umami link and returns it.
+umamiLinkUrl	function	@spy4x/integrations/umami	The public address of a link: `<baseUrl>/q/<slug>`, which counts the visit and redirects.
 CombinedSignatureHeader	interface	@spy4x/integrations/webhooks	One header that carries the timestamp and the signatures together, as a list of `key=value` pairs: Stripe's `Stripe-Signature: t=1492774577,v1=5257…,v0=6ffb…` is `{ name: "Stripe-Signature", pairSeparator: ",", timestampKey: "t", signatureKey: "v1" }`.
 WebhookRejectReason	type	@spy4x/integrations/webhooks	Why a delivery was rejected.
 WebhookVerifierConfig	interface	@spy4x/integrations/webhooks	Shared secret and header names verifyWebhookRequest needs to check a delivery.
@@ -2706,4 +2728,4 @@ firstIssueMessage	function	@spy4x/validation/validate	First issue message in a v
 isArkErrors	function	@spy4x/validation/validate	Whether a value is an arktype rejection, without relying on `instanceof`.
 toValidationError	function	@spy4x/validation/validate	Build a ValidationError from arktype's issues.
 validate	function	@spy4x/validation/validate	Parse `value` with an arktype schema exactly once.
-# export surface: sha256 3961830d574a3a4584b7779598d84cb05f3492c7b915e66f1db8dd71e3c24396
+# export surface: sha256 0f2e079564f08c2a7f3033b9ea06a586e0215a81cc672c1b869e546591fdcd7b
