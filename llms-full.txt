@@ -1469,6 +1469,7 @@ Runs on: server (Deno).
 | `./healthchecks`    | `HealthchecksClient`, `healthchecksConfigFromEnv`, `HealthchecksOutcome`       |
 | `./cloudflare`      | `purgeUrls` — Cloudflare cache purge by URL                                    |
 | `./indexnow`        | `submitIndexNow` — tell search engines which pages changed                     |
+| `./umami`           | `createUmamiLink`, `checkUmami`, `umamiLinkUrl` — self-hosted Umami links      |
 | `./webhooks`        | `verifyWebhookRequest` — inbound HMAC-SHA256 verification, Stripe's layout too |
 | `./push`            | `createWebPushSender`, `generateVapidKeyPair` — Web Push to a user's devices   |
 | `./push-file-store` | `createFilePushSubscriptionStore` — push subscriptions in one JSON file        |
@@ -1712,6 +1713,28 @@ takes part, and returns `{ success, output, error }`. It never throws.
   The body is never read.
 - **Timeout.** The request runs under `AbortSignal.timeout(requestTimeoutMs)`, 10 s by default.
 - **Fail open.** Callers log `error` and carry on: a missed ping only delays crawling.
+
+### `createUmamiLink`, `checkUmami`, `umamiLinkUrl` — Umami links
+
+A self-hosted Umami (v3) counts every visit to a link's `<umami>/q/<slug>` and redirects it to the
+link's `url`. A product makes one link per place it shares an address in, so Umami tells the
+places apart. Each function returns `{ success, output, error }` and never throws.
+
+- **`createUmamiLink({ baseUrl, token, id?, name, url, slug, teamId?, fetch?, requestTimeoutMs? })`**
+  posts to `/api/links` with the token as `Authorization: Bearer` and returns the stored link
+  (`id`, `name`, `url`, `slug`) as `output`. `baseUrl` is the instance, with its base path if any.
+  Umami's limits are checked first: a name of 1 to 100 characters, an `http`/`https` url of at most
+  500, and a slug of 8 to 100 letters, digits, `-` and `_`.
+- **Idempotent with an `id`.** Pass a UUID as `id`, kept with the product's own row. A retry after
+  a lost answer, or two creates at once, then make one link: when Umami refuses the create, the
+  link is read back by its id, and one with the same slug and url counts as created.
+- **`checkUmami({ baseUrl, fetch?, requestTimeoutMs? })`** asks `/api/heartbeat`, with no token,
+  whether the instance answers, so a redirect can skip Umami while it is down.
+- **`umamiLinkUrl(baseUrl, slug)`** is the link's public address, `<baseUrl>/q/<slug>`.
+- **Secrets.** The token never appears in `error` or `output`: Umami's message is cleaned
+  (control characters removed, the token replaced by `<REDACTED:TOKEN>`, cut to 200 characters),
+  and a transport failure names only the error class. Answers are read under a 64 KiB cap.
+- **Timeout.** Each request runs under `AbortSignal.timeout(requestTimeoutMs)`, 10 s by default.
 
 ### `verifyWebhookRequest`
 
