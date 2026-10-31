@@ -230,6 +230,23 @@ describe("createChangesPull", () => {
     expect(ids(await copy.read("notes", "g1"))).toEqual(["b"])
   })
 
+  it("replaces a copy held at cursor 0, dropping a row the server deleted before the first pull", async () => {
+    const { server, copy, pull } = setup()
+    server.write("notes", note("a"), note("b"))
+    // The app keeps a write's answer at cursor 0 before the group's first pull.
+    await copy.apply("g1", {
+      upserts: { notes: [note("a")], tags: [] },
+      tombstones: [],
+      through: 0,
+    })
+    server.remove("notes", "a")
+
+    const result = await pull("g1")
+
+    expect(result).toMatchObject({ mode: "full", cursor: 2 })
+    expect(ids(await copy.read("notes", "g1"))).toEqual(["b"])
+  })
+
   it("follows every page until the server has no more, storing each page's cursor", async () => {
     const { server, copy, pull } = setup(2)
     server.write("notes", note("a"))

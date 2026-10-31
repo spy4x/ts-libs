@@ -14,8 +14,9 @@
  * - **The device.** {@link createChangesCopy} keeps each group's rows and the sequence they are
  *   complete through in one IndexedDB database, written together. {@link createChangesPull} pulls
  *   `after=<cursor>`, applies each page and pages until done. It reads in full (from `0`) when the
- *   device has no copy of the group or the server answers {@link CursorTooOld}, and then replaces
- *   the copy once the last page is in.
+ *   device has no copy of the group, holds it at cursor `0` (rows an app put before its first
+ *   pull), or the server answers {@link CursorTooOld}, and then replaces the copy once the last
+ *   page is in.
  *
  * Sequences are the group's change sequence (1-based; `0` means "from the beginning"), as numbers:
  * a safe integer is far beyond what one group reaches.
@@ -270,7 +271,7 @@ export interface ChangesPullOptions<Rows> {
 
 /** What one pull did. */
 export interface ChangesPullResult {
-  /** `incremental` from the stored cursor, or `full` from `0` (no copy, or the cursor too old). */
+  /** `incremental` from the stored cursor, or `full` from `0` (no copy, cursor `0`, or too old). */
   mode: "incremental" | "full"
   /** The cursor the copy is complete through now. */
   cursor: number
@@ -379,8 +380,12 @@ export function createChangesPull<Rows>(
 
   return (groupId) =>
     lock(async () => {
+      // A copy at cursor 0 holds only rows a write answered with: a page from 0 carries no
+      // tombstones, so only a full read drops the rows deleted before it.
       const held = await copy.cursor(groupId)
-      return held === undefined ? await full(groupId) : await incremental(groupId, held)
+      return held === undefined || held === 0
+        ? await full(groupId)
+        : await incremental(groupId, held)
     })
 }
 
