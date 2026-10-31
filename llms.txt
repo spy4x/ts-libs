@@ -1607,6 +1607,23 @@ isUnknownOutcome	function	@spy4x/realtime/calls	Whether the outcome of a call is
 sendCommand	function	@spy4x/realtime/calls	Sends a command with a fresh idempotency key and, when the outcome is unknown, sends it again with the same key.
 sendQuery	function	@spy4x/realtime/calls	Sends a query, trying again when the connection is down or the answer is late.
 withUnauthorizedHook	function	@spy4x/realtime/calls	Wraps any port so that a call answered with `unauthorized` calls `onUnauthorized` once, then rejects with the same error.
+ChangesAnswer	type	@spy4x/realtime/changes	The answer to a changes request.
+ChangesApply	interface	@spy4x/realtime/changes	One checked page, as the copy applies it.
+ChangesCopy	interface	@spy4x/realtime/changes	The device's copy of each group's rows and the sequence they are complete through.
+ChangesKind	interface	@spy4x/realtime/changes	How the device reads one kind of row.
+ChangesKinds	type	@spy4x/realtime/changes	Every kind an app pulls, by name: the names the server uses in `upserts` and tombstones.
+ChangesPage	interface	@spy4x/realtime/changes	One page of the changes of a group after a sequence.
+ChangesPagePlan	type	@spy4x/realtime/changes	What one page covers, or that the cursor cannot be answered.
+ChangesPagePlanInput	interface	@spy4x/realtime/changes	What planChangesPage is given: three numbers the app reads in one snapshot.
+ChangesPullResult	interface	@spy4x/realtime/changes	What one pull did.
+CursorTooOld	interface	@spy4x/realtime/changes	The server cannot say what changed after this cursor: read the group in full.
+RowsByKind	type	@spy4x/realtime/changes	Rows by kind.
+Tombstone	interface	@spy4x/realtime/changes	A row that was deleted, or left the group, after the cursor: its kind and id, nothing else.
+changesAfterSchema	constant	@spy4x/realtime/changes	Reads the `after` of a request (a query parameter): a non-negative safe integer written in plain digits, without a sign, a fraction, an exponent or a leading zero.
+changesAnswerSchema	constant	@spy4x/realtime/changes	The wire shape of ChangesAnswer.
+createChangesCopy	function	@spy4x/realtime/changes	A ChangesCopy over IndexedDB (`createDataCache`): one scope per kind and group, and the cursors in a scope of their own, so rows and cursor land in one transaction.
+createChangesPull	function	@spy4x/realtime/changes	The client side of the cursor pull: see the module documentation.
+planChangesPage	function	@spy4x/realtime/changes	Decides the window of one page: `(after, through]`.
 AckTimeoutError	class	@spy4x/realtime/client	Timed out waiting for an acknowledgement.
 AppliedHint	interface	@spy4x/realtime/client	A `change.hint` that was contiguous with the cursor and therefore applied.
 AuthGateError	class	@spy4x/realtime/client	The reconnect gate refused.
@@ -2771,4 +2788,4 @@ firstIssueMessage	function	@spy4x/validation/validate	First issue message in a v
 isArkErrors	function	@spy4x/validation/validate	Whether a value is an arktype rejection, without relying on `instanceof`.
 toValidationError	function	@spy4x/validation/validate	Build a ValidationError from arktype's issues.
 validate	function	@spy4x/validation/validate	Parse `value` with an arktype schema exactly once.
-# export surface: sha256 f3e81165bd27045c83c62a02cfe37c6c438c59325dd1156eff5d71e0df5da7dc
+# export surface: sha256 c30ec20ce97b732cb55e1bed6e3329e0d4eed93fefde77f34fdd529571f08253

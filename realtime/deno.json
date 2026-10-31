@@ -14,6 +14,7 @@
     "./outbox-indexeddb": "./outbox-indexeddb.ts",
     "./collections": "./collections.ts",
     "./read-cache": "./read-cache.ts",
+    "./changes": "./changes.ts",
     "./sync-runner": "./sync-runner.ts",
     "./protocol": "./codec.ts",
     "./web-socket": "./web-socket-adapter.ts",
