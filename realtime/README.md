@@ -1008,9 +1008,11 @@ const notes = await copy.read(`notes`, groupId)
 - With a stored cursor, the pull asks `after=<cursor>` and applies each page as it comes: rows put,
   tombstoned rows removed and the cursor stored in one IndexedDB transaction, so a crash never
   leaves the cursor ahead of the rows.
-- With no copy, or when the server answers `too-old`, it reads from `0`, keeps every page in
-  memory and replaces the group's copy once the last page is in: a full read interrupted halfway
-  leaves the old copy in place.
+- With no copy, a copy at cursor `0`, or when the server answers `too-old`, it reads from `0`,
+  keeps every page in memory and replaces the group's copy once the last page is in: a full read
+  interrupted halfway leaves the old copy in place. Cursor `0` is where an app keeps rows a write
+  answered with before the group's first pull; a page from `0` carries no tombstones, so only
+  replacing the copy drops the ones deleted on the server meanwhile.
 - An answer that does not match the wire shape, a row its kind's type rejects, or a page that does
   not move forward rejects the pull and applies nothing of that page. Rows and tombstones of a kind
   the app does not know are ignored.
