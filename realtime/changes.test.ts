@@ -275,7 +275,15 @@ describe("createChangesPull", () => {
     })
     await copy.replace("g1", { notes: [note("a")], tags: [] }, 1)
     const answers: unknown[] = [
-      { status: "changes", after: 1, through: 2, current: 2, more: false, upserts: {} },
+      {
+        status: "changes",
+        after: 1,
+        through: 2,
+        current: 2,
+        more: false,
+        upserts: {},
+        tombstones: [{ kind: "notes", id: 7 }],
+      },
       {
         status: "changes",
         after: 1,
