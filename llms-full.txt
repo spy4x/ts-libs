@@ -4332,8 +4332,9 @@ return {
   tombstones), or `null` when there are fewer. A page never splits a sequence, so a sequence with
   more than `limit` changes (one large import) comes whole on one page.
 - `oldest` is the lowest cursor the server can still answer: tombstones older than it were cut by a
-  retention window. A cursor below it, or above `current` (after a restore), is too old. `after=0`
-  needs no tombstones: answer it with the live rows and no tombstones, whatever `oldest` is.
+  retention window. A cursor above `0` and below it, or above `current` (after a restore), is too
+  old. `planChangesPage` always answers `after=0`, whatever `oldest` is: answer it with the live
+  rows and no tombstones, since a device with no copy needs none.
 - Answer only a member of the group, as its list reads do.
 
 ### The device

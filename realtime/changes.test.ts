@@ -76,8 +76,7 @@ function fakeServer(limit: number) {
       const plan = planChangesPage({
         after,
         current,
-        // An empty copy needs no tombstones, so `0` is always answerable.
-        oldest: after === 0 ? 0 : oldest,
+        oldest,
         boundary: after_.length > limit ? after_[limit].sequence : null,
       })
       if (plan.status === "too-old") return Promise.resolve({ status: "too-old", current })
@@ -133,6 +132,11 @@ describe("planChangesPage", () => {
   it("answers too old for a cursor below the oldest it can answer", () => {
     expect(planChangesPage({ after: 2, current: 9, oldest: 3, boundary: null }))
       .toEqual({ status: "too-old" })
+  })
+
+  it("answers a full read from 0 after deletions were forgotten", () => {
+    expect(planChangesPage({ after: 0, current: 9, oldest: 5, boundary: null }))
+      .toEqual({ status: "changes", through: 9, more: false })
   })
 
   it("answers too old for a cursor ahead of the server, as after a restore", () => {

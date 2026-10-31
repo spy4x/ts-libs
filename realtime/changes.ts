@@ -96,8 +96,9 @@ export interface ChangesPagePlanInput {
   /** The group's current change sequence (the last one taken, not the next free one). */
   current: number
   /**
-   * The lowest `after` the server can still answer: below it, deletions were forgotten. `0` while
-   * nothing was ever forgotten.
+   * The lowest `after` above `0` the server can still answer: below it, deletions were forgotten.
+   * `0` while nothing was ever forgotten. `after=0` is always answered, whatever `oldest` is: a
+   * device with no copy needs no tombstones.
    */
   oldest: number
   /**
@@ -115,7 +116,7 @@ export type ChangesPagePlan =
 /**
  * Decides the window of one page: `(after, through]`. A page never splits one sequence, so its
  * cursor is exact; the price is that a sequence with more than `limit` changes (one large import)
- * comes on one page, whatever its size. A cursor below `oldest`, or above `current` (the server was
+ * comes on one page, whatever its size. A cursor above `0` and below `oldest`, or above `current` (the server was
  * restored from an older backup), is too old.
  *
  * The app then reads every row and tombstone with `after < change_sequence <= through`, in the same
@@ -124,7 +125,7 @@ export type ChangesPagePlan =
  */
 export function planChangesPage(input: ChangesPagePlanInput): ChangesPagePlan {
   const { after, current, oldest, boundary } = input
-  if (after < oldest || after > current) return { status: "too-old" }
+  if ((after > 0 && after < oldest) || after > current) return { status: "too-old" }
   if (boundary === null) return { status: "changes", through: current, more: false }
   const through = boundary - 1 > after ? boundary - 1 : boundary
   return { status: "changes", through, more: through < current }
