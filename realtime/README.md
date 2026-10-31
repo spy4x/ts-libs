@@ -929,6 +929,98 @@ const { value, fresh, savedAt } = await reads.through(`groups`, fetchGroups, (co
   `false` (it painted nothing).
 - `current` is asked at every read, so the reads follow the signed-in user's cache.
 
+## Changes pull (`@spy4x/realtime/changes`)
+
+The cursor pull of ADR 002. A device that keeps a copy of a group's lists asks only for what
+changed after the sequence it holds, so a reconnect on a group of 10,000 rows with one change
+downloads one row. One pull covers every list of the group (notes, tags, members, transactions);
+the app names its kinds.
+
+### The wire
+
+`GET …/groups/:groupId/changes?after=<sequence>` (or the same as a socket call) answers one of:
+
+```ts
+{ status: "changes", after, through, current, more, upserts: { notes: [...], tags: [...] },
+  tombstones: [{ kind: "notes", id: "…" }] }
+{ status: "too-old", current } // the server cannot say what changed after `after`: read in full
+```
+
+- The page holds every change in `(after, through]`: the current state of each row created or
+  changed, and a tombstone (kind and id, nothing else) for each row deleted or gone from the group.
+  `through` is the cursor to store, and the next page's `after` while `more` is true.
+- `changesAnswerSchema` is the arktype type of the answer. `changesAfterSchema` reads the `after`
+  query parameter: a non-negative safe integer in plain digits, anything else a bad request.
+
+### The server
+
+The queries stay in the app; `planChangesPage` decides what one page covers:
+
+```ts
+import { changesAfterSchema, planChangesPage } from "@spy4x/realtime/changes"
+
+const plan = planChangesPage({ after, current, oldest, boundary })
+if (plan.status === "too-old") return { status: "too-old", current }
+// read rows and tombstones with after < change_sequence <= plan.through
+return {
+  status: "changes",
+  after,
+  through: plan.through,
+  current,
+  more: plan.more,
+  upserts,
+  tombstones,
+}
+```
+
+- Read `current`, `oldest` and the rows in one snapshot (a repeatable-read transaction), and
+  bound every query by `through`, so a change committed meanwhile waits for the next pull.
+- `boundary` is the sequence of the change after the first `limit` ones (across every kind and the
+  tombstones), or `null` when there are fewer. A page never splits a sequence, so a sequence with
+  more than `limit` changes (one large import) comes whole on one page.
+- `oldest` is the lowest cursor the server can still answer: tombstones older than it were cut by a
+  retention window. A cursor below it, or above `current` (after a restore), is too old. `after=0`
+  needs no tombstones: answer it with the live rows and no tombstones, whatever `oldest` is.
+- Answer only a member of the group, as its list reads do.
+
+### The device
+
+```ts
+import { createChangesCopy, createChangesPull } from "@spy4x/realtime/changes"
+
+const kinds = {
+  notes: { row: noteSchema, id: (note: Note) => note.id }, // an arktype type checks each row
+  tags: { row: tagSchema, id: (tag: Tag) => tag.id },
+}
+const copy = createChangesCopy({ name: `offline:user:${userId}:changes`, kinds })
+const pull = createChangesPull({
+  kinds,
+  copy,
+  fetch: (groupId, after) => calls.query(`groups.changes`, { groupId, after }),
+  lock: createWebLock(navigator.locks, `changes:${userId}`), // tabs share the copy
+})
+
+await pull(groupId) // start, reconnect, a hint with a gap
+const notes = await copy.read(`notes`, groupId)
+```
+
+- With a stored cursor, the pull asks `after=<cursor>` and applies each page as it comes: rows put,
+  tombstoned rows removed and the cursor stored in one IndexedDB transaction, so a crash never
+  leaves the cursor ahead of the rows.
+- With no copy, or when the server answers `too-old`, it reads from `0`, keeps every page in
+  memory and replaces the group's copy once the last page is in: a full read interrupted halfway
+  leaves the old copy in place.
+- An answer that does not match the wire shape, a row its kind's type rejects, or a page that does
+  not move forward rejects the pull and applies nothing of that page. Rows and tombstones of a kind
+  the app does not know are ignored.
+- One pull at a time under `lock` (default: one lock for this tab).
+- `fetch` rejecting (a refusal, no network) rejects the pull. When the person may no longer read
+  the group, `copy.drop(groupId)` removes its rows and cursor; `copy.clear()` at sign-out removes
+  every copy and finishes the instance.
+- The copy's cursor is not the hint cursor of `PersistentCursorStore`: a hint or a groups list
+  moving that one says nothing about which rows the device holds.
+- Rows read back in a full read's order, then the rows added since. Sort when you show them.
+
 ## Sync runner (`@spy4x/realtime/sync-runner`)
 
 Sends the outbox at the moments a browser gives a page: on start, when the browser goes online,
