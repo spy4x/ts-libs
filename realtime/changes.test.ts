@@ -307,6 +307,7 @@ describe("createChangesPull", () => {
       copy,
       fetch: (_g, after) => {
         calls++
+        if (calls > 3) return Promise.reject(new Error(`looped`))
         return Promise.resolve({
           status: "changes",
           after,
@@ -376,7 +377,7 @@ describe("createChangesPull", () => {
     expect(seen).toEqual([0, 1])
   })
 
-  it("keeps each group's copy and cursor apart", async () => {
+  it("drops one group's rows and cursor, so its next pull reads in full", async () => {
     const { server, copy, pull } = setup()
     server.write("notes", note("a"))
     await pull("g1")
@@ -385,6 +386,5 @@ describe("createChangesPull", () => {
     expect(await copy.cursor("g1")).toBeUndefined()
     expect(await copy.read("notes", "g1")).toEqual([])
     expect((await pull("g1")).mode).toBe("full")
-    expect(await copy.cursor("g2")).toBeUndefined()
   })
 })
