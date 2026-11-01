@@ -1,0 +1,56 @@
+<?xml version="1.0"?>
+<d:multistatus xmlns:d="DAV:" xmlns:s="http://sabredav.org/ns" xmlns:cal="urn:ietf:params:xml:ns:caldav" xmlns:cs="http://calendarserver.org/ns/" xmlns:oc="http://owncloud.org/ns" xmlns:nc="http://nextcloud.org/ns" xmlns:x1="http://apple.com/ns/ical/">
+ <d:response>
+  <d:href>/remote.php/dav/calendars/jane/</d:href>
+  <d:propstat>
+   <d:prop>
+    <d:resourcetype><d:collection/></d:resourcetype>
+   </d:prop>
+   <d:status>HTTP/1.1 200 OK</d:status>
+  </d:propstat>
+  <d:propstat>
+   <d:prop>
+    <d:displayname/>
+    <cal:supported-calendar-component-set/>
+    <x1:calendar-color/>
+    <cs:getctag/>
+    <d:sync-token/>
+   </d:prop>
+   <d:status>HTTP/1.1 404 Not Found</d:status>
+  </d:propstat>
+ </d:response>
+ <d:response>
+  <d:href>/remote.php/dav/calendars/jane/personal/</d:href>
+  <d:propstat>
+   <d:prop>
+    <d:resourcetype><d:collection/><cal:calendar/></d:resourcetype>
+    <d:displayname>Personal</d:displayname>
+    <cal:supported-calendar-component-set><cal:comp name="VEVENT"/></cal:supported-calendar-component-set>
+    <x1:calendar-color>#0082c9</x1:calendar-color>
+    <cs:getctag>http://sabre.io/ns/sync/12</cs:getctag>
+    <d:sync-token>http://sabre.io/ns/sync/12</d:sync-token>
+   </d:prop>
+   <d:status>HTTP/1.1 200 OK</d:status>
+  </d:propstat>
+ </d:response>
+ <d:response>
+  <d:href>/remote.php/dav/calendars/jane/holidays/</d:href>
+  <d:propstat>
+   <d:prop>
+    <d:resourcetype><d:collection/><cs:subscribed/></d:resourcetype>
+    <d:displayname>Public holidays</d:displayname>
+    <cal:supported-calendar-component-set><cal:comp name="VEVENT"/></cal:supported-calendar-component-set>
+    <x1:calendar-color>#795AAB</x1:calendar-color>
+    <cs:source><d:href>https://feeds.example.org/holidays.ics</d:href></cs:source>
+   </d:prop>
+   <d:status>HTTP/1.1 200 OK</d:status>
+  </d:propstat>
+  <d:propstat>
+   <d:prop>
+    <cs:getctag/>
+    <d:sync-token/>
+   </d:prop>
+   <d:status>HTTP/1.1 404 Not Found</d:status>
+  </d:propstat>
+ </d:response>
+</d:multistatus>

@@ -9,6 +9,7 @@ import {
   type CalDavResult,
   createCalDavClient,
 } from "./client.ts"
+import { getProperty, type IcalComponent, parseIcal } from "@spy4x/time/ical"
 
 const SERVER = "https://dav.example.com"
 const HOME = `${SERVER}/dav/cal/user%40example.com/`
@@ -844,6 +845,150 @@ describe("calendars", () => {
       ["PROPFIND", INBOX],
       ["DELETE", INBOX],
     ])
+  })
+})
+
+describe("calendar subscriptions", () => {
+  const NC_HOME = `${SERVER}/remote.php/dav/calendars/jane/`
+  const PERSONAL = `${NC_HOME}personal/`
+  const HOLIDAYS = `${NC_HOME}holidays/`
+  const MARKET = "market-day@feeds.example.org"
+  const NEW_YEAR = "new-year@feeds.example.org"
+
+  /** The components of one entry's `VCALENDAR`, as `NAME:UID-or-TZID` lines. */
+  const shape = (data: string) => {
+    const parsed = parseIcal(data)
+    assert(parsed.success, data)
+    assertEquals(parsed.output.name, "VCALENDAR")
+    return parsed.output.components.map((child: IcalComponent) =>
+      `${child.name}:${(getProperty(child, "UID") ?? getProperty(child, "TZID"))?.value}`
+    )
+  }
+
+  const exporting = async () => {
+    const feed = await fixture("nextcloud-export-subscription.ics")
+    return setup(() => new Response(feed, { headers: { "Content-Type": "text/calendar" } }))
+  }
+
+  it("leaves a subscription out of the default listing (Nextcloud)", async () => {
+    const { client } = setup(async () => multistatus(await fixture("nextcloud-propfind-home.xml")))
+    assertEquals(output(await client.listCalendars(NC_HOME)), [{
+      url: PERSONAL,
+      displayName: "Personal",
+      components: ["VEVENT"],
+      color: "#0082c9",
+      ctag: "http://sabre.io/ns/sync/12",
+      syncToken: "http://sabre.io/ns/sync/12",
+    }])
+  })
+
+  it("lists a subscription marked subscribed when asked, and never fetches its source", async () => {
+    const { client, seen } = setup(async () =>
+      multistatus(await fixture("nextcloud-propfind-home.xml"))
+    )
+    const calendars = output(await client.listCalendars(NC_HOME, { subscriptions: true }))
+    assertEquals(calendars.map((calendar) => [calendar.url, calendar.subscribed]), [
+      [PERSONAL, undefined],
+      [HOLIDAYS, true],
+    ])
+    assert(!("subscribed" in calendars[0]), "a real calendar carries no subscribed field")
+    assertEquals(calendars[1], {
+      url: HOLIDAYS,
+      displayName: "Public holidays",
+      components: ["VEVENT"],
+      color: "#795AAB",
+      subscribed: true,
+    })
+    assertEquals(seen.map((request) => [request.method, request.url]), [["PROPFIND", NC_HOME]])
+  })
+
+  it("reads the export with credentials and splits it per UID, overrides and zones kept", async () => {
+    const { client, seen } = await exporting()
+    const events = output(await client.readSubscription!(HOLIDAYS))
+    assertEquals(seen.map((request) => [request.method, request.url]), [
+      ["GET", `${HOLIDAYS}?export`],
+    ])
+    assertEquals(seen[0].headers.get("Authorization"), BASIC)
+    assertEquals(events.map(({ url, uid, etag }) => [url, uid, etag]), [
+      [`${HOLIDAYS}#market-day%40feeds.example.org`, MARKET, null],
+      [`${HOLIDAYS}#new-year%40feeds.example.org`, NEW_YEAR, null],
+    ])
+    assertEquals(shape(events[0].data), [
+      "VTIMEZONE:Europe/Berlin",
+      `VEVENT:${MARKET}`,
+      `VEVENT:${MARKET}`,
+    ])
+    assertMatch(events[0].data, /RECURRENCE-ID;TZID=Europe\/Berlin:20261014T090000/)
+    assertMatch(events[0].data, /X-WR-CALNAME:Public holidays/)
+    assertEquals(shape(events[1].data), [`VEVENT:${NEW_YEAR}`])
+  })
+
+  it("names each event by the calendar URL and its UID, the same on every read", async () => {
+    const { client } = await exporting()
+    const first = output(await client.readSubscription!(HOLIDAYS))
+    const again = output(await client.readSubscription!(`${HOLIDAYS}?export#stale`))
+    assertEquals(again.map((event) => event.url), first.map((event) => event.url))
+  })
+
+  it("leaves out a component without a UID", async () => {
+    const { client } = await exporting()
+    const events = output(await client.readSubscription!(HOLIDAYS))
+    assert(events.every((event) => !event.data.includes("No identifier")))
+  })
+
+  it("fails with Malformed for an export that is not one VCALENDAR", async () => {
+    for (
+      const body of [
+        "<!DOCTYPE html><html><body>Login</body></html>",
+        "BEGIN:VEVENT\r\nUID:a\r\nEND:VEVENT\r\n",
+        "BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nUID:a\r\n",
+      ]
+    ) {
+      const { client } = setup(() => new Response(body))
+      assertEquals(
+        failure(await client.readSubscription!(HOLIDAYS)).code,
+        CalDavErrorCode.Malformed,
+      )
+    }
+  })
+
+  it("never follows a cross-origin redirect of the export", async () => {
+    const { client, seen } = setup(() => redirect(302, "https://feeds.example.org/holidays.ics"))
+    const error = failure(await client.readSubscription!(HOLIDAYS))
+    assertEquals(error.code, CalDavErrorCode.CrossOriginRedirect)
+    assertEquals(seen.map((request) => new URL(request.url).origin), [SERVER])
+  })
+
+  it("refuses a subscription on another origin before sending anything", async () => {
+    const { client, seen } = await exporting()
+    const error = failure(await client.readSubscription!("https://feeds.example.org/holidays/"))
+    assertEquals(error.code, CalDavErrorCode.OutsideServer)
+    assertEquals(seen.length, 0)
+  })
+
+  it("refuses to update or delete an event of a subscription", async () => {
+    const { client, seen } = await exporting()
+    const [event] = output(await client.readSubscription!(HOLIDAYS))
+    assertEquals(
+      failure(await client.updateObject(event.url, ICS, `"1"`)).code,
+      CalDavErrorCode.InvalidArgument,
+    )
+    assertEquals(
+      failure(await client.deleteObject(event.url, `"1"`)).code,
+      CalDavErrorCode.InvalidArgument,
+    )
+    assertEquals(seen.length, 1)
+  })
+
+  it("refuses to delete a subscription as a calendar", async () => {
+    const { client, seen } = setup(async () =>
+      multistatus(await fixture("nextcloud-propfind-home.xml"))
+    )
+    assertEquals(
+      failure(await client.deleteCalendar(HOLIDAYS)).code,
+      CalDavErrorCode.InvalidArgument,
+    )
+    assertEquals(seen.map((request) => request.method), ["PROPFIND"])
   })
 })
 
