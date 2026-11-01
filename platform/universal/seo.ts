@@ -241,7 +241,7 @@ const SITEMAP_XHTML_NS = "http://www.w3.org/1999/xhtml"
  * Only `loc`, `lastmod`, the language versions and the images are written: search engines ignore
  * `priority` and `changefreq`. Each address is normalised like a canonical one and XML-escaped;
  * `lastmod` is written as an ISO 8601 timestamp in UTC. An entry's `alternates` become
- * `xhtml:link rel="alternate"` elements, each language tag in its canonical case, and its `images`
+ * `xhtml:link rel="alternate"` elements, each language tag in its canonical form (`iw` becomes `he`), and its `images`
  * become `image:image` elements of Google's image extension. Each namespace is declared on `urlset`
  * only when an element of it is written.
  *
@@ -293,7 +293,7 @@ export function sitemapXml(entries: readonly SitemapEntry[]): string {
     `${urls.join("")}</urlset>\n`
 }
 
-/** `lang` in its canonical case, or `x-default`; anything else is refused. */
+/** `lang` in its canonical form (case fixed, deprecated codes replaced), or `x-default`; anything else is refused. */
 function hreflangTag(lang: string): string {
   if (lang === "x-default") return lang
   try {
