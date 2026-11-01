@@ -151,6 +151,10 @@ fails the whole message rather than dropping that entry:
   trims and lowercases the value and returns `null` for anything but a bare
   addr-spec of at most 254 characters with a local part of at most 64. A display
   name is refused, so a caller's words never reach a `To:` line.
+- `isExampleAddress` is true for an address on a domain reserved for examples
+  (`example.com`, `.net`, `.org`, their subdomains and the `.example` top-level
+  domain), which takes no mail. A sender skips them instead of bouncing, for
+  example a demo's fake subscribers. `.test` stays mailable for tests.
 - A display name containing a comma is accepted unquoted (`Doe, Jane <jane@example.com>`)
   and re-emitted quoted. Non-ASCII names travel to the transport as structured
   fields, so nodemailer encodes them per RFC 2047 instead of emitting mojibake.

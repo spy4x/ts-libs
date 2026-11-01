@@ -232,6 +232,21 @@ export function isAddress(value: string): boolean {
   return ADDRESS_PATTERN.test(value)
 }
 
+/** The second-level domains RFC 2606 reserves for examples; none of them takes mail. */
+const EXAMPLE_DOMAINS = ["example.com", "example.net", "example.org"]
+
+/**
+ * True when `address` is on a domain RFC 2606 reserves for examples: `example.com`, `example.net`,
+ * `example.org`, a subdomain of one, or the `.example` top-level domain. No mail is delivered
+ * there, so a sender that skips these addresses avoids a bounce per fake recipient, such as a
+ * demo's seeded subscribers. `.test` is not one: tests and development may mail it.
+ */
+export function isExampleAddress(address: string): boolean {
+  const host = address.slice(address.lastIndexOf("@") + 1).toLowerCase().replace(/\.$/, "")
+  return host.endsWith(".example") ||
+    EXAMPLE_DOMAINS.some((domain) => host === domain || host.endsWith(`.${domain}`))
+}
+
 /** Longest local part, in characters, that RFC 5321 §4.5.3.1.1 allows. */
 const MAX_LOCAL_PART_LENGTH = 64
 

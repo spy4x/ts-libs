@@ -168,6 +168,7 @@ hasBody	function	@spy4x/email	Deprecated: An internal step of `assertSendableMes
 htmlWrap	function	@spy4x/email	Wrap a body in the shared letter-shaped shell.
 icalAttachment	function	@spy4x/email	Build the ICS attachment for an event.
 isAddress	function	@spy4x/email	True when `value` is an addr-spec this module will send to.
+isExampleAddress	function	@spy4x/email	True when `address` is on a domain RFC 2606 reserves for examples: `example.com`, `example.net`, `example.org`, a subdomain of one, or the `.example` top-level domain.
 parseAddress	function	@spy4x/email	Parse `Name <addr>` or a bare addr-spec into its parts.
 parseAddresses	function	@spy4x/email	Parse a recipient list, deduplicating case-insensitively.
 parseDkimPublicKey	function	@spy4x/email	Parse a DKIM TXT record's `p=` field into a public key.
@@ -183,6 +184,7 @@ ParsedRecipients	interface	@spy4x/email/address	The recipient list after parsing
 assertNoControlCharacters	function	@spy4x/email/address	Reject a value that carries a control character — CR and LF above all.
 formatAddress	function	@spy4x/email/address	Render a mailbox for a log line or a plain-text body.
 isAddress	function	@spy4x/email/address	True when `value` is an addr-spec this module will send to.
+isExampleAddress	function	@spy4x/email/address	True when `address` is on a domain RFC 2606 reserves for examples: `example.com`, `example.net`, `example.org`, a subdomain of one, or the `.example` top-level domain.
 parseAddress	function	@spy4x/email/address	Parse `Name <addr>` or a bare addr-spec into its parts.
 parseAddresses	function	@spy4x/email/address	Parse a recipient list, deduplicating case-insensitively.
 parseBareAddress	function	@spy4x/email/address	The bare address a form field holds, trimmed and lowercased, or `null` when it holds anything else.
@@ -2801,4 +2803,4 @@ firstIssueMessage	function	@spy4x/validation/validate	First issue message in a v
 isArkErrors	function	@spy4x/validation/validate	Whether a value is an arktype rejection, without relying on `instanceof`.
 toValidationError	function	@spy4x/validation/validate	Build a ValidationError from arktype's issues.
 validate	function	@spy4x/validation/validate	Parse `value` with an arktype schema exactly once.
-# export surface: sha256 2a6f0d08957846bb1a42522a71d005b3c70c9698555dae076217ecf6785b748b
+# export surface: sha256 d23b6250f5c3c88dc19db425555ddb9708db2b1dd2f1a6632451023f06caaae2

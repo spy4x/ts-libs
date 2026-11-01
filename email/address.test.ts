@@ -9,6 +9,7 @@ import {
   assertNoControlCharacters,
   formatAddress,
   isAddress,
+  isExampleAddress,
   MAX_ADDR_SPEC_LENGTH,
   parseAddress,
   parseAddresses,
@@ -314,4 +315,33 @@ Deno.test("parseBareAddress refuses a local part over 64 characters", () => {
 Deno.test("parseBareAddress refuses a non-ASCII character that lowercases to ASCII", () => {
   // U+212A KELVIN SIGN lowercases to "k", so lowercasing first would register kevin@example.com.
   assertEquals(parseBareAddress("\u212Aevin@example.com"), null)
+})
+
+Deno.test("isExampleAddress recognises every domain reserved for examples", () => {
+  for (
+    const address of [
+      "ann@example.com",
+      "ann@EXAMPLE.ORG",
+      "ann@example.net",
+      "ann@mail.example.com",
+      "ann@shop.example",
+      "ann@example.com.",
+    ]
+  ) {
+    assertEquals({ address, example: isExampleAddress(address) }, { address, example: true })
+  }
+})
+
+Deno.test("isExampleAddress leaves real domains and the testing domain mailable", () => {
+  for (
+    const address of [
+      "ann@gmail.com",
+      "ann@example.co",
+      "ann@myexample.com",
+      "ann@example.com.au",
+      "ann@seed.test",
+    ]
+  ) {
+    assertEquals({ address, example: isExampleAddress(address) }, { address, example: false })
+  }
 })

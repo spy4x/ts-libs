@@ -15,6 +15,7 @@ export {
   type EmailAddress,
   formatAddress,
   isAddress,
+  isExampleAddress,
   parseAddress,
   parseAddresses,
   type ParsedRecipients,
