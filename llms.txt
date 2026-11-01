@@ -44,8 +44,10 @@ CalDavErrorCode	enum	@spy4x/caldav	Why a call failed.
 CalDavMultiget	interface	@spy4x/caldav	The outcome of CalDavClient.getObjects.
 CalDavObject	interface	@spy4x/caldav	One calendar object resource: an iCalendar document and the etag it was read with.
 CalDavResult	type	@spy4x/caldav	The outcome of a call: the value, or why it failed.
+CalDavSubscriptionEvent	interface	@spy4x/caldav	One event of a calendar subscription, as CalDavClient.readSubscription returns it: every component of the feed with this UID (the master and its `RECURRENCE-ID` overrides) in one `VCALENDAR`, with the `VTIMEZONE`s they name.
 CalDavWrite	interface	@spy4x/caldav	The outcome of a write: where the object is and its new etag.
 CreateObjectOptions	interface	@spy4x/caldav	Options of CalDavClient.createObject.
+ListCalendarsOptions	interface	@spy4x/caldav	Options of CalDavClient.listCalendars.
 ListObjectsOptions	interface	@spy4x/caldav	Options of CalDavClient.listObjects.
 NewCalendar	interface	@spy4x/caldav	Properties of a new calendar.
 createCalDavClient	function	@spy4x/caldav	Create a client for one CalDAV server and one user.
@@ -2788,4 +2790,4 @@ firstIssueMessage	function	@spy4x/validation/validate	First issue message in a v
 isArkErrors	function	@spy4x/validation/validate	Whether a value is an arktype rejection, without relying on `instanceof`.
 toValidationError	function	@spy4x/validation/validate	Build a ValidationError from arktype's issues.
 validate	function	@spy4x/validation/validate	Parse `value` with an arktype schema exactly once.
-# export surface: sha256 c30ec20ce97b732cb55e1bed6e3329e0d4eed93fefde77f34fdd529571f08253
+# export surface: sha256 9424d6bb21a86dbdbc3dc889f8b3a46036ac59083eb71ddd35e3691492f8adad

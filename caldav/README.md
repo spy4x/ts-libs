@@ -36,6 +36,8 @@ const found = await client.discover() // .well-known → current-user-principal 
 if (!found.success) throw new Error(found.error.message)
 const calendars = await client.listCalendars(found.output.homeUrls[0])
 // Each: url, displayName, components, color?, ctag?, syncToken?
+const withFeeds = await client.listCalendars(found.output.homeUrls[0], { subscriptions: true })
+// A subscription also has `subscribed: true`; read it with `client.readSubscription?.(url)`.
 
 const inbox = "https://dav.example.com/dav/cal/user%40example.com/inbox/"
 const open = await client.listObjects(inbox, { component: "VTODO" }) // completed tasks left out
@@ -82,6 +84,17 @@ What the client guarantees:
   lists for the signed-in user on a calendar or an object (`read`, `write`, `write-content`, `bind`,
   `unbind`, `all`), or `null` when the server gives no such list. A calendar shared read-only
   lists `read` and no privilege to write.
+- **Subscriptions are read-only.** A calendar subscription (a server-side copy of an external
+  iCalendar feed, `resourcetype` `{http://calendarserver.org/ns/}subscribed` on Nextcloud and
+  other sabre/dav servers) is listed only with `listCalendars(home, { subscriptions: true })`, and
+  then carries `subscribed: true`. Nextcloud answers `PROPFIND` and `REPORT` on one with no
+  objects, so `readSubscription(url)` reads the feed with `GET <url>?export` and returns one entry
+  per UID: the master, its `RECURRENCE-ID` overrides and the `VTIMEZONE`s they name, in one
+  `VCALENDAR`. A component without a `UID` is left out; an answer that is not one `VCALENDAR`
+  fails with `Malformed`. Each entry's `url` is `<calendar URL>#<encodeURIComponent(uid)>`, stable
+  while the feed keeps the UID, and its `etag` is `null`. `updateObject` and `deleteObject` refuse
+  a URL with a fragment, and `deleteCalendar` refuses a subscription. The feed's own source URL is
+  never fetched.
 - **Bounded.** One `timeoutMs` (default 30 s) covers a whole call; no body is read past
   `maxResponseBytes` (default 10 MiB).
 
