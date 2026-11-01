@@ -49,6 +49,13 @@ import {
   readBoundedText,
 } from "@spy4x/net/bounded-body"
 import { uuidV7 } from "@spy4x/platform/universal/uuid"
+import {
+  getParameter,
+  getProperty,
+  type IcalComponent,
+  parseIcal,
+  serializeIcal,
+} from "@spy4x/time/ical"
 import { encodeBase64 } from "@std/encoding"
 
 /** Why a call failed. A code is stable; the message is for logs. */
@@ -159,6 +166,12 @@ export interface CalDavCalendar {
   ctag?: string
   /** The WebDAV `sync-token` (RFC 6578): unchanged token, unchanged calendar. */
   syncToken?: string
+  /**
+   * Set only on a calendar subscription, listed with `subscriptions: true`: a read-only copy of an
+   * external iCalendar feed. Read its events with {@link CalDavClient.readSubscription}; the
+   * object calls (`listObjects`, `getObjects`) find nothing in it on Nextcloud.
+   */
+  subscribed?: true
 }
 
 /** One calendar object resource: an iCalendar document and the etag it was read with. */
@@ -219,12 +232,52 @@ export interface CreateObjectOptions {
   name?: string
 }
 
+/** Options of {@link CalDavClient.listCalendars}. */
+export interface ListCalendarsOptions {
+  /**
+   * Also list calendar subscriptions: collections whose `resourcetype` is
+   * `{http://calendarserver.org/ns/}subscribed`, as Nextcloud and other sabre/dav servers and
+   * Apple's CalendarServer report a subscribed iCalendar feed. Each carries `subscribed: true`.
+   * Default: `false`, so only calendar collections are listed.
+   */
+  subscriptions?: boolean
+}
+
+/**
+ * One event of a calendar subscription, as {@link CalDavClient.readSubscription} returns it: every
+ * component of the feed with this UID (the master and its `RECURRENCE-ID` overrides) in one
+ * `VCALENDAR`, with the `VTIMEZONE`s they name. Read-only: there is nothing on the server to write
+ * it back to.
+ */
+export interface CalDavSubscriptionEvent {
+  /**
+   * The subscription's URL with the percent-encoded UID as its fragment:
+   * `<calendar URL>#<encodeURIComponent(uid)>`. It identifies the event inside the feed and stays
+   * the same across reads while the feed keeps the UID, so a consumer can find the event again by
+   * it. It is no address of a resource: a fragment never reaches the server, and `updateObject`
+   * and `deleteObject` refuse a URL that carries one.
+   */
+  url: string
+  /** The `UID` of the event, as written in the feed. */
+  uid: string
+  /** Always `null`: the feed has no per-event etag, and no write can use one. */
+  etag: null
+  /** A `VCALENDAR` holding this UID's components and the time zones they reference. */
+  data: string
+}
+
 /** A CalDAV client bound to one server and one user. See {@link createCalDavClient}. */
 export interface CalDavClient {
   /** Find the principal and calendar homes: `.well-known/caldav`, the server URL, then the principal. */
   discover(): Promise<CalDavResult<CalDavDiscovery>>
-  /** The calendar collections directly under a calendar home. */
-  listCalendars(homeUrl: string | URL): Promise<CalDavResult<CalDavCalendar[]>>
+  /**
+   * The calendar collections directly under a calendar home, and its calendar subscriptions when
+   * `options.subscriptions` is `true`.
+   */
+  listCalendars(
+    homeUrl: string | URL,
+    options?: ListCalendarsOptions,
+  ): Promise<CalDavResult<CalDavCalendar[]>>
   /**
    * The objects of a calendar matching a `calendar-query`. Fails, instead of leaving the object
    * out, when the server reports one with an error other than 404 or 410.
@@ -278,6 +331,14 @@ export interface CalDavClient {
    * optional so that a hand-written stand-in for the client stays valid.
    */
   getPrivileges?(url: string | URL): Promise<CalDavResult<string[] | null>>
+  /**
+   * The events of a calendar subscription, one entry per UID. A sabre/dav server such as Nextcloud
+   * answers `PROPFIND` and `REPORT` on a subscription with no objects, so this reads the whole feed
+   * with one `GET <calendar>?export` and splits it. A component without a `UID` is left out; an
+   * answer that is not one iCalendar `VCALENDAR` fails with `Malformed`. Never fetches the feed's
+   * own source URL. Optional for the same reason as `getPrivileges`.
+   */
+  readSubscription?(calendarUrl: string | URL): Promise<CalDavResult<CalDavSubscriptionEvent[]>>
 }
 
 const DEFAULT_TIMEOUT_MS = 30_000
@@ -761,16 +822,98 @@ function calendarOf(response: DavResponse, url: URL): CalDavCalendar {
   return calendar
 }
 
-/** The calendars in one calendar home. */
-async function listCalendars(settings: Settings, call: Call, home: URL): Promise<CalDavCalendar[]> {
+/** The calendars in one calendar home, and its subscriptions when `subscriptions` is set. */
+async function listCalendars(
+  settings: Settings,
+  call: Call,
+  home: URL,
+  subscriptions: boolean,
+): Promise<CalDavCalendar[]> {
   const { reply, responses } = await propfind(settings, call, home, "1", CALENDAR_PROPS)
   const calendars: CalDavCalendar[] = []
   for (const response of responses) {
     const url = ownHref(settings.server, response.href, reply.url)
     if (isEither(url, home, reply.url)) failIfSelfFailed(response)
     if (isCalendar(response)) calendars.push(calendarOf(response, url))
+    else if (subscriptions && isSubscription(response)) {
+      calendars.push({ ...calendarOf(response, url), subscribed: true })
+    }
   }
   return calendars
+}
+
+/** Read a subscription's feed with `GET <calendar>?export` and split it per UID. */
+async function readSubscription(
+  settings: Settings,
+  call: Call,
+  calendar: URL,
+): Promise<CalDavSubscriptionEvent[]> {
+  const base = new URL(calendar)
+  base.search = ""
+  base.hash = ""
+  const target = new URL(base)
+  target.search = "export"
+  const reply = expectStatus(
+    await send(settings, call, {
+      method: "GET",
+      url: target,
+      headers: { Accept: "text/calendar" },
+    }),
+    [200],
+  )
+  const parsed = parseIcal(reply.text, { maxBytes: settings.maxBytes })
+  if (!parsed.success) {
+    fail(CalDavErrorCode.Malformed, `the export is not iCalendar: ${parsed.error.message}`)
+  }
+  if (parsed.output.name !== "VCALENDAR") {
+    fail(CalDavErrorCode.Malformed, "the export is not a VCALENDAR")
+  }
+  return eventsByUid(parsed.output, base)
+}
+
+/**
+ * Split a feed into one `VCALENDAR` per UID: its components in feed order, after the `VTIMEZONE`s
+ * they name. The feed's own calendar properties are kept on each.
+ */
+function eventsByUid(feed: IcalComponent, base: URL): CalDavSubscriptionEvent[] {
+  const zones = new Map<string, IcalComponent>()
+  const groups = new Map<string, IcalComponent[]>()
+  for (const child of feed.components) {
+    if (child.name === "VTIMEZONE") {
+      const tzid = getProperty(child, "TZID")?.value.trim()
+      if (tzid) zones.set(tzid, child)
+      continue
+    }
+    const uid = getProperty(child, "UID")?.value.trim()
+    if (!uid) continue
+    const group = groups.get(uid)
+    if (group) group.push(child)
+    else groups.set(uid, [child])
+  }
+  return [...groups].map(([uid, components]) => {
+    const named = new Set(components.flatMap(tzidsOf))
+    const used = [...named].flatMap((tzid) => zones.get(tzid) ?? [])
+    // `before` points into the feed's properties; dropped so each child follows them.
+    const children = [...used, ...components].map((child) => ({ ...child, before: undefined }))
+    const data = serializeIcal({ ...feed, components: children })
+    return { url: `${base.href}#${encodeURIComponent(uid)}`, uid, etag: null, data }
+  })
+}
+
+/** Every `TZID` parameter value in a component and the components inside it. */
+function tzidsOf(component: IcalComponent): string[] {
+  return [
+    ...component.properties.flatMap((property) => getParameter(property, "TZID")?.values ?? []),
+    ...component.components.flatMap(tzidsOf),
+  ]
+}
+
+/** Refuse an object URL with a fragment: it names part of a document, never a resource to write. */
+function requireNoFragment(url: URL): URL {
+  if (url.hash !== "") {
+    fail(CalDavErrorCode.InvalidArgument, "url has a fragment, so it names no object to write")
+  }
+  return url
 }
 
 /** The objects of one calendar that match the listing options. */
@@ -846,8 +989,15 @@ export function createCalDavClient(options: CalDavClientOptions): CalDavClient {
   return {
     discover: () => call((c) => discover(settings, c)),
 
-    listCalendars: (homeUrl) =>
-      call((c) => listCalendars(settings, c, own(server, homeUrl, "homeUrl"))),
+    listCalendars: (homeUrl, listOptions) =>
+      call((c) =>
+        listCalendars(
+          settings,
+          c,
+          own(server, homeUrl, "homeUrl"),
+          listOptions?.subscriptions === true,
+        )
+      ),
 
     listObjects: (calendarUrl, listOptions) =>
       call((c) => listObjects(settings, c, own(server, calendarUrl, "calendarUrl"), listOptions)),
@@ -892,7 +1042,7 @@ export function createCalDavClient(options: CalDavClientOptions): CalDavClient {
 
     updateObject: (url, ics, etag) =>
       call(async (c) => {
-        const target = own(server, url, "url")
+        const target = requireNoFragment(own(server, url, "url"))
         const ifMatch = requireEtag(etag)
         const body = requireIcs(ics)
         const reply = await put(c, target, { "If-Match": ifMatch }, body)
@@ -902,7 +1052,7 @@ export function createCalDavClient(options: CalDavClientOptions): CalDavClient {
 
     deleteObject: (url, etag) =>
       call(async (c) => {
-        const target = own(server, url, "url")
+        const target = requireNoFragment(own(server, url, "url"))
         const ifMatch = requireEtag(etag)
         const reply = await send(settings, c, {
           method: "DELETE",
@@ -964,6 +1114,9 @@ export function createCalDavClient(options: CalDavClientOptions): CalDavClient {
         const set = self && getProp(self, DAV_NS, "current-user-privilege-set")
         return set === undefined ? null : privilegeNames(set)
       }),
+
+    readSubscription: (calendarUrl) =>
+      call((c) => readSubscription(settings, c, own(server, calendarUrl, "calendarUrl"))),
   }
 }
 
@@ -971,6 +1124,12 @@ export function createCalDavClient(options: CalDavClientOptions): CalDavClient {
 function isCalendar(response: DavResponse): boolean {
   const type = getProp(response, DAV_NS, "resourcetype")
   return type !== undefined && childElements(type, CALDAV_NS, "calendar").length > 0
+}
+
+/** Whether a response's `resourcetype` marks a CalendarServer subscription (`cs:subscribed`). */
+function isSubscription(response: DavResponse): boolean {
+  const type = getProp(response, DAV_NS, "resourcetype")
+  return type !== undefined && childElements(type, CALENDARSERVER_NS, "subscribed").length > 0
 }
 
 function textOf(element: XmlElement): string {
