@@ -56,7 +56,7 @@ browser- and server-only halves are the other two subpaths.
 | `universal/money`           | `currencyDecimals`, `formatMoney`, `formatMoneyParts`, `moneyDecimalString`, `parseMoney`, `MoneyOptions` — money as a smallest-unit integer, parsed and formatted without a float step; an optional `{ decimals }` gives the decimals of `USDT` (6) or `BTC` (8), which `Intl` rejects or gets wrong                                                                                                                                                                                                                                                                                                                                                                                                       |
 | `universal/result`          | `Result`, `ok`, `err`, `unwrap`, `unwrapOr`, `CommandEnvelope`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 | `universal/schema`          | `InferSchema` — the only arktype type helper this package needs                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
-| `universal/seo`             | `canonicalUrl`, `normalizeCanonical`, `breadcrumbItems`, `breadcrumbListJsonLd`, `faqPageJsonLd`, `blogPostingJsonLd`, `productJsonLd`, `itemListJsonLd`, `jsonLdText`, `sitemapXml`, `rssXml`, `llmsTxt`, `Crumb`, `BreadcrumbListItem`, `BreadcrumbListJsonLd`, `SitemapEntry`, `RssChannel`, `RssItem`, `BlogPost`, `BlogPostingJsonLd`, `ProductPage`, `ProductVariant`, `ProductJsonLd`, `ProductGroupJsonLd`, `ItemListJsonLd`, `LlmsTxtDocument` — the canonical address, JSON-LD (articles, FAQs, products and catalog lists), `sitemap.xml` with images, RSS feed and `llms.txt` a server-rendered site publishes                                                                                  |
+| `universal/seo`             | `canonicalUrl`, `normalizeCanonical`, `breadcrumbItems`, `breadcrumbListJsonLd`, `faqPageJsonLd`, `blogPostingJsonLd`, `productJsonLd`, `itemListJsonLd`, `jsonLdText`, `sitemapXml`, `rssXml`, `llmsTxt`, `Crumb`, `BreadcrumbListItem`, `BreadcrumbListJsonLd`, `SitemapEntry`, `SitemapAlternate`, `RssChannel`, `RssItem`, `BlogPost`, `BlogPostingJsonLd`, `ProductPage`, `ProductVariant`, `ProductJsonLd`, `ProductGroupJsonLd`, `ItemListJsonLd`, `LlmsTxtDocument` — the canonical address, JSON-LD (articles, FAQs, products and catalog lists), `sitemap.xml` with images and language versions, RSS feed and `llms.txt` a server-rendered site publishes                                        |
 | `universal/settings`        | `defineSettings`, `saveSettings`, `SettingsStore`, `VersionedSettings` — typed, versioned settings: an arktype schema per app, a save based on an older version refused with the current record, undeclared keys dropped and a size cap; storage stays with the app through a compare-and-set port                                                                                                                                                                                                                                                                                                                                                                                                          |
 | `universal/shell`           | `shellQuote` — one POSIX shell word: single-quoted, nothing expanded; refuses NUL                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
 | `universal/sort`            | `SortDirection`, `SortRule`, `toggleSort`, `removeSortRule`, `sortRows`, `parseSort`, `serializeSort` — multi-column sort rules and the `?sort=` parameter a page writes and an API reads                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
@@ -177,6 +177,29 @@ const note = noteSchema.assert({ id: uuidV7(), text: "milk" })
 ```
 
 Upper-case input is refused. `./keyset-cursor` checks its page key's id with `UUID_PATTERN`.
+
+#### `universal/seo` — language versions in `sitemap.xml`
+
+A page published in several languages lists every version in `alternates`, its own included, and
+each version's entry repeats the same list. `sitemapXml` writes one
+`<xhtml:link rel="alternate" hreflang="…" href="…"/>` per version and declares the `xhtml`
+namespace only when some entry has one, so a sitemap without alternates is unchanged. `lang` is a
+BCP 47 tag, written in its canonical case, or `x-default` for the version shown to everyone else;
+any other value throws.
+
+```ts
+import { sitemapXml } from "@spy4x/platform/universal/seo"
+
+const alternates = [
+  { lang: "vi", url: "https://shop.example/" },
+  { lang: "en", url: "https://shop.example/en/" },
+  { lang: "x-default", url: "https://shop.example/" },
+]
+const xml = sitemapXml([
+  { url: "https://shop.example/", alternates },
+  { url: "https://shop.example/en/", alternates },
+])
+```
 
 ### `./browser` → `browser.ts`
 
