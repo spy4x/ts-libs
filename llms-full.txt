@@ -394,7 +394,9 @@ What the client guarantees:
   objects, so `readSubscription(url)` reads the feed with `GET <url>?export` and returns one entry
   per UID: the master, its `RECURRENCE-ID` overrides and the `VTIMEZONE`s they name, in one
   `VCALENDAR`. A component without a `UID` is left out; an answer that is not one `VCALENDAR`
-  fails with `Malformed`. Each entry's `url` is `<calendar URL>#<encodeURIComponent(uid)>`, stable
+  fails with `Malformed`. Because each entry repeats the time zones it references, the entries
+  together may hold at most four times `maxResponseBytes`; past that the call fails with
+  `TooLarge`. Each entry's `url` is `<calendar URL>#<encodeURIComponent(uid)>`, stable
   while the feed keeps the UID, and its `etag` is `null`. `updateObject` and `deleteObject` refuse
   a URL with a fragment, and `deleteCalendar` refuses a subscription. The feed's own source URL is
   never fetched.
