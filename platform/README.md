@@ -208,7 +208,9 @@ self-closing tag alone on a top-level line, its name starting with a capital, it
 braces or text in double quotes. The library has no list of components and checks no props; the
 page maps each tag to its component and validates the props with that component's schema. A tag in
 a code block stays code. A line that starts like a tag but does not read as one, or a tag in a list
-or a quote, renders as nothing and comes back in `problems` with its line:
+or a quote, renders as nothing and comes back in `problems` with its line, its tag, an English
+`message` and a `code` an editor can translate: `nested` for a tag in a list or a quote, `syntax`
+for a line that does not read:
 
 ```ts
 import { renderMarkdownSegments } from "@spy4x/platform/universal/markdown"

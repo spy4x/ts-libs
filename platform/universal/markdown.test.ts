@@ -257,7 +257,7 @@ describe("renderMarkdownSegments: problems", () => {
     it(`reports ${JSON.stringify(line)} on its line and renders nothing for it`, () => {
       const { segments, problems } = renderMarkdownSegments(`Intro.\n\n${line}\n\nAfter.\n`)
       expect(problems).toHaveLength(1)
-      expect(problems[0].line).toBe(3)
+      expect(problems[0]).toMatchObject({ line: 3, code: "syntax", tag: "Gauge" })
       expect(problems[0].message).toContain("<Gauge>: ")
       expect(problems[0].message).toContain(reason)
       expect(segments).toEqual([{ kind: "html", html: "<p>Intro.</p>\n<p>After.</p>\n" }])
@@ -267,7 +267,10 @@ describe("renderMarkdownSegments: problems", () => {
   it("reports a tag inside a list or a quote with its line and renders nothing for it", () => {
     const md = "Intro.\n\n- item\n\n  <Gauge level={1} />\n\n> quote\n> <Gauge />\n"
     const { segments, problems } = renderMarkdownSegments(md)
-    expect(problems.map((p) => p.line)).toEqual([5, 8])
+    expect(problems.map((p) => [p.line, p.code, p.tag])).toEqual([
+      [5, "nested", "Gauge"],
+      [8, "nested", "Gauge"],
+    ])
     for (const p of problems) expect(p.message).toContain("top level")
     expect(segments).toHaveLength(1)
     expect(segments[0]).toMatchObject({ kind: "html" })
@@ -278,7 +281,7 @@ describe("renderMarkdownSegments: problems", () => {
     const { segments, problems } = renderMarkdownSegments(
       "<Bad x />\n\n<Good />\n\n<Bad y={,} />\n",
     )
-    expect(problems.map((p) => p.line)).toEqual([1, 5])
+    expect(problems.map((p) => [p.line, p.code])).toEqual([[1, "syntax"], [5, "syntax"]])
     expect(segments).toEqual([{ kind: "component", tag: "Good", props: {}, line: 3 }])
   })
 })

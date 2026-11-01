@@ -214,10 +214,20 @@ export type MarkdownSegment =
   | { kind: "html"; html: string }
   | ({ kind: "component" } & MarkdownComponent)
 
+/**
+ * What kind of problem a {@link MarkdownProblem} is, so an editor can word it in its own language:
+ * `nested` for a tag inside a list or a quote, `syntax` for a tag line that does not read.
+ */
+export type MarkdownProblemCode = "nested" | "syntax"
+
 /** A component tag line that could not be read. The line renders as nothing. */
 export interface MarkdownProblem {
   /** The 1-based line in the Markdown. */
   line: number
+  /** The kind of problem, for a translated message; `message` keeps the English detail. */
+  code: MarkdownProblemCode
+  /** The tag's name as written, such as `Chart`. */
+  tag: string
   /** What is wrong, starting with the tag, such as `<Chart>: prop "year" is given twice`. */
   message: string
 }
@@ -366,13 +376,21 @@ export function renderMarkdownSegments(markdown: string): RenderedMarkdownSegmen
         if (!topLevel) {
           const message =
             `<${name}>: a component tag must sit at the top level, not in a list or a quote`
-          return { type: "markdownComponent", raw, problem: { line, message } }
+          return {
+            type: "markdownComponent",
+            raw,
+            problem: { line, code: "nested", tag: name, message },
+          }
         }
         try {
           return { type: "markdownComponent", raw, component: { ...parseComponentTag(raw), line } }
         } catch (error) {
           const message = `<${name}>: ${(error as Error).message}`
-          return { type: "markdownComponent", raw, problem: { line, message } }
+          return {
+            type: "markdownComponent",
+            raw,
+            problem: { line, code: "syntax", tag: name, message },
+          }
         }
       },
       // Reached only for a tag nested in a list or a quote, which is a problem: it shows nothing.
