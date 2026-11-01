@@ -1,6 +1,6 @@
 /**
- * The iCalendar duration (`P1DT2H`) as this package reads and writes it: read one with
- * {@link readDuration}, measure it with {@link durationMs}.
+ * The iCalendar duration (`P1DT2H`) as this package reads and writes it. Private to the package:
+ * not an entry point.
  *
  * One pattern holds the grammar. Reading is lenient, as for any text from another app: any case,
  * weeks next to days, and a time that skips a unit. Writing is checked by the caller's own rule,

@@ -2592,8 +2592,6 @@ writeList	function	@spy4x/time/ical	Replace every property named `name` with one
 writeText	function	@spy4x/time/ical	Escape `text` as TEXT and set it with setProperty, keeping existing parameters.
 Duration	interface	@spy4x/time/ical-duration	A duration split into its parts.
 durationMs	function	@spy4x/time/ical-duration	A read duration in milliseconds.
-isIsoDuration	function	@spy4x/time/ical-duration	Whether `text` is an ISO 8601 duration as an event's `DURATION` takes it: weeks alone, or any of days, hours, minutes and seconds, `P` and `PT` included.
-isRfcDuration	function	@spy4x/time/ical-duration	Whether `text` is an RFC 5545 `dur-value`: weeks alone, or days with an optional time, or a time.
 readDuration	function	@spy4x/time/ical-duration	A duration as written by another app, or `undefined` when it is not one.
 Alarm	interface	@spy4x/time/ical-tasks	A reminder (VALARM) as read.
 AlarmInput	interface	@spy4x/time/ical-tasks	A reminder (VALARM) to write.
@@ -2795,4 +2793,4 @@ firstIssueMessage	function	@spy4x/validation/validate	First issue message in a v
 isArkErrors	function	@spy4x/validation/validate	Whether a value is an arktype rejection, without relying on `instanceof`.
 toValidationError	function	@spy4x/validation/validate	Build a ValidationError from arktype's issues.
 validate	function	@spy4x/validation/validate	Parse `value` with an arktype schema exactly once.
-# export surface: sha256 a4f6bd80baacd1ac9d15b4fcbdcfae4b72d6156ad2f9c529158cc2653068a965
+# export surface: sha256 ce77b5bab1a9803f21a152ccf4d56097f29714da6fcad57a03ba2e92f2edee72
