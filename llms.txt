@@ -1301,9 +1301,14 @@ todayView	function	@spy4x/platform/universal/ical-tasks-view	Deprecated: Import 
 upcomingView	function	@spy4x/platform/universal/ical-tasks-view	Deprecated: Import from `@spy4x/tasks/view`. Tomorrow through UPCOMING_DAYS days after today, one entry per day that has tasks, in date order.
 isRecord	function	@spy4x/platform/universal/is-record	True for a plain keyed object: not `null`, not an array.
 KeyValueStore	interface	@spy4x/platform/universal/key-value-store	Minimal synchronous key/value port: the subset of the DOM `Storage` interface a caller needs to persist a small value, and the one shape `@spy4x/platform/browser/storage`'s `StorageLike` and `@spy4x/realtime`'s `KeyValueStore` both alias (#71).
+MarkdownComponent	interface	@spy4x/platform/universal/markdown	A component tag as written in the Markdown: its name, its props and where it is.
 MarkdownHeading	interface	@spy4x/platform/universal/markdown	One heading of a rendered document, for its table of contents.
+MarkdownProblem	interface	@spy4x/platform/universal/markdown	A component tag line that could not be read.
+MarkdownSegment	type	@spy4x/platform/universal/markdown	A piece of a rendered document: a chunk of HTML, or a component tag between two chunks.
 RenderedMarkdown	interface	@spy4x/platform/universal/markdown	What renderMarkdown returns.
+RenderedMarkdownSegments	interface	@spy4x/platform/universal/markdown	What renderMarkdownSegments returns.
 renderMarkdown	function	@spy4x/platform/universal/markdown	Render Markdown to HTML that is safe to put on a public page, plus its headings.
+renderMarkdownSegments	function	@spy4x/platform/universal/markdown	Render Markdown like renderMarkdown, split into HTML chunks around component tags.
 Counter	interface	@spy4x/platform/universal/metrics	A monotonically increasing count, kept separately for every distinct set of labels.
 MetricLabels	type	@spy4x/platform/universal/metrics	The labels of one series, for example `{ event: "UserSignedOut", listener: "close" }`.
 createCounter	function	@spy4x/platform/universal/metrics	Creates a counter.
@@ -2793,4 +2798,4 @@ firstIssueMessage	function	@spy4x/validation/validate	First issue message in a v
 isArkErrors	function	@spy4x/validation/validate	Whether a value is an arktype rejection, without relying on `instanceof`.
 toValidationError	function	@spy4x/validation/validate	Build a ValidationError from arktype's issues.
 validate	function	@spy4x/validation/validate	Parse `value` with an arktype schema exactly once.
-# export surface: sha256 ce77b5bab1a9803f21a152ccf4d56097f29714da6fcad57a03ba2e92f2edee72
+# export surface: sha256 56eaac8ff554fde88e1469fc3209bec919985a4ce70ad944087d595975e2c22b

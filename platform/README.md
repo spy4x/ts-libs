@@ -51,7 +51,7 @@ browser- and server-only halves are the other two subpaths.
 | `universal/i18n`            | `createTranslator`, `negotiateLanguage`, `parseAcceptLanguage`, `textDirection`, `pseudoLocalize`, `checkCatalogs`, `findUnusedKeys`, `stampLocks` — translations from flat JSON catalogs with `Intl` plurals, language choice, text direction and the catalog checks; see below                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | `universal/is-record`       | `isRecord` — type guard for a parsed JSON object (not `null`, not an array)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 | `universal/key-value-store` | `KeyValueStore` — a dependency-free port, the one home for it and for `browser/storage`'s deprecated `StorageLike` and `@spy4x/realtime`'s deprecated `KeyValueStore` alias (#71)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
-| `universal/markdown`        | `renderMarkdown`, `RenderedMarkdown`, `MarkdownHeading` — Markdown to HTML that is safe on a public page: raw HTML escaped, link and image addresses only `http`, `https`, `mailto` or relative, `rel="noopener noreferrer"` on external links, lazy images, and every heading with a stable `id`, returned for a table of contents. Built on `marked`; import it from `@spy4x/platform/universal/markdown`, the root export does not load it                                                                                                                                                                                                                                                               |
+| `universal/markdown`        | `renderMarkdown`, `RenderedMarkdown`, `MarkdownHeading`, `renderMarkdownSegments` and its types — Markdown to HTML that is safe on a public page: raw HTML escaped, link and image addresses only `http`, `https`, `mailto` or relative, `rel="noopener noreferrer"` on external links, lazy images, and every heading with a stable `id`, returned for a table of contents. Built on `marked`; import it from `@spy4x/platform/universal/markdown`, the root export does not load it                                                                                                                                                                                                                       |
 | `universal/metrics`         | `Counter`, `MetricLabels`, `createCounter`, `renderPrometheus` — a labelled counter and its Prometheus text exposition; no registry, no histograms                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
 | `universal/money`           | `currencyDecimals`, `formatMoney`, `formatMoneyParts`, `moneyDecimalString`, `parseMoney`, `MoneyOptions` — money as a smallest-unit integer, parsed and formatted without a float step; an optional `{ decimals }` gives the decimals of `USDT` (6) or `BTC` (8), which `Intl` rejects or gets wrong                                                                                                                                                                                                                                                                                                                                                                                                       |
 | `universal/result`          | `Result`, `ok`, `err`, `unwrap`, `unwrapOr`, `CommandEnvelope`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
@@ -177,6 +177,32 @@ const note = noteSchema.assert({ id: uuidV7(), text: "milk" })
 ```
 
 Upper-case input is refused. `./keyset-cursor` checks its page key's id with `UUID_PATTERN`.
+
+#### `universal/markdown` — interactive components in a post
+
+`renderMarkdownSegments` renders like `renderMarkdown` and splits the HTML around component tags: a
+self-closing tag alone on a top-level line, its name starting with a capital, its props JSON in
+braces or text in double quotes. The library has no list of components and checks no props; the
+page maps each tag to its component and validates the props with that component's schema. A tag in
+a code block stays code. A line that starts like a tag but does not read as one, or a tag in a list
+or a quote, renders as nothing and comes back in `problems` with its line:
+
+```ts
+import { renderMarkdownSegments } from "@spy4x/platform/universal/markdown"
+
+const { segments, problems } = renderMarkdownSegments(post.body)
+if (problems.length) throw new Error(problems.map((p) => `line ${p.line}: ${p.message}`).join("\n"))
+// "<RunsCalculator saving={15} />" on its own line becomes
+// { kind: "component", tag: "RunsCalculator", props: { saving: 15 }, line: 7 }
+const body = segments.map((s) =>
+  s.kind === "html"
+    ? <div dangerouslySetInnerHTML={{ __html: s.html }} />
+    : <Figure tag={s.tag} props={s.props} /> // looks the tag up and validates the props
+)
+```
+
+Props are data, never HTML: a string prop comes back as written, so render it as text or an
+attribute, which Preact escapes.
 
 ### `./browser` → `browser.ts`
 
