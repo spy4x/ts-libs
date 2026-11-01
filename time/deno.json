@@ -14,7 +14,8 @@
     "./ical-tasks": "./ical-tasks.ts",
     "./ical-tasks-model": "./ical-tasks-model.ts",
     "./ical-tasks-edit": "./ical-tasks-edit.ts",
-    "./ical-tasks-reminders": "./ical-tasks-reminders.ts"
+    "./ical-tasks-reminders": "./ical-tasks-reminders.ts",
+    "./ical-duration": "./ical-duration.ts"
   },
   "publish": {
     "exclude": ["testdata"]
