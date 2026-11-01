@@ -234,8 +234,8 @@ describe("renderMarkdownSegments: component tags", () => {
   })
 
   it("counts lines after Windows line breaks", () => {
-    const { segments } = renderMarkdownSegments("a\r\n\r\nb\r\n\r\n<Gauge />\r\n")
-    expect(segments[1]).toMatchObject({ kind: "component", line: 5 })
+    const md = "a\r\n\r\n<Gauge />\r\n" + "x\r\n".repeat(10)
+    expect(renderMarkdownSegments(md).segments[1]).toMatchObject({ kind: "component", line: 3 })
   })
 })
 
