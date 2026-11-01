@@ -340,6 +340,7 @@ Deno.test("isExampleAddress leaves real domains and the testing domain mailable"
       "ann@myexample.com",
       "ann@example.com.au",
       "ann@seed.test",
+      "ann@shopexample",
     ]
   ) {
     assertEquals({ address, example: isExampleAddress(address) }, { address, example: false })
