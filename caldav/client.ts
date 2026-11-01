@@ -335,8 +335,10 @@ export interface CalDavClient {
    * The events of a calendar subscription, one entry per UID. A sabre/dav server such as Nextcloud
    * answers `PROPFIND` and `REPORT` on a subscription with no objects, so this reads the whole feed
    * with one `GET <calendar>?export` and splits it. A component without a `UID` is left out; an
-   * answer that is not one iCalendar `VCALENDAR` fails with `Malformed`. Never fetches the feed's
-   * own source URL. Optional for the same reason as `getPrivileges`.
+   * answer that is not one iCalendar `VCALENDAR` fails with `Malformed`. Fails with `TooLarge`
+   * when the entries together would pass four times `maxResponseBytes`, since each entry repeats
+   * the time zones it references. Never fetches the feed's own source URL. Optional for the same
+   * reason as `getPrivileges`.
    */
   readSubscription?(calendarUrl: string | URL): Promise<CalDavResult<CalDavSubscriptionEvent[]>>
 }
@@ -345,6 +347,14 @@ const DEFAULT_TIMEOUT_MS = 30_000
 const DEFAULT_MAX_REDIRECTS = 5
 const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308])
 const ICS_TYPE = "text/calendar; charset=utf-8"
+/**
+ * How many times `maxResponseBytes` the entries of `readSubscription` may hold together. Each
+ * entry repeats the feed's calendar properties and the time zones it references, so a feed with
+ * many events in one zone grows when split; four times leaves room for that (a few KiB of zone per
+ * event in a feed under the limit), while a hostile feed that makes every event reference one huge
+ * VTIMEZONE fails instead of making the consumer hold gigabytes.
+ */
+const SUBSCRIPTION_OUTPUT_FACTOR = 4
 const XML_TYPE = "application/xml; charset=utf-8"
 
 const PRINCIPAL_PROPS: XmlName[] = [{ namespace: DAV_NS, name: "current-user-principal" }]
@@ -868,14 +878,14 @@ async function readSubscription(
   if (parsed.output.name !== "VCALENDAR") {
     fail(CalDavErrorCode.Malformed, "the export is not a VCALENDAR")
   }
-  return eventsByUid(parsed.output, base)
+  return eventsByUid(parsed.output, base, settings.maxBytes * SUBSCRIPTION_OUTPUT_FACTOR)
 }
 
 /**
  * Split a feed into one `VCALENDAR` per UID: its components in feed order, after the `VTIMEZONE`s
  * they name. The feed's own calendar properties are kept on each.
  */
-function eventsByUid(feed: IcalComponent, base: URL): CalDavSubscriptionEvent[] {
+function eventsByUid(feed: IcalComponent, base: URL, maxBytes: number): CalDavSubscriptionEvent[] {
   const zones = new Map<string, IcalComponent>()
   const groups = new Map<string, IcalComponent[]>()
   for (const child of feed.components) {
@@ -890,14 +900,23 @@ function eventsByUid(feed: IcalComponent, base: URL): CalDavSubscriptionEvent[] 
     if (group) group.push(child)
     else groups.set(uid, [child])
   }
-  return [...groups].map(([uid, components]) => {
+  const events: CalDavSubscriptionEvent[] = []
+  const encoder = new TextEncoder()
+  let total = 0
+  for (const [uid, components] of groups) {
     const named = new Set(components.flatMap(tzidsOf))
     const used = [...named].flatMap((tzid) => zones.get(tzid) ?? [])
     // `before` points into the feed's properties; dropped so each child follows them.
     const children = [...used, ...components].map((child) => ({ ...child, before: undefined }))
     const data = serializeIcal({ ...feed, components: children })
-    return { url: `${base.href}#${encodeURIComponent(uid)}`, uid, etag: null, data }
-  })
+    // Checked after each entry, so at most one entry (no larger than the feed) is built past it.
+    total += encoder.encode(data).byteLength
+    if (total > maxBytes) {
+      fail(CalDavErrorCode.TooLarge, `the split export would be over ${maxBytes} bytes`)
+    }
+    events.push({ url: `${base.href}#${encodeURIComponent(uid)}`, uid, etag: null, data })
+  }
+  return events
 }
 
 /** Every `TZID` parameter value in a component and the components inside it. */

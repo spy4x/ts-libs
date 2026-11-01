@@ -936,6 +936,65 @@ describe("calendar subscriptions", () => {
     assert(events.every((event) => !event.data.includes("No identifier")))
   })
 
+  /** A feed of these components, each given as its content lines. */
+  const feedOf = (...components: string[][]) =>
+    ["BEGIN:VCALENDAR", "VERSION:2.0", ...components.flat(), "END:VCALENDAR", ""].join("\r\n")
+
+  const zone = (tzid: string, ...extra: string[]) => [
+    "BEGIN:VTIMEZONE",
+    `TZID:${tzid}`,
+    ...extra,
+    "BEGIN:STANDARD",
+    "DTSTART:19701101T020000",
+    "TZOFFSETFROM:-0400",
+    "TZOFFSETTO:-0500",
+    "END:STANDARD",
+    "END:VTIMEZONE",
+  ]
+
+  it("keeps a time zone that only a nested component such as a VALARM references", async () => {
+    const feed = feedOf(zone("America/New_York"), [
+      "BEGIN:VEVENT",
+      "UID:party",
+      "DTSTART;VALUE=DATE:20261224",
+      "BEGIN:VALARM",
+      "ACTION:DISPLAY",
+      "X-SNOOZE-UNTIL;TZID=America/New_York:20261224T090000",
+      "END:VALARM",
+      "END:VEVENT",
+    ])
+    const { client } = setup(() => new Response(feed))
+    const [event] = output(await client.readSubscription!(HOLIDAYS))
+    assertEquals(shape(event.data), ["VTIMEZONE:America/New_York", "VEVENT:party"])
+  })
+
+  it("groups components whose UIDs differ only by surrounding spaces", async () => {
+    const feed = feedOf(
+      ["BEGIN:VEVENT", "UID:dup@x", "DTSTART;VALUE=DATE:20261224", "END:VEVENT"],
+      ["BEGIN:VEVENT", "UID:dup@x ", "RECURRENCE-ID;VALUE=DATE:20261231", "END:VEVENT"],
+    )
+    const { client } = setup(() => new Response(feed))
+    const events = output(await client.readSubscription!(HOLIDAYS))
+    assertEquals(events.map((event) => [event.uid, event.url]), [["dup@x", `${HOLIDAYS}#dup%40x`]])
+    assertEquals(shape(events[0].data).length, 2)
+  })
+
+  it("fails with TooLarge when one big time zone repeated per event outgrows the bound", async () => {
+    // A 9 KiB zone and 20 events naming it: the feed is under the 20 KB response limit, but split
+    // per UID it would be about 180 KiB, past four times that limit.
+    const padding = Array.from({ length: 120 }, (_, i) => `X-PAD-${i}:${"z".repeat(64)}`)
+    const events = Array.from({ length: 20 }, (_, i) => [
+      "BEGIN:VEVENT",
+      `UID:e${i}`,
+      "DTSTART;TZID=America/New_York:20261224T090000",
+      "END:VEVENT",
+    ])
+    const feed = feedOf(zone("America/New_York", ...padding), ...events)
+    assert(new TextEncoder().encode(feed).byteLength < 20_000, "the feed itself fits the limit")
+    const { client } = setup(() => new Response(feed), { maxResponseBytes: 20_000 })
+    assertEquals(failure(await client.readSubscription!(HOLIDAYS)).code, CalDavErrorCode.TooLarge)
+  })
+
   it("fails with Malformed for an export that is not one VCALENDAR", async () => {
     for (
       const body of [
