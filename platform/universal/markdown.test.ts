@@ -1,7 +1,7 @@
 import { describe, it } from "@std/testing/bdd"
 import { expect } from "@std/expect"
 
-import { renderMarkdown } from "./markdown.ts"
+import { renderMarkdown, renderMarkdownSegments } from "./markdown.ts"
 
 /** The rendered HTML of `markdown`. */
 const html = (markdown: string) => renderMarkdown(markdown).html
@@ -147,5 +147,138 @@ describe("renderMarkdown: headings", () => {
   it("starts ids over on every call", () => {
     expect(renderMarkdown("## A").headings[0].id).toBe("a")
     expect(renderMarkdown("## A").headings[0].id).toBe("a")
+  })
+})
+
+describe("renderMarkdownSegments: component tags", () => {
+  it("splits a post with two tags into five segments with parsed props and lines", () => {
+    const md = [
+      "Intro paragraph.",
+      "",
+      `<Gauge level={10} label="first" marks={[10, 32]} opts={{"a b": "}"}} />`,
+      "",
+      "## Middle",
+      "",
+      "Between.",
+      "<Gauge/>",
+      "After.",
+    ].join("\n")
+    const { segments, headings, problems } = renderMarkdownSegments(md)
+    expect(problems).toEqual([])
+    expect(segments).toEqual([
+      { kind: "html", html: "<p>Intro paragraph.</p>\n" },
+      {
+        kind: "component",
+        tag: "Gauge",
+        props: { level: 10, label: "first", marks: [10, 32], opts: { "a b": "}" } },
+        line: 3,
+      },
+      { kind: "html", html: `<h2 id="middle">Middle</h2>\n<p>Between.</p>\n` },
+      { kind: "component", tag: "Gauge", props: {}, line: 8 },
+      { kind: "html", html: "<p>After.</p>\n" },
+    ])
+    expect(headings).toEqual([{ depth: 2, id: "middle", text: "Middle" }])
+  })
+
+  it("gives the same HTML and headings as renderMarkdown for a post without tags", () => {
+    const md = "# A\n\n## A\n\nText [ref][r] with <kbd>Ctrl</kbd>.\n\n- one\n- two\n\n[r]: /x\n"
+    const { segments, headings, problems } = renderMarkdownSegments(md)
+    expect(segments).toEqual([{ kind: "html", html: renderMarkdown(md).html }])
+    expect(headings).toEqual(renderMarkdown(md).headings)
+    expect(problems).toEqual([])
+  })
+
+  it("keeps heading ids unique across the chunks around a tag", () => {
+    const { headings } = renderMarkdownSegments("## Intro\n\n<Gauge />\n\n## Intro\n")
+    expect(headings.map((h) => h.id)).toEqual(["intro", "intro-2"])
+  })
+
+  it("resolves a reference link whose definition sits in another chunk", () => {
+    const { segments } = renderMarkdownSegments("See [docs][d].\n\n<Gauge />\n\n[d]: /docs\n")
+    expect(segments[0]).toEqual({ kind: "html", html: `<p>See <a href="/docs">docs</a>.</p>\n` })
+  })
+
+  it("leaves a tag in a fenced code block, inline code or mid-line as escaped text", () => {
+    const md = "```tsx\n<Gauge level={500} />\n```\n\n`<Gauge />` is it.\n\nA <Gauge /> here.\n"
+    const { segments, problems } = renderMarkdownSegments(md)
+    expect(problems).toEqual([])
+    expect(segments).toEqual([{ kind: "html", html: renderMarkdown(md).html }])
+    expect(segments[0]).toMatchObject({
+      html: expect.stringContaining("&lt;Gauge level={500} /&gt;"),
+    })
+  })
+
+  it("keeps raw HTML escaped in the chunks around a tag", () => {
+    const { segments } = renderMarkdownSegments(
+      "<script>alert(1)</script>\n\n<Gauge />\n\n<img src=x onerror=alert(1)>\n",
+    )
+    const html = segments.flatMap((s) => s.kind === "html" ? [s.html] : []).join("")
+    expect(html).toBe(
+      "<p>&lt;script&gt;alert(1)&lt;/script&gt;</p>\n<p>&lt;img src=x onerror=alert(1)&gt;</p>\n",
+    )
+  })
+
+  it("returns markup in a string prop as raw data and never puts it in the HTML", () => {
+    const { segments } = renderMarkdownSegments(
+      `<Gauge label="</div><script>alert(1)</script>" data={{"x":"<img src=x onerror=alert(1)>"}} />\n`,
+    )
+    expect(segments).toEqual([{
+      kind: "component",
+      tag: "Gauge",
+      props: {
+        label: "</div><script>alert(1)</script>",
+        data: { x: "<img src=x onerror=alert(1)>" },
+      },
+      line: 1,
+    }])
+  })
+
+  it("counts lines after Windows line breaks", () => {
+    const md = "a\r\n\r\n<Gauge />\r\n" + "x\r\n".repeat(10)
+    expect(renderMarkdownSegments(md).segments[1]).toMatchObject({ kind: "component", line: 3 })
+  })
+})
+
+describe("renderMarkdownSegments: problems", () => {
+  for (
+    const [line, reason] of [
+      ["<Gauge level={15}>", "close itself"],
+      ["<Gauge level={15} /> trailing", "alone on its line"],
+      ["<Gauge level=15 />", "needs a value"],
+      ["<Gauge level />", "needs a value"],
+      ["<Gauge level={fifteen} />", "not a JSON literal"],
+      ["<Gauge level={15 />", "unclosed {"],
+      ['<Gauge label="x />', "unclosed string"],
+      ["<Gauge level={1} level={2} />", "given twice"],
+      ["<Gauge level={1}label={2} />", "unexpected"],
+      ["<Gauge __proto__={{}} />", `"__proto__" is not allowed`],
+    ]
+  ) {
+    it(`reports ${JSON.stringify(line)} on its line and renders nothing for it`, () => {
+      const { segments, problems } = renderMarkdownSegments(`Intro.\n\n${line}\n\nAfter.\n`)
+      expect(problems).toHaveLength(1)
+      expect(problems[0].line).toBe(3)
+      expect(problems[0].message).toContain("<Gauge>: ")
+      expect(problems[0].message).toContain(reason)
+      expect(segments).toEqual([{ kind: "html", html: "<p>Intro.</p>\n<p>After.</p>\n" }])
+    })
+  }
+
+  it("reports a tag inside a list or a quote with its line and renders nothing for it", () => {
+    const md = "Intro.\n\n- item\n\n  <Gauge level={1} />\n\n> quote\n> <Gauge />\n"
+    const { segments, problems } = renderMarkdownSegments(md)
+    expect(problems.map((p) => p.line)).toEqual([5, 8])
+    for (const p of problems) expect(p.message).toContain("top level")
+    expect(segments).toHaveLength(1)
+    expect(segments[0]).toMatchObject({ kind: "html" })
+    expect(JSON.stringify(segments)).not.toContain("Gauge")
+  })
+
+  it("reports every bad tag in page order and still returns the good ones", () => {
+    const { segments, problems } = renderMarkdownSegments(
+      "<Bad x />\n\n<Good />\n\n<Bad y={,} />\n",
+    )
+    expect(problems.map((p) => p.line)).toEqual([1, 5])
+    expect(segments).toEqual([{ kind: "component", tag: "Good", props: {}, line: 3 }])
   })
 })
