@@ -386,8 +386,9 @@ export function renderMarkdownSegments(markdown: string): RenderedMarkdownSegmen
   let run: Token[] = []
   const flush = () => {
     if (run.length === 0) return
-    // Reference-style links resolve through the list the lexer collected for the whole document.
-    const html = marked.parser(Object.assign(run, { links: tokens.links }))
+    // The lexer already resolved reference-style links over the whole document, so a chunk's
+    // links work wherever their definitions sit.
+    const html = marked.parser(run)
     if (html.trim()) segments.push({ kind: "html", html })
     run = []
   }
