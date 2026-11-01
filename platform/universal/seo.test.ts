@@ -661,6 +661,64 @@ describe("sitemapXml images", () => {
   })
 })
 
+describe("sitemapXml alternates", () => {
+  const alternates = [
+    { lang: "vi", url: "https://shop.example/" },
+    { lang: "en-us", url: "https://user:pw@Shop.Example/en/?a=1&b=2#top" },
+    { lang: "x-default", url: "https://shop.example/" },
+  ]
+
+  it("writes one xhtml:link per language version and declares the xhtml namespace", () => {
+    const xml = sitemapXml([{ url: "https://shop.example/", alternates }])
+
+    expect(xml).toBe(
+      `<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9" xmlns:xhtml="http://www.w3.org/1999/xhtml">
+  <url>
+    <loc>https://shop.example/</loc>
+    <xhtml:link rel="alternate" hreflang="vi" href="https://shop.example/"/>
+    <xhtml:link rel="alternate" hreflang="en-US" href="https://shop.example/en/?a=1&amp;b=2"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://shop.example/"/>
+  </url>
+</urlset>
+`,
+    )
+  })
+
+  it("parses as XML with the xhtml namespace bound to each link", () => {
+    const xml = sitemapXml([{ url: "https://shop.example/", alternates }])
+    const link = find(parseFeed(xml), "link")
+
+    expect(link?.namespace).toBe("http://www.w3.org/1999/xhtml")
+  })
+
+  it("leaves a sitemap byte-for-byte unchanged when no entry has alternates", () => {
+    const without = [
+      { url: "https://shop.example/", images: ["https://cdn.shop.example/a.jpg"] },
+      { url: "https://shop.example/en/" },
+    ]
+    const xml = sitemapXml(without.map((entry) => ({ ...entry, alternates: [] })))
+
+    expect(xml).toBe(sitemapXml(without))
+    expect(xml).not.toContain("xmlns:xhtml")
+  })
+
+  it("refuses a language tag that is not BCP 47", () => {
+    expect(() =>
+      sitemapXml([{
+        url: "https://shop.example/",
+        alternates: [{ lang: "en_US!", url: "https://shop.example/" }],
+      }])
+    ).toThrow("sitemap alternate lang must be a BCP 47 language tag, received: en_US!")
+  })
+
+  it("refuses a relative alternate address", () => {
+    expect(() =>
+      sitemapXml([{ url: "https://shop.example/", alternates: [{ lang: "en", url: "/en/" }] }])
+    ).toThrow("sitemap alternate must be an absolute URL")
+  })
+})
+
 /** A shirt page in Vietnamese dong, with no variants. */
 const SHIRT: ProductPage = {
   url: "https://shop.example/shirts/linen#top",

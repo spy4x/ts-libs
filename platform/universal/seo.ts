@@ -213,30 +213,70 @@ export interface SitemapEntry {
   lastmod?: Date
   /** Absolute `http`/`https` addresses of the images the page shows, such as product photos. */
   images?: readonly string[]
+  /**
+   * The page's language versions, written as `hreflang` links. List every version, this page's
+   * own included, and give each version's entry the same list: search engines ignore a link that
+   * the other page does not return.
+   */
+  alternates?: readonly SitemapAlternate[]
+}
+
+/** One language version of a page in a `sitemap.xml`. */
+export interface SitemapAlternate {
+  /** BCP 47 language tag of the version, such as `en` or `pt-BR`, or `x-default` for the fallback. */
+  lang: string
+  /** Absolute `http`/`https` address of the version. */
+  url: string
 }
 
 /** The namespace of Google's image sitemap extension, declared once any entry lists an image. */
 const SITEMAP_IMAGE_NS = "http://www.google.com/schemas/sitemap-image/1.1"
 
+/** The XHTML namespace of the `hreflang` links, declared once any entry lists an alternate. */
+const SITEMAP_XHTML_NS = "http://www.w3.org/1999/xhtml"
+
 /**
  * The text of a `sitemap.xml` that lists `entries` in the order given.
  *
- * Only `loc`, `lastmod` and the images are written: search engines ignore `priority` and
- * `changefreq`. Each address is normalised like a canonical one and XML-escaped; `lastmod` is
- * written as an ISO 8601 timestamp in UTC. An entry's `images` become `image:image` elements of
- * Google's image extension, and its namespace is declared on `urlset` only when one is written.
+ * Only `loc`, `lastmod`, the language versions and the images are written: search engines ignore
+ * `priority` and `changefreq`. Each address is normalised like a canonical one and XML-escaped;
+ * `lastmod` is written as an ISO 8601 timestamp in UTC. An entry's `alternates` become
+ * `xhtml:link rel="alternate"` elements, each language tag in its canonical case, and its `images`
+ * become `image:image` elements of Google's image extension. Each namespace is declared on `urlset`
+ * only when an element of it is written.
  *
- * @throws When an address is not an absolute `http`/`https` URL, or a `lastmod` is an invalid date.
+ * @example A page in English and Vietnamese
+ * ```ts
+ * const alternates = [
+ *   { lang: "vi", url: "https://shop.example/" },
+ *   { lang: "en", url: "https://shop.example/en/" },
+ *   { lang: "x-default", url: "https://shop.example/" },
+ * ]
+ * sitemapXml([
+ *   { url: "https://shop.example/", alternates },
+ *   { url: "https://shop.example/en/", alternates },
+ * ])
+ * ```
+ *
+ * @throws When an address is not an absolute `http`/`https` URL, a `lastmod` is an invalid date, or
+ * an alternate's `lang` is neither a BCP 47 language tag nor `x-default`.
  */
 export function sitemapXml(entries: readonly SitemapEntry[]): string {
   let withImages = false
-  const urls = entries.map(({ url, lastmod, images = [] }) => {
+  let withAlternates = false
+  const urls = entries.map(({ url, lastmod, images = [], alternates = [] }) => {
     let body = `    <loc>${escapeXml(webUrl(url, "sitemap url").href)}</loc>\n`
     if (lastmod !== undefined) {
       if (Number.isNaN(lastmod.getTime())) {
         throw new Error(`sitemap lastmod must be a valid date, received one for: ${url}`)
       }
       body += `    <lastmod>${lastmod.toISOString()}</lastmod>\n`
+    }
+    for (const alternate of alternates) {
+      withAlternates = true
+      const hreflang = escapeXml(hreflangTag(alternate.lang))
+      const href = escapeXml(webUrl(alternate.url, "sitemap alternate").href)
+      body += `    <xhtml:link rel="alternate" hreflang="${hreflang}" href="${href}"/>\n`
     }
     for (const image of images) {
       withImages = true
@@ -247,9 +287,22 @@ export function sitemapXml(entries: readonly SitemapEntry[]): string {
   })
 
   const imageNs = withImages ? ` xmlns:image="${SITEMAP_IMAGE_NS}"` : ""
+  const xhtmlNs = withAlternates ? ` xmlns:xhtml="${SITEMAP_XHTML_NS}"` : ""
   return `<?xml version="1.0" encoding="UTF-8"?>\n` +
-    `<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"${imageNs}>\n` +
+    `<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"${imageNs}${xhtmlNs}>\n` +
     `${urls.join("")}</urlset>\n`
+}
+
+/** `lang` in its canonical case, or `x-default`; anything else is refused. */
+function hreflangTag(lang: string): string {
+  if (lang === "x-default") return lang
+  try {
+    const [tag] = Intl.getCanonicalLocales(lang)
+    if (tag !== undefined) return tag
+  } catch {
+    // RangeError: not a BCP 47 tag; refused below with the value named.
+  }
+  throw new Error(`sitemap alternate lang must be a BCP 47 language tag, received: ${lang}`)
 }
 
 /** `value` safe inside an XML element body or a double- or single-quoted attribute. */

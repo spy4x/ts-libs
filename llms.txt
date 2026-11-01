@@ -660,6 +660,7 @@ SearchEntry	interface	@spy4x/platform	Something searchEntries can find: a label 
 SearchMatch	interface	@spy4x/platform	One result of searchEntries.
 SearchMatchKind	type	@spy4x/platform	How a query matched an entry, from the strongest to the weakest:
 ServerError	interface	@spy4x/platform	The server answered with a failure status.
+SitemapAlternate	interface	@spy4x/platform	One language version of a page in a `sitemap.xml`.
 SitemapEntry	interface	@spy4x/platform	One page in a `sitemap.xml`.
 SortDirection	type	@spy4x/platform	Sort direction of one rule.
 SortRule	interface	@spy4x/platform	One column in the sort order.
@@ -1354,6 +1355,7 @@ ProductPage	interface	@spy4x/platform/universal/seo	What productJsonLd describes
 ProductVariant	interface	@spy4x/platform/universal/seo	One variant of a product, such as one colour in one size, selectable on the product's page.
 RssChannel	interface	@spy4x/platform/universal/seo	The feed itself: what an RSS reader shows as the source of the items.
 RssItem	interface	@spy4x/platform/universal/seo	One post in an RSS feed.
+SitemapAlternate	interface	@spy4x/platform/universal/seo	One language version of a page in a `sitemap.xml`.
 SitemapEntry	interface	@spy4x/platform/universal/seo	One page in a `sitemap.xml`.
 blogPostingJsonLd	function	@spy4x/platform/universal/seo	The schema.org `BlogPosting` node for one post, with the fields Google reads for an article: `headline`, `image`, `datePublished`, `dateModified`, `author` and `publisher`, plus `mainEntityOfPage`, `articleSection`, `inLanguage`, `timeRequired` and `isPartOf`.
 breadcrumbItems	function	@spy4x/platform/universal/seo	`itemListElement` for a schema.org `BreadcrumbList`, built from the crumbs the caller stated.
@@ -2793,4 +2795,4 @@ firstIssueMessage	function	@spy4x/validation/validate	First issue message in a v
 isArkErrors	function	@spy4x/validation/validate	Whether a value is an arktype rejection, without relying on `instanceof`.
 toValidationError	function	@spy4x/validation/validate	Build a ValidationError from arktype's issues.
 validate	function	@spy4x/validation/validate	Parse `value` with an arktype schema exactly once.
-# export surface: sha256 ce77b5bab1a9803f21a152ccf4d56097f29714da6fcad57a03ba2e92f2edee72
+# export surface: sha256 9110c38070434159c64ffa712b00c61bcb137ab3241786c70a28e182747e8370
