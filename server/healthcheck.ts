@@ -60,8 +60,8 @@ export interface ProbeFetcher {
 
 /** Timer used for deadlines. Injected so a test never waits on the wall clock. */
 export interface ProbeTimer {
-  setTimer: (handler: () => void, ms: number) => number
-  clearTimer: (handle: number) => void
+  setTimer: (handler: () => void, ms: number) => ReturnType<typeof setTimeout>
+  clearTimer: (handle: ReturnType<typeof setTimeout>) => void
 }
 
 /** Default per-step deadline: short enough for a container probe, long enough for a busy loop. */
@@ -164,7 +164,7 @@ export async function withDeadline<T>(
   timer: ProbeTimer = platformTimer,
 ): Promise<T> {
   if (timeoutMs <= 0) return await operation
-  let handle: number | null = null
+  let handle: ReturnType<typeof setTimeout> | null = null
   try {
     return await Promise.race([
       operation,

@@ -309,7 +309,7 @@ const GATE_EXPIRED = Symbol("sqlite gate expired")
 
 /** The default delay: `setTimeout`, cancellable so a finished wait keeps nothing pending. */
 const defaultDelay: SqliteDelay = (milliseconds) => {
-  let handle: number | undefined
+  let handle: ReturnType<typeof setTimeout> | undefined
   const expired = new Promise<void>((resolve) => {
     handle = setTimeout(resolve, milliseconds)
   })
