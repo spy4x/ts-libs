@@ -145,8 +145,15 @@ describe("writeStderrOver", () => {
   })
 
   it("throws instead of looping forever when Deno's standard error takes no bytes", () => {
-    const host: RuntimeHost = { Deno: { stderr: { writeSync: () => 0 } } }
-    expect(() => writeStderrOver(host, "x")).toThrow("accepted no bytes")
+    let calls = 0
+    // A second call is the loop the guard prevents; failing then keeps this test from hanging.
+    const writeSync = () => {
+      if (++calls > 1) throw new Error("writeSync called again after it took no bytes")
+      return 0
+    }
+    expect(() => writeStderrOver({ Deno: { stderr: { writeSync } } }, "x")).toThrow(
+      "accepted no bytes",
+    )
   })
 
   it("throws on a runtime with no standard error", () => {
