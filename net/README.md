@@ -13,6 +13,7 @@ or any npm package, and nothing here ever will without a stated reason.
 net/+main.ts          barrel: everything below
 net/url-shape.ts      normalizeUrlShape()   — shape only
 net/url-policy.ts     validatePublicUrl()   — the SSRF guard
+net/dns.ts            resolveDns()          — A or AAAA lookup on Deno, Node and Bun
 net/safe-fetch.ts     safeFetch()           — guard + redirect re-validation
 net/bounded-body.ts   readBoundedText/Json/Body, readContentLength, parseBoundedFormData
 net/ip.ts             parseIp(), normalizeIp(), ipInRanges(), ipHint(), isLoopbackHost(),

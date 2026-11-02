@@ -24,13 +24,15 @@
  * everything above them — see `detectScheme`, `INVALID_CHARACTERS` and the
  * message constants imported below.
  *
- * PERMISSIONS: `defaultResolver` calls `Deno.resolveDns`, so a consumer that
- * uses the default resolver needs `--allow-net`. Injecting a resolver removes
- * that need; every test in this package does exactly that.
+ * PERMISSIONS: `defaultResolver` looks names up through `resolveDns` of
+ * `@spy4x/net/dns`, which works on Deno, Node and Bun; on Deno a consumer
+ * that uses it needs `--allow-net`. Injecting a resolver removes that
+ * need; every test in this package does exactly that.
  * @module
  */
 
 import { parseIpv6Groups } from "./_ipv6.ts"
+import { resolveDns } from "./dns.ts"
 import { ipInRanges } from "./ip.ts"
 import {
   ALLOWED_PROTOCOLS,
@@ -118,9 +120,6 @@ export interface DnsResolver {
   resolve(hostname: string): Promise<string[]>
 }
 
-/** Address families the policy verifies. Every family listed is required. */
-type AddressFamily = "A" | "AAAA"
-
 /**
  * The production resolver: system A **and** AAAA lookups, both required.
  *
@@ -128,7 +127,7 @@ type AddressFamily = "A" | "AAAA"
  * differently:
  *
  *  - **NODATA** — the name exists but has no record of that type.
- *    `Deno.resolveDns` throws `Deno.errors.NotFound` for it. That is a
+ *    `resolveDns` answers it with an empty list. That is a
  *    legitimate empty answer: most of the public web is A-only, so treating it
  *    as a failure would refuse `github.com`. It resolves to an empty family.
  *  - **Every other error** — SERVFAIL, timeout, refused, malformed reply — is a
@@ -141,15 +140,7 @@ type AddressFamily = "A" | "AAAA"
  */
 export const defaultResolver: DnsResolver = {
   async resolve(hostname: string): Promise<string[]> {
-    const lookup = async (type: AddressFamily): Promise<string[]> => {
-      try {
-        return await Deno.resolveDns(hostname, type)
-      } catch (err) {
-        if (err instanceof Deno.errors.NotFound) return []
-        throw err
-      }
-    }
-    const [a, aaaa] = await Promise.all([lookup("A"), lookup("AAAA")])
+    const [a, aaaa] = await Promise.all([resolveDns(hostname, "A"), resolveDns(hostname, "AAAA")])
     return [...a, ...aaaa]
   },
 }

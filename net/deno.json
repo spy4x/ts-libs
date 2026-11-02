@@ -5,6 +5,7 @@
     ".": "./+main.ts",
     "./url-shape": "./url-shape.ts",
     "./url-policy": "./url-policy.ts",
+    "./dns": "./dns.ts",
     "./safe-fetch": "./safe-fetch.ts",
     "./bounded-body": "./bounded-body.ts",
     "./ip": "./ip.ts",

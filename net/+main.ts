@@ -45,6 +45,9 @@ export type {
   UrlShapeOk,
 } from "./url-shape.ts"
 
+export { resolveDns } from "./dns.ts"
+export type { AddressRecordType } from "./dns.ts"
+
 export {
   defaultResolver,
   DENY_NET_ADDRESSES,
