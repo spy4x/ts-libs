@@ -36,8 +36,21 @@ async function withFixture(
   }
 }
 
+/** What an implementation leaves out of the contract, each case checked instead of skipped. */
+export interface FileSystemContractOptions {
+  /**
+   * `false` for an implementation whose `lock` always rejects because its runtime has no file lock
+   * (`nodeFileSystem`): the lock cases then check that it rejects, instead of that it locks.
+   */
+  locks?: boolean
+}
+
 /** Registers the contract suite for one implementation. */
-export function describeFileSystemContract(name: string, open: OpenFileSystem): void {
+export function describeFileSystemContract(
+  name: string,
+  open: OpenFileSystem,
+  { locks = true }: FileSystemContractOptions = {},
+): void {
   describe(`${name} (file system contract)`, () => {
     it("writeText replaces the whole content of an existing file", async () => {
       await withFixture(open, async (fs, root) => {
@@ -127,32 +140,40 @@ export function describeFileSystemContract(name: string, open: OpenFileSystem): 
       })
     })
 
-    it("lock refuses a second holder until the first releases", async () => {
-      await withFixture(open, async (fs, root) => {
-        const path = `${root}/.job.lock`
-        const first = await fs.lock(path)
-        expect(first).not.toBeNull()
-        expect(await fs.lock(path)).toBeNull()
-        await first!.release()
-        await first!.release()
-        const second = await fs.lock(path)
-        expect(second).not.toBeNull()
-        await second!.release()
+    if (!locks) {
+      it("lock rejects, since this runtime has no file lock", async () => {
+        await withFixture(open, async (fs, root) => {
+          await expect(fs.lock(`${root}/.job.lock`)).rejects.toThrow("no file lock")
+        })
       })
-    })
-
-    it("lock leaves an empty lock file behind, as the real one does", async () => {
-      await withFixture(open, async (fs, root) => {
-        const path = `${root}/.job.lock`
-        const handle = await fs.lock(path)
-        expect(await fs.readText(path)).toBe("")
-        await handle!.release()
-        expect(await fs.exists(path)).toBe(true)
+    } else {
+      it("lock refuses a second holder until the first releases", async () => {
+        await withFixture(open, async (fs, root) => {
+          const path = `${root}/.job.lock`
+          const first = await fs.lock(path)
+          expect(first).not.toBeNull()
+          expect(await fs.lock(path)).toBeNull()
+          await first!.release()
+          await first!.release()
+          const second = await fs.lock(path)
+          expect(second).not.toBeNull()
+          await second!.release()
+        })
       })
-    })
 
-    // The byte and stream methods are optional on the port, but both implementations here have
-    // them: a missing one fails these cases with a TypeError instead of skipping them.
+      it("lock leaves an empty lock file behind, as the real one does", async () => {
+        await withFixture(open, async (fs, root) => {
+          const path = `${root}/.job.lock`
+          const handle = await fs.lock(path)
+          expect(await fs.readText(path)).toBe("")
+          await handle!.release()
+          expect(await fs.exists(path)).toBe(true)
+        })
+      })
+    }
+
+    // The byte, stream and folder methods are optional on the port, but every implementation here
+    // has them: a missing one fails these cases with a TypeError instead of skipping them.
 
     it("writeBytes and readBytes round-trip bytes that are not valid UTF-8", async () => {
       await withFixture(open, async (fs, root) => {
@@ -210,6 +231,32 @@ export function describeFileSystemContract(name: string, open: OpenFileSystem): 
           fs.writeStream!(`${root}/missing/b.bin`, ReadableStream.from([new Uint8Array([1])])),
         ).rejects.toThrow()
         expect(await fs.exists(`${root}/missing`)).toBe(false)
+      })
+    })
+
+    it("makeTempDir creates a new empty folder in the parent, a different one each call", async () => {
+      await withFixture(open, async (fs, root) => {
+        const first = await fs.makeTempDir!(root)
+        const second = await fs.makeTempDir!(root)
+        expect(first).not.toBe(second)
+        expect(first.startsWith(`${root}/`)).toBe(true)
+        expect(await fs.readDir(first)).toEqual([])
+        expect((await fs.readDir(root)).map((entry) => entry.isDirectory)).toEqual([true, true])
+        await expect(fs.makeTempDir!(`${root}/missing`)).rejects.toThrow()
+      })
+    })
+
+    it("removeTree removes a folder with everything in it, and a missing path is not an error", async () => {
+      await withFixture(open, async (fs, root) => {
+        await fs.mkdirp(`${root}/job/nested`)
+        await fs.writeText(`${root}/job/a.txt`, "a")
+        await fs.writeBytes!(`${root}/job/nested/b.bin`, new Uint8Array([1]))
+        await fs.writeText(`${root}/kept.txt`, "kept")
+        await fs.removeTree!(`${root}/job`)
+        expect(await fs.exists(`${root}/job`)).toBe(false)
+        expect(await fs.exists(`${root}/job/nested/b.bin`)).toBe(false)
+        expect(await fs.readText(`${root}/kept.txt`)).toBe("kept")
+        await fs.removeTree!(`${root}/job`)
       })
     })
   })

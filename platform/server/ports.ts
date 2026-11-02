@@ -100,6 +100,16 @@ export interface FileSystemPort {
     source: ReadableStream<Uint8Array>,
     options?: WriteTextOptions,
   ): Promise<number>
+  /**
+   * Create a new, empty folder with a name no other call gets, inside the existing folder
+   * `parent`, and resolve to its path. Optional, as {@link FileSystemPort.readBytes} is.
+   */
+  makeTempDir?(parent: string): Promise<string>
+  /**
+   * Remove a file, or a folder with everything in it; a missing path is not an error. Optional, as
+   * {@link FileSystemPort.readBytes} is.
+   */
+  removeTree?(path: string): Promise<void>
 }
 
 /** A held file lock. Releasing twice is a no-op. */

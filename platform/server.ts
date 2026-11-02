@@ -1,5 +1,6 @@
 /**
- * `@spy4x/platform/server` — Deno-only helpers: filesystem writes, and a shutdown signal.
+ * `@spy4x/platform/server` — server helpers: filesystem writes, the running process, and a
+ * shutdown signal. `process` and `runtime-fs` run on Deno, Node and Bun.
  *
  * Every filesystem module here takes a `FileSystemPort` instead of calling `Deno.*` directly, so
  * the decision logic is testable under the root test task's `--allow-read --allow-env` grant (there
@@ -22,5 +23,6 @@ export * from "./server/ports.ts"
 export * from "./server/process.ts"
 export * from "./server/reminder-runner.ts"
 export * from "./server/run-command.ts"
+export * from "./server/runtime-fs.ts"
 export * from "./server/shutdown-signal.ts"
 export * from "./server/throttled-saver.ts"

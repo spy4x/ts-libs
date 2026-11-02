@@ -85,6 +85,7 @@ export function fakeFs(initial: Record<string, string> = {}): FakeFs {
   const locks = new Set<string>()
   const bytes = new Map<string, Uint8Array>()
   const encoder = new TextEncoder()
+  let nextTemp = 1
   /** The exact bytes of `path`, or `undefined` when it is absent. */
   const bytesOf = (path: string): Uint8Array | undefined => {
     const raw = bytes.get(path)
@@ -268,6 +269,30 @@ export function fakeFs(initial: Record<string, string> = {}): FakeFs {
         storeBytes(path, concat(chunks), undefined)
       }
       return chunks.reduce((total, chunk) => total + chunk.byteLength, 0)
+    },
+
+    makeTempDir(parent) {
+      calls.push({ op: "makeTempDir", path: parent })
+      if (!dirs.has(parent.replace(/\/+$/, ""))) {
+        return Promise.reject(new Deno.errors.NotFound(`no such directory: ${parent}`))
+      }
+      let path: string
+      do path = `${parent.replace(/\/+$/, "")}/tmp-${nextTemp++}`
+      while (dirs.has(path) || files.has(path))
+      dirs.add(path)
+      return Promise.resolve(path)
+    },
+
+    removeTree(path) {
+      calls.push({ op: "removeTree", path })
+      const inside = (candidate: string) => candidate === path || candidate.startsWith(`${path}/`)
+      for (const name of [...files.keys()].filter(inside)) {
+        files.delete(name)
+        bytes.delete(name)
+        modes.delete(name)
+      }
+      for (const name of [...dirs].filter(inside)) dirs.delete(name)
+      return Promise.resolve()
     },
   }
   return fake

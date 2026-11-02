@@ -136,6 +136,19 @@ export const denoFileSystem: FileSystemPort = {
     return written
   },
 
+  makeTempDir(parent) {
+    return Deno.makeTempDir({ dir: parent })
+  },
+
+  async removeTree(path) {
+    try {
+      await Deno.remove(path, { recursive: true })
+    } catch (error) {
+      if (isNotFound(error)) return
+      throw error
+    }
+  },
+
   async lock(path): Promise<LockHandle | null> {
     const file = await Deno.open(path, { create: true, write: true, read: false })
     if (!file.tryLockSync(true)) {
