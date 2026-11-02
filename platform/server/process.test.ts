@@ -164,6 +164,10 @@ function fakeNodeStdin(
   }
   const raw: boolean[] = []
   let flowing = false
+  // Node's `ref` and `unref`: whether the stream keeps the process alive, and how often it was
+  // resumed while it could not.
+  let referenced = true
+  let unreferencedResumes = 0
   const pump = () =>
     queueMicrotask(() => {
       if (fail) { for (const listener of [...listeners.error]) listener(fail) }
@@ -176,17 +180,31 @@ function fakeNodeStdin(
         for (const listener of [...listeners.data]) listener(chunk)
       }
     })
-  const stdin: NodeStdin & { readonly flowing: boolean; raw: boolean[] } = {
+  const stdin: NodeStdin & {
+    readonly flowing: boolean
+    readonly referenced: boolean
+    readonly unreferencedResumes: number
+    raw: boolean[]
+  } = {
     isTTY,
     raw,
     get flowing() {
       return flowing
     },
+    get referenced() {
+      return referenced
+    },
+    get unreferencedResumes() {
+      return unreferencedResumes
+    },
+    ref: () => referenced = true,
+    unref: () => referenced = false,
     setRawMode: (on: boolean) => raw.push(on),
     on: (event: "data" | "end" | "error", listener: never) => listeners[event].add(listener),
     off: (event: string, listener: never) => listeners[event as "data"].delete(listener),
     pause: () => flowing = false,
     resume: () => {
+      if (!referenced) unreferencedResumes++
       flowing = true
       pump()
     },
@@ -195,7 +213,7 @@ function fakeNodeStdin(
 }
 
 describe("standardInputOver on Node and Bun", () => {
-  it("reads one chunk at a time, keeps what did not fit for the next read, and pauses between reads", async () => {
+  it("reads one chunk at a time, keeps what did not fit for the next read, and pauses and unrefs stdin between reads", async () => {
     const stdin = fakeNodeStdin(["hello", new TextEncoder().encode("!")])
     const input = standardInputOver(() => ({ process: { stdin } }))
     const buffer = new Uint8Array(3)
@@ -203,8 +221,10 @@ describe("standardInputOver on Node and Bun", () => {
     for (let count = await input.read(buffer); count !== null; count = await input.read(buffer)) {
       reads.push(new TextDecoder().decode(buffer.subarray(0, count)))
       expect(stdin.flowing).toBe(false)
+      expect(stdin.referenced).toBe(false)
     }
     expect(reads).toEqual(["hel", "lo", "!"])
+    expect(stdin.unreferencedResumes).toBe(0)
     expect(await input.read(buffer)).toBeNull()
   })
 
@@ -269,7 +289,9 @@ describe("standardInputOver on Deno", () => {
 })
 
 describe("processArgs, processStdin and writeStderr", () => {
-  it("are wired to this process", () => {
+  // `deno test` passes no arguments, so this shows the calls run here, not which host they read:
+  // the host branches are the cases above.
+  it("run on this Deno process without throwing", () => {
     expect(processArgs()).toEqual(Deno.args)
     expect(processStdin.isTerminal()).toBe(Deno.stdin.isTerminal())
     writeStderr("")

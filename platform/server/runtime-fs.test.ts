@@ -52,7 +52,7 @@ describe("fileSystemOver", () => {
 })
 
 describe("runtimeFileSystem", () => {
-  it("reads through denoFileSystem on Deno", async () => {
+  it("reads a file on Deno", async () => {
     const path = new URL(import.meta.url).pathname
     expect(await runtimeFileSystem.readText(path)).toBe(await denoFileSystem.readText(path))
   })
