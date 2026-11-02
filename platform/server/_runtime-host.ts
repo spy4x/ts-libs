@@ -126,7 +126,12 @@ export function writeStderrOver(host: RuntimeHost, text: string): void {
   const stderr = host.Deno?.stderr
   if (stderr) {
     let rest = new TextEncoder().encode(text)
-    while (rest.byteLength > 0) rest = rest.subarray(stderr.writeSync(rest))
+    while (rest.byteLength > 0) {
+      const count = stderr.writeSync(rest)
+      // A write that takes nothing would repeat forever.
+      if (count === 0) throw new Error("standard error accepted no bytes")
+      rest = rest.subarray(count)
+    }
     return
   }
   if (host.process?.stderr) {
@@ -141,12 +146,18 @@ export function writeStderrOver(host: RuntimeHost, text: string): void {
  *
  * On Node and Bun, `read` takes one chunk at a time from `process.stdin`, then pauses and unrefs
  * the stream again, so a finished prompt does not keep the process alive; the part of a chunk that
- * did not fit the buffer is returned by the next `read`.
+ * did not fit the buffer is returned by the next `read`. Node emits `end` on its own tick, even
+ * while the stream is paused between reads, so one listener watches for it for the stream's whole
+ * life. Reads that overlap run one after another, so no chunk is handed to two of them.
  */
 export function standardInputOver(host: () => RuntimeHost): StandardInput {
   /** Bytes of a Node chunk that did not fit the last buffer. */
   let leftover: Uint8Array = new Uint8Array()
   let ended = false
+  /** The stream whose `end` is being watched. */
+  let watched: NodeStdin | undefined
+  /** The last read on Node, which the next one waits for. */
+  let queue: Promise<unknown> = Promise.resolve()
 
   const denoStdin = () => host().Deno?.stdin
   const nodeStdin = (): NodeStdin => {
@@ -159,6 +170,10 @@ export function standardInputOver(host: () => RuntimeHost): StandardInput {
 
   /** The next chunk from Node's stdin, or `null` at its end. */
   const nextChunk = (stdin: NodeStdin): Promise<Uint8Array | null> => {
+    if (watched !== stdin) {
+      watched = stdin
+      stdin.on("end", () => ended = true)
+    }
     if (ended) return Promise.resolve(null)
     return new Promise((resolve, reject) => {
       const onData = (chunk: Uint8Array | string) => {
@@ -191,9 +206,7 @@ export function standardInputOver(host: () => RuntimeHost): StandardInput {
     })
   }
 
-  const read = async (buffer: Uint8Array): Promise<number | null> => {
-    const deno = denoStdin()
-    if (deno) return await deno.read(buffer)
+  const readNode = async (buffer: Uint8Array): Promise<number | null> => {
     if (leftover.byteLength === 0) {
       const chunk = await nextChunk(nodeStdin())
       if (chunk === null) return null
@@ -203,6 +216,14 @@ export function standardInputOver(host: () => RuntimeHost): StandardInput {
     buffer.set(leftover.subarray(0, count))
     leftover = leftover.subarray(count)
     return count
+  }
+
+  const read = (buffer: Uint8Array): Promise<number | null> => {
+    const deno = denoStdin()
+    if (deno) return deno.read(buffer)
+    const next = queue.then(() => readNode(buffer))
+    queue = next.catch(() => {})
+    return next
   }
 
   return {

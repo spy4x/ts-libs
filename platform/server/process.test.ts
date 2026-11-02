@@ -144,14 +144,20 @@ describe("writeStderrOver", () => {
     expect(written).toEqual(["Password: "])
   })
 
+  it("throws instead of looping forever when Deno's standard error takes no bytes", () => {
+    const host: RuntimeHost = { Deno: { stderr: { writeSync: () => 0 } } }
+    expect(() => writeStderrOver(host, "x")).toThrow("accepted no bytes")
+  })
+
   it("throws on a runtime with no standard error", () => {
     expect(() => writeStderrOver({}, "x")).toThrow("no standard error")
   })
 })
 
 /**
- * A paused Node stdin that emits `chunks`, one per `data` event, while it flows, then `end`, or
- * `fail` as an `error` event once it is asked to flow.
+ * A paused Node stdin that emits `chunks`, one per `data` event, while it flows, or `fail` as an
+ * `error` event once it is asked to flow. Like Node, it emits `end` on a later tick once the last
+ * chunk is out, whether it flows then or not.
  */
 function fakeNodeStdin(
   chunks: (string | Uint8Array)[],
@@ -168,17 +174,25 @@ function fakeNodeStdin(
   // resumed while it could not.
   let referenced = true
   let unreferencedResumes = 0
+  let endScheduled = false
+  const scheduleEnd = () => {
+    if (endScheduled) return
+    endScheduled = true
+    setTimeout(() => {
+      for (const listener of [...listeners.end]) listener()
+    }, 0)
+  }
   const pump = () =>
     queueMicrotask(() => {
-      if (fail) { for (const listener of [...listeners.error]) listener(fail) }
-      while (flowing && !fail) {
-        const chunk = chunks.shift()
-        if (chunk === undefined) {
-          for (const listener of [...listeners.end]) listener()
-          return
-        }
+      if (fail) {
+        for (const listener of [...listeners.error]) listener(fail)
+        return
+      }
+      while (flowing && chunks.length > 0) {
+        const chunk = chunks.shift()!
         for (const listener of [...listeners.data]) listener(chunk)
       }
+      if (chunks.length === 0) scheduleEnd()
     })
   const stdin: NodeStdin & {
     readonly flowing: boolean
@@ -226,6 +240,28 @@ describe("standardInputOver on Node and Bun", () => {
     expect(reads).toEqual(["hel", "lo", "!"])
     expect(stdin.unreferencedResumes).toBe(0)
     expect(await input.read(buffer)).toBeNull()
+  })
+
+  it("returns null at the end of a pipe that ended while paused between reads", async () => {
+    const stdin = fakeNodeStdin(["ab", "c"])
+    const input = standardInputOver(() => ({ process: { stdin } }))
+    const buffer = new Uint8Array(2)
+    const reads: (number | null)[] = []
+    for (let step = 0; step < 3; step++) {
+      reads.push(await input.read(buffer))
+      await new Promise((resolve) => setTimeout(resolve, 5))
+    }
+    expect(reads).toEqual([2, 1, null])
+  })
+
+  it("hands each chunk to one read when two reads overlap", async () => {
+    const stdin = fakeNodeStdin(["ab", "cd"])
+    const input = standardInputOver(() => ({ process: { stdin } }))
+    const first = new Uint8Array(2)
+    const second = new Uint8Array(2)
+    expect(await Promise.all([input.read(first), input.read(second)])).toEqual([2, 2])
+    expect(new TextDecoder().decode(first) + new TextDecoder().decode(second)).toBe("abcd")
+    expect(await input.read(first)).toBeNull()
   })
 
   it("reads everything piped in as text", async () => {
