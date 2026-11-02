@@ -1940,6 +1940,7 @@ or any npm package, and nothing here ever will without a stated reason.
 net/+main.ts          barrel: everything below
 net/url-shape.ts      normalizeUrlShape()   — shape only
 net/url-policy.ts     validatePublicUrl()   — the SSRF guard
+net/dns.ts            resolveDns()          — A or AAAA lookup on Deno, Node and Bun
 net/safe-fetch.ts     safeFetch()           — guard + redirect re-validation
 net/bounded-body.ts   readBoundedText/Json/Body, readContentLength, parseBoundedFormData
 net/ip.ts             parseIp(), normalizeIp(), ipInRanges(), ipHint(), isLoopbackHost(),
@@ -2670,15 +2671,19 @@ is tested against an in-memory fake.
 Only these touch `Deno` anyway: `denoFileSystem` and `denoByteReader` (`server/deno-fs.ts`), and
 the `Deno.addSignalListener`/`Deno.removeSignalListener` defaults of `shutdownSignal`
 (`server/shutdown-signal.ts`), which its tests replace with fakes. `server/process` reads the
-environment and the process id on Deno, Node and Bun alike. Of `denoFileSystem`'s **13 methods**,
+environment, the process id, the arguments and the standard streams, and exits, on Deno, Node and
+Bun alike; `server/runtime-fs` picks `denoFileSystem` on Deno and `nodeFileSystem`
+(`node:fs/promises`) on Node and Bun. Of `denoFileSystem`'s **15 methods**,
 five are covered by `server/deno-fs.test.ts` under the read-only grant — `exists`, `readText`,
 `readDir`, `readBytes` and `readStream` (including the `isNotFound` mapping and the rethrow of any
 other error, reached via `ENOTDIR`). `denoByteReader` is covered separately (chunk-size
 independence and a missing-file rethrow). The write side — `writeText`, `appendText`, `writeBytes`,
-`writeStream`, `rename`, `mkdirp`, `lock` and the successful branch of `remove` — needs
+`writeStream`, `rename`, `mkdirp`, `makeTempDir`, `removeTree`, `lock` and the successful branch of
+`remove` — needs
 `--allow-write`, so it runs in the integration tier: `server/deno-fs.integration.test.ts` holds
 `denoFileSystem` on a real scratch folder to the shared contract in `server/fs-contract.test.ts`,
-and the unit tier runs the same contract on the in-memory fake. Like the real disk, the fake refuses
+and the unit tier runs the same contract on the in-memory fake; `server/runtime-fs.integration.test.ts`
+runs it on `nodeFileSystem` and `runtimeFileSystem`. Like the real disk, the fake refuses
 to write into a folder that does not exist, `mkdirp` creates the parents, and `lock` leaves an empty
 lock file behind.
 
@@ -2690,14 +2695,16 @@ lock file behind.
 | `server/interval-runner` | `startIntervalRunner`, `IntervalRunnerOptions` — runs a task every interval through a `TimerPort`; a failed tick is reported and never stops the next; ticks never overlap; `runFirstTickNow` runs the first tick at once; `tickTimeoutMs` gives up on a tick that never settles; returns a stop function |
 | `server/jsonl-logger`    | `JsonlLogger`, `formatLogLine`, `parseLogLines`                                                                                                                                                                                                                                                           |
 | `server/ports`           | the port interfaces, `systemClockPort`                                                                                                                                                                                                                                                                    |
-| `server/process`         | `processEnv`, `readEnvRecord`, `processId`, `EnvReader` — the environment and process id on Deno, Node and Bun                                                                                                                                                                                            |
+| `server/process`         | `processEnv`, `readEnvRecord`, `processId`, `EnvReader`, `processArgs`, `exitProcess`, `writeStderr`, `processStdin`, `StandardInput` — the environment, process id, arguments, exit and standard streams on Deno, Node and Bun                                                                           |
 | `server/run-command`     | `runCommand`, `RunCommandResult`, `RunCommandOptions`, `RunCommandStdin`, `CommandSpawner`                                                                                                                                                                                                                |
+| `server/runtime-fs`      | `runtimeFileSystem`, `nodeFileSystem` — the `FileSystemPort` of the running runtime; `lock` works on Deno only, since Node and Bun have no file lock                                                                                                                                                      |
 | `server/shutdown-signal` | `shutdownSignal`, `ShutdownSignalError`                                                                                                                                                                                                                                                                   |
 | `server/throttled-saver` | `ThrottledJsonSaver`, `TimerPort`, `systemTimerPort`                                                                                                                                                                                                                                                      |
 
 `FileSystemPort` also has four optional methods for binary files: `readBytes` and `writeBytes` for
-a whole file, `readStream` and `writeStream` for one too large to hold in memory. They are optional
-so a port written before them still compiles; `denoFileSystem` and the in-memory fake have all four.
+a whole file, `readStream` and `writeStream` for one too large to hold in memory; and two for
+scratch folders: `makeTempDir` and `removeTree`. They are optional so a port written before them
+still compiles; `denoFileSystem`, `nodeFileSystem` and the in-memory fake have all six.
 
 `processEnv.get(name)` reads one variable, with a blank value as `undefined`, the same shape as
 `EnvReader` in `@spy4x/server/config`. `readEnvRecord(names)` reads only the names given into a
