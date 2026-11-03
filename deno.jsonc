@@ -176,7 +176,11 @@
     // Markdown parser for `platform/universal/markdown` (#743): CommonMark and GFM parsing is well
     // solved, so the parser stays. What reaches the page is decided by our own renderer overrides,
     // which escape raw HTML and allow only safe link and image addresses.
-    "marked": "npm:marked@18.1.1"
+    "marked": "npm:marked@18.1.1",
+
+    // WebSocket server for `platform/server/serve` on Node (#833): Node has none built in. Loaded
+    // only on Node, and a literal specifier so a `deno bundle` of the app carries it.
+    "ws": "npm:ws@8.22.1"
   },
   "compilerOptions": {
     // An explicit "lib" replaces Deno's default lib set, so "deno.ns" has to be

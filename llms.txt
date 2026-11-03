@@ -1027,10 +1027,11 @@ createRateLimitMiddleware	function	@spy4x/platform/rate-limit	Build the middlewa
 createStoreLimiter	function	@spy4x/platform/rate-limit	Build a limiter over a shared store.
 decisionHeaders	function	@spy4x/platform/rate-limit	Draft-6 headers for one decision.
 denoKvBackend	function	@spy4x/platform/rate-limit	Deno KV adapter.
-denoServeRemoteAddr	function	@spy4x/platform/rate-limit	The RemoteAddrResolver for an app run by `deno serve` (or handed to `Deno.serve` as `app.fetch`): Deno passes the connection's info to Hono as `env`, and this reads its `remoteAddr.hostname`, the peer's IP address.
+denoServeRemoteAddr	function	@spy4x/platform/rate-limit	The same resolver as serveRemoteAddr, under the name it had while only Deno filled `remoteAddr` in.
 failOpenLimiter	function	@spy4x/platform/rate-limit	Wrap a limiter so that a failing backend lets requests through instead of failing them.
 humanRetry	function	@spy4x/platform/rate-limit	Milliseconds as a human retry hint: `"1 second"`, `"45 seconds"`, `"2 minutes"`.
 rateLimitKey	function	@spy4x/platform/rate-limit	Build a limiter key from an identity.
+serveRemoteAddr	function	@spy4x/platform/rate-limit	The RemoteAddrResolver for an app run by `serve` from `@spy4x/platform/server/serve`, on Deno, Node or Bun, or by `deno serve` (or handed to `Deno.serve` as `app.fetch`): each passes the connection's info to Hono as `env`, and this reads its `remoteAddr.hostname`, the peer's IP address, taken from the connection and never from a header.
 systemClock	function	@spy4x/platform/rate-limit	Deprecated: Delegates to, and should be replaced by, `systemNow` from `@spy4x/platform/universal/time`. Default: real time.
 userThenIp	function	@spy4x/platform/rate-limit	Key a request on the authenticated user when the caller can find one, else on the client IP.
 FORWARDED_HEADERS	constant	@spy4x/platform/rate-limit/client-ip	The three headers in which a request names the client it came from, and which clientIp reads when told to trust a proxy.
@@ -1051,7 +1052,8 @@ RejectionStatus	type	@spy4x/platform/rate-limit/hono	Statuses a rejection may us
 RemoteAddrResolver	type	@spy4x/platform/rate-limit/hono	Resolve a client's peer address from a runtime handle, for RateLimitMiddlewareOptions.
 createRateLimitMiddleware	function	@spy4x/platform/rate-limit/hono	Build the middleware for a limiter.
 decisionHeaders	function	@spy4x/platform/rate-limit/hono	Draft-6 headers for one decision.
-denoServeRemoteAddr	function	@spy4x/platform/rate-limit/hono	The RemoteAddrResolver for an app run by `deno serve` (or handed to `Deno.serve` as `app.fetch`): Deno passes the connection's info to Hono as `env`, and this reads its `remoteAddr.hostname`, the peer's IP address.
+denoServeRemoteAddr	function	@spy4x/platform/rate-limit/hono	The same resolver as serveRemoteAddr, under the name it had while only Deno filled `remoteAddr` in.
+serveRemoteAddr	function	@spy4x/platform/rate-limit/hono	The RemoteAddrResolver for an app run by `serve` from `@spy4x/platform/server/serve`, on Deno, Node or Bun, or by `deno serve` (or handed to `Deno.serve` as `app.fetch`): each passes the connection's info to Hono as `env`, and this reads its `remoteAddr.hostname`, the peer's IP address, taken from the connection and never from a header.
 userThenIp	function	@spy4x/platform/rate-limit/hono	Key a request on the authenticated user when the caller can find one, else on the client IP.
 DenoKvLike	interface	@spy4x/platform/rate-limit/kv	The three `Deno.Kv` operations this adapter needs.
 RateLimitKv	interface	@spy4x/platform/rate-limit/kv	Minimal key/value port.
@@ -1200,6 +1202,13 @@ fsError	function	@spy4x/platform/server/runtime-fs	A file-system error of `kind`
 isFsError	function	@spy4x/platform/server/runtime-fs	Whether `error` is a file-system error of `kind` from any runtime: one fsError made, one Deno threw (its `name` is the kind), or one Node or Bun threw (its `code`, such as `ENOENT`).
 nodeFileSystem	constant	@spy4x/platform/server/runtime-fs	FileSystemPort over `node:fs/promises`, for Node and Bun.
 runtimeFileSystem	constant	@spy4x/platform/server/runtime-fs	The file system of the running runtime: `denoFileSystem` on Deno, nodeFileSystem on Node and Bun.
+ServeHandler	type	@spy4x/platform/server/serve	A fetch handler: Hono's `app.fetch` is one.
+ServeInfo	interface	@spy4x/platform/server/serve	The connection a request came in on.
+Server	interface	@spy4x/platform/server/serve	A running server.
+ServerWebSocket	interface	@spy4x/platform/server/serve	The server's end of a WebSocket: the members of a standard `WebSocket` it needs.
+WebSocketUpgrade	interface	@spy4x/platform/server/serve	What upgradeWebSocket returns: the socket, and the response the handler must return.
+serve	function	@spy4x/platform/server/serve	Listens on `options.hostname` and `options.port` and answers every request with `handler`.
+upgradeWebSocket	function	@spy4x/platform/server/serve	Upgrades a request that serve handed to the handler, the way `Deno.upgradeWebSocket` does: the handler returns `response`, and `socket` opens once the handshake completes.
 ShutdownSignalError	class	@spy4x/platform/server/shutdown-signal	The reason a shutdownSignal carries when an operating-system signal aborted it.
 shutdownSignal	function	@spy4x/platform/server/shutdown-signal	Return an `AbortSignal` that aborts on the first of `options.signals` (default `SIGINT` and `SIGTERM`).
 ThrottledJsonSaver	class	@spy4x/platform/server/throttled-saver	Coalescing writer for one JSON document.
@@ -2835,4 +2844,4 @@ firstIssueMessage	function	@spy4x/validation/validate	First issue message in a v
 isArkErrors	function	@spy4x/validation/validate	Whether a value is an arktype rejection, without relying on `instanceof`.
 toValidationError	function	@spy4x/validation/validate	Build a ValidationError from arktype's issues.
 validate	function	@spy4x/validation/validate	Parse `value` with an arktype schema exactly once.
-# export surface: sha256 df0bc4fe7b6be8e4f07abac820ba52b25fd3e82262caf111e20616f108d38c26
+# export surface: sha256 800ae8a0820496c1a0917af5d6963631488a163f2b24a471b40b3a2837b848b9

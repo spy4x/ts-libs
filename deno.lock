@@ -42,7 +42,8 @@
     "npm:marked@18.1.1": "18.1.1",
     "npm:nodemailer@10.0.10": "10.0.10",
     "npm:postgres@3.4.7": "3.4.7",
-    "npm:reflect-metadata@~0.2.2": "0.2.2"
+    "npm:reflect-metadata@~0.2.2": "0.2.2",
+    "npm:ws@8.22.1": "8.22.1"
   },
   "jsr": {
     "@age/age-encryption@0.3.1": {
@@ -385,6 +386,9 @@
       "dependencies": [
         "tslib@1.14.1"
       ]
+    },
+    "ws@8.22.1": {
+      "integrity": "sha512-oyL6OPYme/CmiFvNuGzeoxCJ4nOrZE2O1FwM9MWM1AsGri6nLXB2pg+lNA8aLeXMSav0J6eIVS1j6vUPzUtK9g=="
     }
   },
   "workspace": {
@@ -407,7 +411,8 @@
       "jsr:@std/uuid@1.1.2",
       "npm:arktype@2.2.3",
       "npm:marked@18.1.1",
-      "npm:postgres@3.4.7"
+      "npm:postgres@3.4.7",
+      "npm:ws@8.22.1"
     ],
     "members": {
       "email": {
