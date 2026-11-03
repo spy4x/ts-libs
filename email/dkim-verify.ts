@@ -4,12 +4,14 @@
 // whether the message's DKIM-Signature verifies against that key. It fetches
 // nothing on its own unless a caller injects a DNS TXT resolver.
 //
-// Web Crypto (`crypto.subtle`), platform primitives (`TextEncoder`,
-// `Deno.resolveDns`) and `@std/encoding` for base64 only (#674). The import of
+// Web Crypto (`crypto.subtle`), platform primitives (`TextEncoder`),
+// `@std/encoding` for base64 only (#674), and `resolveTxt` of `@spy4x/net/dns`
+// for the default key lookup on Deno, Node and Bun. The import of
 // `./dkim-body-hash.ts` is a sibling module of this same package rather than a
 // dependency — see that file's module note.
 
 import { decodeBase64, decodeBase64Url, encodeBase64 } from "@std/encoding"
+import { resolveTxt } from "@spy4x/net/dns"
 import { type BodyHashCache, createBodyHashCache } from "./dkim-body-hash.ts"
 
 /** Which canonicalization RFC 6376 §3.4 applies to a header or a body. */
@@ -123,9 +125,9 @@ export interface DkimVerificationResult {
 }
 
 /**
- * DNS TXT lookup contract, defaulting to `Deno.resolveDns(name, "TXT")`, which
- * needs `--allow-net`. Inject one to run the verifier hermetically — no socket,
- * no cache, no upstream.
+ * DNS TXT lookup contract, defaulting to `resolveTxt` of `@spy4x/net/dns`, which
+ * works on Deno, Node and Bun and needs `--allow-net` on Deno. Inject one to run
+ * the verifier hermetically — no socket, no cache, no upstream.
  *
  * The shape is one array of strings per TXT record. RFC 6376 §3.6.2.2 requires
  * a record's strings to be concatenated with no separator, which
@@ -725,8 +727,9 @@ function parseRecordList(value: string | undefined, tag: string): string[] | und
  * Fetch and parse a DKIM public key from DNS, from
  * `<selector>._domainkey.<domain>`.
  *
- * The resolver defaults to `Deno.resolveDns(name, "TXT")`, which requires
- * `--allow-net`. An injected resolver that returns no record causes a
+ * The resolver defaults to `resolveTxt` of `@spy4x/net/dns` (Deno, Node and
+ * Bun; `--allow-net` on Deno), which answers a name with no TXT record, or no
+ * such name, with no record. A resolver that returns no record causes a
  * {@link DkimParseError} rather than a missing-key result, so a resolver bug
  * cannot be mistaken for a revoked key. Resolver failures are not swallowed.
  */
@@ -776,8 +779,8 @@ function assertDnsLabels(value: string, tag: string): void {
   }
 }
 
-async function defaultResolveTxt(name: string): Promise<string[][]> {
-  return await Deno.resolveDns(name, "TXT")
+function defaultResolveTxt(name: string): Promise<string[][]> {
+  return resolveTxt(name)
 }
 
 function base64Decode(input: string): Uint8Array {
@@ -1556,7 +1559,8 @@ function binaryStringToBytes(value: string): Uint8Array {
  * which domains signed.
  *
  * When `publicKey` is omitted the key is fetched from `options.resolver`,
- * defaulting to `Deno.resolveDns` and therefore to needing `--allow-net`.
+ * defaulting to `resolveTxt` of `@spy4x/net/dns`, which needs `--allow-net` on
+ * Deno.
  *
  * `rawMessage` may be a `string` or a `Uint8Array`. DKIM is defined over
  * octets (RFC 6376 §2.4: "the entire, unaltered message body, including any
