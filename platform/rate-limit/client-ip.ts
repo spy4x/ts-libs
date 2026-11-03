@@ -48,7 +48,11 @@ const REAL_IP = "x-real-ip"
  * can refuse them from every other peer with `requireProxyForForwardedHeaders` from
  * `@spy4x/server/http/trusted-proxy`, which checks this same list.
  */
-export const FORWARDED_HEADERS = [REAL_IP, FORWARDED_FOR, CONNECTING_IP] as const
+export const FORWARDED_HEADERS: readonly ["x-real-ip", "x-forwarded-for", "cf-connecting-ip"] = [
+  REAL_IP,
+  FORWARDED_FOR,
+  CONNECTING_IP,
+] as const
 
 /**
  * A single proxy header {@link clientIp} may be told to trust, in place of the default
