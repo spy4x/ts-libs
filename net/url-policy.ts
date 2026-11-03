@@ -32,7 +32,7 @@
  */
 
 import { parseIpv6Groups } from "./_ipv6.ts"
-import { resolveDns } from "./dns.ts"
+import { type DnsLookupOptions, resolveDns } from "./dns.ts"
 import { ipInRanges } from "./ip.ts"
 import {
   ALLOWED_PROTOCOLS,
@@ -113,11 +113,14 @@ export interface DnsResolver {
   /**
    * Resolve a hostname to all A/AAAA records.
    *
-   * Implementations are NOT expected to honour an AbortSignal — DNS
-   * resolution is fire-and-forget from this module's perspective. Callers
-   * that need an upper bound on DNS latency must enforce it externally.
+   * `options.signal`, when a caller passes one, tells the resolver the answer
+   * is no longer wanted. Honouring it is optional: `defaultResolver` stops
+   * waiting and rejects with the signal's reason, while a one-argument resolver
+   * still fits this interface. So a caller that needs an upper bound on DNS
+   * latency still enforces it itself; the signal only lets a resolver free
+   * what it holds.
    */
-  resolve(hostname: string): Promise<string[]>
+  resolve(hostname: string, options?: DnsLookupOptions): Promise<string[]>
 }
 
 /**
@@ -139,8 +142,11 @@ export interface DnsResolver {
  * policy — "no records at all" is not a routable destination.
  */
 export const defaultResolver: DnsResolver = {
-  async resolve(hostname: string): Promise<string[]> {
-    const [a, aaaa] = await Promise.all([resolveDns(hostname, "A"), resolveDns(hostname, "AAAA")])
+  async resolve(hostname: string, options?: DnsLookupOptions): Promise<string[]> {
+    const [a, aaaa] = await Promise.all([
+      resolveDns(hostname, "A", options),
+      resolveDns(hostname, "AAAA", options),
+    ])
     return [...a, ...aaaa]
   },
 }

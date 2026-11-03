@@ -25,8 +25,8 @@
  * `user-agent.ts` turns a `User-Agent` header into a display label such as
  * "Safari on iPhone", for a list of signed-in devices.
  *
- * Zero runtime dependencies — `URL`, `Deno.resolveDns`, `ReadableStream`,
- * `TextDecoder` and `AbortController` only.
+ * Zero runtime dependencies — `URL`, `Deno.resolveDns` (`node:dns/promises` on
+ * Node and Bun), `ReadableStream`, `TextDecoder` and `AbortController` only.
  */
 
 export {
@@ -45,8 +45,8 @@ export type {
   UrlShapeOk,
 } from "./url-shape.ts"
 
-export { resolveDns } from "./dns.ts"
-export type { AddressRecordType } from "./dns.ts"
+export { resolveDns, resolveTxt } from "./dns.ts"
+export type { AddressRecordType, DnsLookupOptions } from "./dns.ts"
 
 export {
   defaultResolver,
