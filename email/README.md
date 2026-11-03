@@ -451,8 +451,8 @@ confirmed by `openssl dgst -sha256 -verify` against the §3.7 reconstruction. Se
 ## What this does not do
 
 - **It does not fetch the key for you** unless you inject a resolver or accept
-  the default one. The default is `Deno.resolveDns(name, "TXT")`, which needs
-  `--allow-net`. Everything in this package's own test suite runs through an
+  the default one. The default is `resolveTxt` of `@spy4x/net/dns`, which works
+  on Deno, Node and Bun and needs `--allow-net` on Deno. Everything in this package's own test suite runs through an
   injected resolver and therefore needs no permissions.
 - **No DMARC, SPF, ARC or DKIM alignment.** A verified signature is not an
   authorized sender. DMARC needs `d=`/`i=` alignment against the visible `From:`

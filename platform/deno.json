@@ -46,6 +46,7 @@
     "./server/serve": "./server/serve.ts",
     "./server/runtime-fs": "./server/runtime-fs.ts",
     "./server/shutdown-signal": "./server/shutdown-signal.ts",
+    "./server/tcp": "./server/tcp.ts",
     "./server/throttled-saver": "./server/throttled-saver.ts",
     "./signed-payload": "./signed-payload.ts",
     "./tokens": "./tokens.ts",

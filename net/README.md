@@ -5,7 +5,7 @@ redirect-safe `fetch`, and bounded body readers. Plus an IP address parser and a
 CIDR range check, for deciding which proxy to believe about a client's address,
 and a check for a "go here next" path, so a link cannot redirect off the site.
 
-Zero runtime dependencies. Platform APIs only — `URL`, `Deno.resolveDns`,
+Zero runtime dependencies. Platform APIs only — `URL`, `Deno.resolveDns` (`node:dns/promises` on Node and Bun),
 `AbortController`, `ReadableStream`, `TextDecoder`. Nothing here imports `@std/*`
 or any npm package, and nothing here ever will without a stated reason.
 
@@ -13,7 +13,7 @@ or any npm package, and nothing here ever will without a stated reason.
 net/+main.ts          barrel: everything below
 net/url-shape.ts      normalizeUrlShape()   — shape only
 net/url-policy.ts     validatePublicUrl()   — the SSRF guard
-net/dns.ts            resolveDns()          — A or AAAA lookup on Deno, Node and Bun
+net/dns.ts            resolveDns(), resolveTxt() — A, AAAA or TXT lookup on Deno, Node and Bun
 net/safe-fetch.ts     safeFetch()           — guard + redirect re-validation
 net/bounded-body.ts   readBoundedText/Json/Body, readContentLength, parseBoundedFormData
 net/ip.ts             parseIp(), normalizeIp(), ipInRanges(), ipHint(), isLoopbackHost(),
@@ -98,11 +98,12 @@ seam for anything the system resolver cannot express:
 - a latency bound (`Promise.race` the lookup against your own timeout);
 - DNS-over-HTTPS, a cache, or a fixture in a request-handling test.
 
-`defaultResolver` is the production implementation: it asks `Deno.resolveDns`
+`defaultResolver` is the production implementation: it asks `resolveDns`
 for A and AAAA in parallel and returns both sets, so **every family that answers
 is checked**. It distinguishes the two ways a lookup can come back empty:
 
-- **NODATA** (`Deno.resolveDns` throws `Deno.errors.NotFound`) means the name
+- **NODATA** (`Deno.errors.NotFound` on Deno, `ENODATA` or `ENOTFOUND` on Node
+  and Bun, an empty list from `resolveDns`) means the name
   exists but has no record of that type. That is a legitimate empty family and
   it is tolerated — most of the public web is A-only, and refusing those hosts
   would make the guard useless as a default.

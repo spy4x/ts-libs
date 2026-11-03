@@ -41,6 +41,7 @@
  */
 
 import { exitProcess } from "@spy4x/platform/server/process"
+import { nodeTcpConnect } from "@spy4x/platform/server/tcp"
 
 /** A connected socket, narrowed to what a probe needs: closing it again. */
 export interface ProbeConnection {
@@ -365,32 +366,14 @@ export const denoConnector: ProbeConnector = {
   },
 }
 
-/** `node:net`, as far as {@link nodeConnector} uses it. */
-interface NodeNet {
-  createConnection(options: { host: string; port: number }): {
-    once(event: "connect", listener: () => void): unknown
-    once(event: "error", listener: (error: Error) => void): unknown
-    destroy(): void
-  }
-}
-
 /**
- * Adapter over `node:net`, for Node and Bun. The module is loaded on the first connect through a
- * computed specifier, so `deno check` never pulls in `@types/node`. A socket that fails is
- * destroyed before the promise rejects.
+ * Adapter over `node:net`, for Node and Bun, through `@spy4x/platform/server/tcp`'s
+ * `nodeTcpConnect`. A socket that fails is destroyed before the promise rejects.
  */
 export const nodeConnector: ProbeConnector = {
-  connect: async ({ hostname, port }) => {
-    const net = await import(["node", "net"].join(":")) as NodeNet
-    const socket = net.createConnection({ host: hostname, port })
-    await new Promise<void>((resolve, reject) => {
-      socket.once("connect", resolve)
-      socket.once("error", (error) => {
-        socket.destroy()
-        reject(error)
-      })
-    })
-    return { close: () => socket.destroy() }
+  connect: async (options) => {
+    const connection = await nodeTcpConnect()(options)
+    return { close: () => connection.close() }
   },
 }
 
