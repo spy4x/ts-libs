@@ -80,7 +80,7 @@ describe("serve on Deno", () => {
 /** A fake `Bun.serve`: keeps the options and answers as a server with this peer. */
 function fakeBun() {
   const upgrades: unknown[] = []
-  let stops = 0
+  const stops: unknown[] = []
   let options: BunServeOptions | undefined
   const server: BunServer = {
     requestIP: () => ({ address: "192.0.2.7", port: 40000 }),
@@ -88,7 +88,7 @@ function fakeBun() {
       upgrades.push(upgrade.headers)
       return true
     },
-    stop: () => void stops++,
+    stop: (force) => void stops.push(force),
   }
   const host: ServeHost = {
     Bun: {
@@ -99,13 +99,25 @@ function fakeBun() {
     },
     process: {},
   }
-  return { host, server, upgrades, options: () => options!, stops: () => stops }
+  return {
+    host,
+    server,
+    upgrades,
+    forced: () => stops,
+    options: () => options!,
+    stops: () => stops.length,
+  }
 }
 
 function fakeBunSocket(data: BridgedSocket) {
   const sent: unknown[] = []
-  const socket: BunSocket = { data, send: (frame) => sent.push(frame), close: () => {} }
-  return { socket, sent }
+  const closed: unknown[] = []
+  const socket: BunSocket = {
+    data,
+    send: (frame) => sent.push(frame),
+    close: (...args) => void closed.push(args),
+  }
+  return { socket, sent, closed }
 }
 
 describe("serve on Bun", () => {
@@ -152,6 +164,24 @@ describe("serve on Bun", () => {
 
     assertEquals(bun.stops(), 1)
   })
+
+  it("closes open sockets with 1001 and drops their connections on shutdown", async () => {
+    const bun = fakeBun()
+    let socket: BridgedSocket | undefined
+    const server = await serveOver(bun.host)((request) => {
+      const upgraded = upgradeOver(bun.host)(request)
+      socket = upgraded.socket as BridgedSocket
+      return upgraded.response
+    }, OPTIONS)
+    await bun.options().fetch(handshake(), bun.server)
+    const ws = fakeBunSocket(socket!)
+    bun.options().websocket.open(ws.socket)
+
+    await server.shutdown()
+
+    assertEquals(ws.closed, [[1001, "server shutting down"]])
+    assertEquals(bun.forced(), [true])
+  })
 })
 
 describe("upgradeWebSocket on Node and Bun", () => {
@@ -185,14 +215,18 @@ function fakeNode() {
     }),
     STATUS_CODES: { 403: "Forbidden" },
     toWeb: () => new ReadableStream(),
-    pipeBody: async (body, res, done) => {
-      ;(res as FakeOutgoing).body = await new Response(body).text()
-      done()
+    pipeBody: (body, res, done) => {
+      // Node's `pipeline` throws `ERR_STREAM_UNABLE_TO_PIPE` at once into a destroyed response.
+      if (res.destroyed) throw new Error(`Cannot pipe to a closed or destroyed stream`)
+      new Response(body).text().then((text) => {
+        ;(res as FakeOutgoing).body = text
+        done()
+      })
     },
     createWss: (choose) => {
       chooseProtocol = choose
       return {
-        handleUpgrade: (_req, _socket, _head, done) => done(handled[0]),
+        handleUpgrade: (_req, _socket, _head, done) => handled[0] && done(handled[0]),
       }
     },
   }
@@ -215,8 +249,12 @@ function fakeNode() {
 }
 
 interface FakeOutgoing extends NodeOutgoing {
-  headers: Record<string, string | string[]>
+  statusCode?: number
+  headers: string[]
   body?: string
+  destroyed: boolean
+  /** Fires the listener `serve` gave for "close", as Node does when the client hangs up. */
+  hangUp(): void
 }
 
 function incoming(headers: Record<string, string>, url = "/socket"): NodeIncoming {
@@ -229,26 +267,66 @@ function incoming(headers: Record<string, string>, url = "/socket"): NodeIncomin
   }
 }
 
+/** A fake `ServerResponse`; like Node's, `writeHead` throws on a control character. */
 function outgoing(): FakeOutgoing {
+  let onClose = () => {}
   const res: FakeOutgoing = {
-    statusCode: 200,
     writableFinished: false,
-    headers: {},
-    setHeader: (name, value) => void (res.headers[name] = value),
-    end: () => void (res.body = ""),
-    on: () => {},
+    headersSent: false,
+    destroyed: false,
+    headers: [],
+    writeHead: (status, headers) => {
+      if (headers.some((value) => [...value].some((c) => c < " " && c !== "\t"))) {
+        throw new TypeError(`Invalid character in header content`)
+      }
+      Object.assign(res, { statusCode: status, headers, headersSent: true })
+    },
+    end: (body = "") => void (res.body = body),
+    destroy: () => void (res.destroyed = true),
+    on: (_event, listener) => void (onClose = listener),
+    hangUp: () => {
+      res.destroyed = true
+      onClose()
+    },
   }
   return res
 }
 
 function rawSocket() {
   const written: string[] = []
+  const listeners = new Map<string, () => void>()
   const socket: NodeRawSocket = {
-    on: () => {},
-    end: (data) => void written.push(new TextDecoder().decode(data)),
-    destroy: () => {},
+    on: (event, listener) => void listeners.set(event, listener),
+    end: (data, done) => {
+      written.push(new TextDecoder().decode(data))
+      done()
+    },
+    destroy: () => void written.push("destroyed"),
   }
-  return { socket, written }
+  return { socket, written, hangUp: () => listeners.get("close")?.() }
+}
+
+/** A fake `ws` socket that keeps its listeners and what `close` was called with. */
+function fakeWs() {
+  const on = new Map<string, (...args: never[]) => void>()
+  const sent: unknown[] = []
+  const closed: unknown[] = []
+  const ws = {
+    bufferedAmount: 0,
+    send: (data) => void sent.push(data),
+    close: (...args) => void closed.push(args),
+    on: (event: string, listener: (...args: never[]) => void) => void on.set(event, listener),
+  } as NodeWs
+  return { ws, on, sent, closed }
+}
+
+/** A handler that upgrades every request and hands its socket to `keep`. */
+function upgrading(host: ServeHost, keep: (socket: BridgedSocket) => void): ServeHandler {
+  return (request) => {
+    const upgraded = upgradeOver(host)(request, { protocol: "user.1" })
+    keep(upgraded.socket as BridgedSocket)
+    return upgraded.response
+  }
 }
 
 describe("serve on Node", () => {
@@ -265,7 +343,7 @@ describe("serve on Node", () => {
     await node.request()(incoming({ host: "app.test", "x-forwarded-for": "203.0.113.9" }), res)
 
     assertEquals(info?.remoteAddr, { hostname: "192.0.2.7", port: 40000 })
-    assertEquals(res.headers["set-cookie"], ["a=1", "b=2"])
+    assertEquals(res.headers.filter((_, i) => res.headers[i - 1] === "set-cookie"), ["a=1", "b=2"])
     assertEquals(res.body, "hello")
   })
 
@@ -297,6 +375,7 @@ describe("serve on Node", () => {
     assertEquals(raw.written, [
       "HTTP/1.1 403 Forbidden\r\ncontent-type: text/plain;charset=UTF-8\r\n" +
       "content-length: 2\r\nconnection: close\r\n\r\nno",
+      "destroyed",
     ])
   })
 
@@ -332,6 +411,81 @@ describe("serve on Node", () => {
     assertEquals(raw.written, [])
     assertEquals(sent, ["pong"])
     assertEquals(seen, ["message:ping", "close:1006:false"])
+  })
+
+  it("aborts the request's signal and writes nothing when the client hangs up first", async () => {
+    const node = fakeNode()
+    const res = outgoing()
+    let signal: AbortSignal | undefined
+    await serveOver(node.host)((request) => {
+      signal = request.signal
+      res.hangUp()
+      return new Response("late")
+    }, OPTIONS)
+
+    await node.request()(incoming({ host: "app.test" }, "/slow"), res)
+
+    assertEquals([signal?.aborted, res.statusCode, res.body], [true, undefined, undefined])
+  })
+
+  it("answers 500 and keeps serving when Node refuses a response header", async () => {
+    const node = fakeNode()
+    // What Hono's `c.redirect(next)` answers for `?next=%2Fhome%01x`.
+    const redirect = () => new Response(null, { status: 302, headers: { location: "/home\x01x" } })
+    await serveOver(node.host)(redirect, OPTIONS)
+    const res = outgoing()
+
+    await node.request()(incoming({ host: "app.test" }, "/login"), res)
+
+    assertEquals([res.statusCode, res.body], [500, "Internal Server Error"])
+  })
+
+  it("destroys the raw socket when a refused upgrade's response cannot be read", async () => {
+    const node = fakeNode()
+    const failing = new ReadableStream({ pull: (c) => c.error(new Error("body failed")) })
+    await serveOver(node.host)(() => new Response(failing, { status: 403 }), OPTIONS)
+    const raw = rawSocket()
+
+    await node.upgrade()(
+      incoming({ host: "app.test", upgrade: "websocket" }),
+      raw.socket,
+      new Uint8Array(),
+    )
+
+    assertEquals(raw.written, ["destroyed"])
+  })
+
+  it("closes the app's socket with 1006 when ws refuses the handshake", async () => {
+    const node = fakeNode()
+    let socket: BridgedSocket | undefined
+    await serveOver(node.host)(upgrading(node.host, (given) => socket = given), OPTIONS)
+    const raw = rawSocket()
+
+    await node.upgrade()(
+      incoming({ host: "app.test", upgrade: "websocket" }),
+      raw.socket,
+      new Uint8Array(),
+    )
+    const seen = events(socket!)
+    raw.hangUp()
+
+    assertEquals(seen, ["close:1006:false"])
+  })
+
+  it("closes open sockets with 1001 on shutdown", async () => {
+    const node = fakeNode()
+    const ws = fakeWs()
+    node.handled.push(ws.ws)
+    const server = await serveOver(node.host)(upgrading(node.host, () => {}), OPTIONS)
+    await node.upgrade()(
+      incoming({ host: "app.test", upgrade: "websocket" }),
+      rawSocket().socket,
+      new Uint8Array(),
+    )
+
+    await server.shutdown()
+
+    assertEquals(ws.closed, [[1001, "server shutting down"]])
   })
 
   it("closes the server once, when the signal aborts and again on shutdown", async () => {

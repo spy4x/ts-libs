@@ -26,7 +26,8 @@ export interface BunServer {
     request: Request,
     options: { data: BridgedSocket; headers?: Record<string, string> },
   ): boolean
-  stop(): Promise<void> | void
+  /** `true` drops open connections, WebSockets included, instead of waiting for them. */
+  stop(closeActiveConnections?: boolean): Promise<void> | void
 }
 
 /** A socket of Bun's `websocket` handlers, as the Bun branch uses it. */
@@ -80,17 +81,20 @@ export interface NodeIncoming {
 
 /** The members of `node:http`'s response the Node branch writes. */
 export interface NodeOutgoing {
-  statusCode: number
   readonly writableFinished: boolean
-  setHeader(name: string, value: string | string[]): void
-  end(): void
+  readonly headersSent: boolean
+  readonly destroyed: boolean
+  /** Throws, sending nothing, when a header name or value is one Node refuses. */
+  writeHead(status: number, headers: string[]): void
+  end(body?: string): void
+  destroy(): void
   on(event: "close", listener: () => void): void
 }
 
 /** The raw TCP socket of an upgrade request. */
 export interface NodeRawSocket {
   on(event: "error" | "close", listener: () => void): void
-  end(data: Uint8Array): void
+  end(data: Uint8Array, done: () => void): void
   destroy(): void
 }
 
@@ -125,7 +129,10 @@ export interface NodeModules {
   toWeb(req: NodeIncoming): ReadableStream<Uint8Array>
   /** `pipeline(Readable.fromWeb(body), res, done)` of `node:stream`. */
   pipeBody(body: ReadableStream<Uint8Array>, res: NodeOutgoing, done: () => void): void
-  /** A `ws` `WebSocketServer` with `noServer: true` and the given protocol chooser. */
+  /**
+   * A `ws` `WebSocketServer` with `noServer: true`, the given protocol chooser and a 64 MiB
+   * message limit, as Deno's.
+   */
   createWss(chooseProtocol: (req: NodeIncoming) => string | false): {
     handleUpgrade(
       req: NodeIncoming,
@@ -135,6 +142,9 @@ export interface NodeModules {
     ): void
   }
 }
+
+/** The largest message a Node socket accepts: 64 MiB, Deno's limit. */
+const MAX_MESSAGE_BYTES = 64 * 1024 * 1024
 
 async function loadNodeModules(): Promise<NodeModules> {
   // Computed specifiers keep `deno check` from pulling in `@types/node`. `ws` is a literal, so a
@@ -153,6 +163,7 @@ async function loadNodeModules(): Promise<NodeModules> {
     createWss: (chooseProtocol) =>
       new WebSocketServer({
         noServer: true,
+        maxPayload: MAX_MESSAGE_BYTES,
         handleProtocols: (_offered: Set<string>, req: NodeIncoming) => chooseProtocol(req),
       }),
   }
@@ -301,6 +312,7 @@ function serveBun(
   handler: ServeHandler,
   options: ServeOptions,
 ): Server {
+  const open = new Set<BridgedSocket>()
   const server = bun.serve({
     hostname: options.hostname,
     port: options.port,
@@ -324,6 +336,7 @@ function serveBun(
     },
     websocket: {
       open(ws) {
+        open.add(ws.data)
         ws.data.opened({
           send: (data) => void ws.send(data),
           close: (code, reason) => ws.close(code, reason),
@@ -334,6 +347,7 @@ function serveBun(
         ws.data.received(typeof message === "string" ? message : arrayBufferOf(message))
       },
       close(ws, code, reason) {
+        open.delete(ws.data)
         ws.data.closed(code, reason)
       },
     },
@@ -343,8 +357,17 @@ function serveBun(
     port: server.port ?? options.port,
   })
   return stoppable(options.signal, async () => {
-    await server.stop()
+    closeAll(open)
+    await server.stop(true)
   })
+}
+
+/**
+ * Closes every open socket with `1001` ("going away"), so a shutdown does not wait for clients
+ * that would never leave on their own.
+ */
+function closeAll(open: Set<BridgedSocket>): void {
+  for (const socket of open) socket.close(1001, "server shutting down")
 }
 
 /** A {@link Server} over `stop`, which runs once, on `shutdown()` or when `signal` aborts. */
@@ -398,24 +421,33 @@ function peerOf(req: NodeIncoming): ServeInfo {
   }
 }
 
-/** Writes a response to `res`, streaming its body. */
-function writeResponse(
+/**
+ * Writes a response to `res`, streaming its body. When the client has already hung up, nothing is
+ * written. When Node refuses a header, the client gets a 500 instead, or, once the headers are out,
+ * a dropped connection; the server keeps serving either way.
+ */
+async function writeResponse(
   node: NodeModules,
   response: Response,
   method: string | undefined,
   res: NodeOutgoing,
 ): Promise<void> {
-  res.statusCode = response.status
-  for (const [name, value] of response.headers) {
-    if (name !== "set-cookie") res.setHeader(name, value)
+  try {
+    if (res.destroyed) return void await response.body?.cancel()
+    const headers: string[] = []
+    for (const [name, value] of response.headers) {
+      if (name !== "set-cookie") headers.push(name, value)
+    }
+    for (const cookie of response.headers.getSetCookie()) headers.push("set-cookie", cookie)
+    res.writeHead(response.status, headers)
+    if (!response.body || method === "HEAD") return res.end()
+    await new Promise<void>((resolve) => node.pipeBody(response.body!, res, resolve))
+  } catch (error) {
+    console.error(error)
+    if (res.headersSent || res.destroyed) return res.destroy()
+    res.writeHead(500, ["content-type", "text/plain;charset=UTF-8"])
+    res.end("Internal Server Error")
   }
-  const cookies = response.headers.getSetCookie()
-  if (cookies.length > 0) res.setHeader("set-cookie", cookies)
-  if (!response.body || method === "HEAD") {
-    res.end()
-    return Promise.resolve()
-  }
-  return new Promise((resolve) => node.pipeBody(response.body!, res, resolve))
 }
 
 /** The whole response, written to a raw socket that asked for an upgrade the app refused. */
@@ -447,6 +479,7 @@ function serveNode(
   const protocols = new WeakMap<NodeIncoming, string>()
   const wss = node.createWss((req) => protocols.get(req) ?? false)
   const fallbackHost = `${options.hostname}:${options.port}`
+  const open = new Set<BridgedSocket>()
 
   server.on("request", async (req, res) => {
     const controller = new AbortController()
@@ -460,6 +493,15 @@ function serveNode(
 
   server.on("upgrade", async (req, raw, head) => {
     raw.on("error", () => {})
+    try {
+      await upgradeNode(req, raw, head)
+    } catch (error) {
+      console.error(error)
+      raw.destroy()
+    }
+  })
+
+  async function upgradeNode(req: NodeIncoming, raw: NodeRawSocket, head: Uint8Array) {
     const request = toRequest(node, req, fallbackHost)
     let socket: BridgedSocket | undefined
     if (request) {
@@ -473,7 +515,8 @@ function serveNode(
     if (request) upgraders.delete(request)
     if (!socket || response.status >= 500) {
       socket?.closed(1006, "")
-      raw.end(await rawResponse(node, response))
+      const bytes = await rawResponse(node, response)
+      raw.end(bytes, () => raw.destroy())
       return
     }
     const bridged = socket
@@ -488,14 +531,18 @@ function serveNode(
       ws.on("message", (data, isBinary) => {
         bridged.received(isBinary ? arrayBufferOf(data) : new TextDecoder().decode(data))
       })
-      ws.on("close", (code, reason) => bridged.closed(code, new TextDecoder().decode(reason)))
+      ws.on("close", (code, reason) => {
+        open.delete(bridged)
+        bridged.closed(code, new TextDecoder().decode(reason))
+      })
+      open.add(bridged)
       bridged.opened({
         send: (data) => ws.send(data),
         close: (code, reason) => ws.close(code, reason),
         bufferedAmount: () => ws.bufferedAmount,
       })
     })
-  })
+  }
 
   return new Promise((resolve, reject) => {
     server.once("error", reject)
@@ -508,6 +555,7 @@ function serveNode(
         new Promise<void>((done) => {
           server.close(done)
           server.closeIdleConnections()
+          closeAll(open)
         })))
     })
     server.listen(options.port, options.hostname)
