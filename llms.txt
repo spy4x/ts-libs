@@ -1098,6 +1098,8 @@ LockState	enum	@spy4x/platform/server	Lock state, so a check can distinguish "he
 LockUnavailableError	class	@spy4x/platform/server	Raised when another holder owns the lock.
 LogRecord	type	@spy4x/platform/server	One log record: the caller's event plus a timestamp.
 NodeChildProcess	interface	@spy4x/platform/server	The subset of `node:child_process` and `node:os` that nodeSpawner uses.
+NodeNet	interface	@spy4x/platform/server	`node:net`, as far as nodeTcpConnect uses it.
+NodeSocket	interface	@spy4x/platform/server	One `node:net` socket, as far as nodeTcpConnect uses it.
 ReadJsonOptions	interface	@spy4x/platform/server	Options of readJsonFile.
 ReadJsonResult	type	@spy4x/platform/server	Result of reading a JSON document.
 ReminderNotifyResult	type	@spy4x/platform/server	What `notify` says about one reminder:
@@ -1111,12 +1113,16 @@ RunCommandStdin	type	@spy4x/platform/server	Where the child's standard input com
 ShutdownSignalError	class	@spy4x/platform/server	The reason a shutdownSignal carries when an operating-system signal aborted it.
 SpawnOptions	interface	@spy4x/platform/server	The subset of `Deno.CommandOptions` runCommand passes to its spawner.
 StandardInput	interface	@spy4x/platform/server	The process's standard input, for a command-line script: a hidden password prompt in raw mode, or text piped in.
+TcpConnect	type	@spy4x/platform/server	A function that opens a TcpConnection.
+TcpConnectOptions	interface	@spy4x/platform/server	What connectTcp opens.
+TcpConnection	interface	@spy4x/platform/server	An open TCP connection, narrowed to what a protocol client needs.
 TempPathOptions	interface	@spy4x/platform/server	Where a temporary file should live, given the document it will replace.
 ThrottledJsonSaver	class	@spy4x/platform/server	Coalescing writer for one JSON document.
 TimerPort	interface	@spy4x/platform/server	Scheduling primitives a ThrottledJsonSaver needs.
 WalkEntry	interface	@spy4x/platform/server	A single directory entry, as returned by a directory listing.
 WriteTextOptions	interface	@spy4x/platform/server	Options of FileSystemPort.writeText, `writeBytes` and `writeStream`.
 atomicWriteJson	function	@spy4x/platform/server	Serialise `value` and replace `path` with it atomically.
+connectTcp	function	@spy4x/platform/server	Opens a TCP connection to `hostname:port`: `Deno.connect` on Deno, nodeTcpConnect on Node and Bun.
 createReminderRunner	function	@spy4x/platform/server	Builds a runner; nothing runs until ReminderRunner.start or ReminderRunner.tick.
 denoByteReader	function	@spy4x/platform/server	ByteReader over one file, read in chunks so a large file never lands in memory at once.
 denoFileSystem	constant	@spy4x/platform/server	FileSystemPort backed by Deno's filesystem APIs.
@@ -1126,6 +1132,7 @@ fsError	function	@spy4x/platform/server	A file-system error of `kind` for the ru
 isFsError	function	@spy4x/platform/server	Whether `error` is a file-system error of `kind` from any runtime: one fsError made, one Deno threw (its `name` is the kind), or one Node or Bun threw (its `code`, such as `ENOENT`).
 nodeFileSystem	constant	@spy4x/platform/server	FileSystemPort over `node:fs/promises`, for Node and Bun.
 nodeSpawner	function	@spy4x/platform/server	A CommandSpawner over `node:child_process`, for Node and Bun.
+nodeTcpConnect	function	@spy4x/platform/server	A TcpConnect over `node:net`, for Node and Bun.
 parseLogLines	function	@spy4x/platform/server	Parse JSONL text, skipping blank lines and reporting the lines that do not parse.
 processArgs	function	@spy4x/platform/server	The command-line arguments after the script: `Deno.args` on Deno, `process.argv` without the runtime and script paths on Node and Bun.
 processEnv	constant	@spy4x/platform/server	The process environment, read through `Deno.env` on Deno and `process.env` on Node and Bun.
@@ -1202,6 +1209,13 @@ nodeFileSystem	constant	@spy4x/platform/server/runtime-fs	FileSystemPort over `n
 runtimeFileSystem	constant	@spy4x/platform/server/runtime-fs	The file system of the running runtime: `denoFileSystem` on Deno, nodeFileSystem on Node and Bun.
 ShutdownSignalError	class	@spy4x/platform/server/shutdown-signal	The reason a shutdownSignal carries when an operating-system signal aborted it.
 shutdownSignal	function	@spy4x/platform/server/shutdown-signal	Return an `AbortSignal` that aborts on the first of `options.signals` (default `SIGINT` and `SIGTERM`).
+NodeNet	interface	@spy4x/platform/server/tcp	`node:net`, as far as nodeTcpConnect uses it.
+NodeSocket	interface	@spy4x/platform/server/tcp	One `node:net` socket, as far as nodeTcpConnect uses it.
+TcpConnect	type	@spy4x/platform/server/tcp	A function that opens a TcpConnection.
+TcpConnectOptions	interface	@spy4x/platform/server/tcp	What connectTcp opens.
+TcpConnection	interface	@spy4x/platform/server/tcp	An open TCP connection, narrowed to what a protocol client needs.
+connectTcp	function	@spy4x/platform/server/tcp	Opens a TCP connection to `hostname:port`: `Deno.connect` on Deno, nodeTcpConnect on Node and Bun.
+nodeTcpConnect	function	@spy4x/platform/server/tcp	A TcpConnect over `node:net`, for Node and Bun.
 ThrottledJsonSaver	class	@spy4x/platform/server/throttled-saver	Coalescing writer for one JSON document.
 TimerPort	interface	@spy4x/platform/server/throttled-saver	Scheduling primitives a ThrottledJsonSaver needs.
 systemTimerPort	constant	@spy4x/platform/server/throttled-saver	Real timers.
@@ -2095,7 +2109,7 @@ ProbeResult	interface	@spy4x/server/healthcheck	Probe outcome, kept as data so t
 ProbeTimer	interface	@spy4x/server/healthcheck	Timer used for deadlines.
 denoConnector	constant	@spy4x/server/healthcheck	Adapter over `Deno.connect`.
 healthcheckExitCode	function	@spy4x/server/healthcheck	Exit code for the probe: `0` healthy, `1` unhealthy.
-nodeConnector	constant	@spy4x/server/healthcheck	Adapter over `node:net`, for Node and Bun.
+nodeConnector	constant	@spy4x/server/healthcheck	Adapter over `node:net`, for Node and Bun, through `@spy4x/platform/server/tcp`'s `nodeTcpConnect`.
 probeLoopback	function	@spy4x/server/healthcheck	Probe a loopback port: connect and close again, or, with a `path`, `GET` that path and compare the status.
 resolveHealthcheckPort	function	@spy4x/server/healthcheck	Port the healthcheck should probe, from the process environment.
 runHealthcheck	function	@spy4x/server/healthcheck	Compute the exit code and terminate the process.
@@ -2835,4 +2849,4 @@ firstIssueMessage	function	@spy4x/validation/validate	First issue message in a v
 isArkErrors	function	@spy4x/validation/validate	Whether a value is an arktype rejection, without relying on `instanceof`.
 toValidationError	function	@spy4x/validation/validate	Build a ValidationError from arktype's issues.
 validate	function	@spy4x/validation/validate	Parse `value` with an arktype schema exactly once.
-# export surface: sha256 df0bc4fe7b6be8e4f07abac820ba52b25fd3e82262caf111e20616f108d38c26
+# export surface: sha256 ca309bed461b6f96fa58896dc2fb39da1c757098f13c97cd475609156f98b746
