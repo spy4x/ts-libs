@@ -11,22 +11,23 @@
  * instance assignable to `ICacheStorage` without either module importing the other.
  */
 import { type Command, RedisClient, RedisError, type Reply } from "@iuioiua/redis"
+import { connectTcp, type TcpConnection } from "@spy4x/platform/server/tcp"
 
 /** Keys `{@link RedisKvStore.reset}` asks Redis to look at per `SCAN` round trip. */
 const SCAN_COUNT = 200
 
 /**
- * How long {@link RedisKvStore.#openConnection} waits for `Deno.connect`, and then
+ * How long {@link RedisKvStore.#openConnection} waits for the TCP connect, and then
  * for `AUTH` and `PING` together to answer, before giving up — in both
  * {@link RedisKvStore.connect} and a reconnect.
  *
  * Not configurable, and not exported. Two different hosts hang two different ways,
- * and both needed a bound: `Deno.connect` to a host that is unreachable rather than
+ * and both needed a bound: a connect to a host that is unreachable rather than
  * actively refusing (a firewalled address, a host that stopped answering ARP) hangs
  * for as long as the OS's own connect timeout, on the order of minutes; a host that
  * accepts the TCP connection and then never answers at the Redis protocol level (a
  * frozen Redis, a proxy whose backend is down) would hang the `PING` that follows
- * forever instead, even though `Deno.connect` itself already succeeded. Either way,
+ * forever instead, even though the TCP connect itself already succeeded. Either way,
  * every caller sharing the reconnect would hang with it. A fixed bound on each step
  * is enough to turn both into an ordinary, catchable
  * {@link RedisKvStoreConnectionError} instead of a hung request; a per-call override
@@ -135,7 +136,7 @@ function isCommandTimeout(error: unknown): boolean {
  *
  * `RedisClient.sendCommand` calls `this.#writer.write(...)` without awaiting it (see
  * `@iuioiua/redis`'s source), so a write that rejects — a closed or reset socket —
- * becomes an unhandled promise rejection, which crashes the whole Deno process even
+ * becomes an unhandled promise rejection, which crashes the whole process even
  * from inside a caller's `try`/`catch`. This wrapper's `write` never rejects: it
  * records the failure on `holder` instead, and `#send` checks `holder.current` before
  * every command, and records a failed read in its own `catch`, so the failure
@@ -187,7 +188,7 @@ export interface RedisKvStoreOptions {
  * socket.
  */
 interface OpenedConnection {
-  connection: Deno.Conn
+  connection: TcpConnection
   client: RedisClient
   connectionError: ConnectionErrorHolder
 }
@@ -223,7 +224,7 @@ interface OpenedConnection {
  * {@link COMMAND_TIMEOUT_MS} (#172) closes the connection and throws without a resend:
  * a frozen Redis would only freeze the resend too. A call that finds the connection
  * dead before it sends anything opens a fresh connection the same way {@link connect}
- * does — `Deno.connect`, then `AUTH` when a password was given, then a `PING` that must answer
+ * does — a TCP connect (`connectTcp`), then `AUTH` when a password was given, then a `PING` that must answer
  * `PONG`; the connect and the AUTH/PING pair are each bounded to {@link CONNECT_TIMEOUT_MS}, so
  * neither a host that never answers TCP nor one that accepts the connection and then never answers
  * `PING` (a frozen Redis, a proxy whose backend is down) can hang the caller. That attempt either replaces the
@@ -235,7 +236,7 @@ interface OpenedConnection {
  */
 export class RedisKvStore {
   #closed = false
-  #connection: Deno.Conn
+  #connection: TcpConnection
   #client: RedisClient
   #connectionError: ConnectionErrorHolder
   #reconnecting: Promise<void> | null = null
@@ -271,7 +272,7 @@ export class RedisKvStore {
     port: number,
     credentials: RedisKvStoreOptions,
   ): Promise<OpenedConnection> {
-    const connection = await Deno.connect({
+    const connection = await connectTcp({
       hostname,
       port,
       signal: AbortSignal.timeout(CONNECT_TIMEOUT_MS),
