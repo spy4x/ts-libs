@@ -106,7 +106,7 @@ export function workingDirectoryOf(host: RuntimeHost): string {
   throw new Error("no working directory: this runtime has neither Deno.cwd nor process.cwd")
 }
 
-/** A file-system failure that callers tell apart: see `fsError` in `./runtime-fs.ts`. */
+/** A file-system failure that `fsError` makes and `isFsError` recognises on every runtime. */
 export type FsErrorKind = "NotFound" | "AlreadyExists" | "WriteZero"
 
 /** Node's `code` for each kind that has one. Node has no code for a write that made no progress. */

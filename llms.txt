@@ -1090,6 +1090,7 @@ EnvReader	interface	@spy4x/platform/server	Reads environment values.
 FileLock	class	@spy4x/platform/server	One held lock.
 FileLockWaitError	class	@spy4x/platform/server	Raised when a FileLock.runExclusive call waited FileLockOptions.waitMs for an earlier `runExclusive` on the same instance and gave up.
 FileSystemPort	interface	@spy4x/platform/server	Storage primitives a server helper needs.
+FsErrorKind	type	@spy4x/platform/server	A file-system failure that `fsError` makes and `isFsError` recognises on every runtime.
 IntervalRunnerOptions	interface	@spy4x/platform/server	Options of startIntervalRunner.
 JsonlLogger	class	@spy4x/platform/server	Append-only JSONL writer over a FileSystemPort.
 LockHandle	interface	@spy4x/platform/server	A held file lock.
@@ -1121,6 +1122,8 @@ denoByteReader	function	@spy4x/platform/server	ByteReader over one file, read in
 denoFileSystem	constant	@spy4x/platform/server	FileSystemPort backed by Deno's filesystem APIs.
 exitProcess	function	@spy4x/platform/server	End the process now with exit `code`: `Deno.exit` on Deno, `process.exit` on Node and Bun.
 formatLogLine	function	@spy4x/platform/server	Serialise a log record to one line, stamped with the clock at append time.
+fsError	function	@spy4x/platform/server	A file-system error of `kind` for the running runtime, for code that reports a failure the way the platform would.
+isFsError	function	@spy4x/platform/server	Whether `error` is a file-system error of `kind` from any runtime: one fsError made, one Deno threw (its `name` is the kind), or one Node or Bun threw (its `code`, such as `ENOENT`).
 nodeFileSystem	constant	@spy4x/platform/server	FileSystemPort over `node:fs/promises`, for Node and Bun.
 nodeSpawner	function	@spy4x/platform/server	A CommandSpawner over `node:child_process`, for Node and Bun.
 parseLogLines	function	@spy4x/platform/server	Parse JSONL text, skipping blank lines and reporting the lines that do not parse.
@@ -1137,6 +1140,7 @@ startIntervalRunner	function	@spy4x/platform/server	Runs `task` every `intervalM
 systemClockPort	constant	@spy4x/platform/server	Deprecated: Use `systemClock` from `@spy4x/platform/universal/time`. The host clock.
 systemTimerPort	constant	@spy4x/platform/server	Real timers.
 tempPathFor	function	@spy4x/platform/server	Build the temp path for an atomic write: `<path>.<pid>.<sequence>.tmp`.
+workingDirectory	function	@spy4x/platform/server	The process's working directory: `Deno.cwd()` on Deno, `process.cwd()` on Node and Bun.
 writeStderr	function	@spy4x/platform/server	Write `text` to standard error as it is, with no line break added: for a prompt, where `console.error` would end the line.
 ReadJsonOptions	interface	@spy4x/platform/server/atomic-json	Options of readJsonFile.
 ReadJsonResult	type	@spy4x/platform/server/atomic-json	Result of reading a JSON document.
@@ -1172,6 +1176,7 @@ processEnv	constant	@spy4x/platform/server/process	The process environment, read
 processId	function	@spy4x/platform/server/process	The id of the running process: `Deno.pid` on Deno, `process.pid` on Node and Bun, `undefined` where there is none (a browser).
 processStdin	constant	@spy4x/platform/server/process	Standard input: `Deno.stdin` on Deno, `process.stdin` on Node and Bun.
 readEnvRecord	function	@spy4x/platform/server/process	Read the named variables into a record, for a parser that takes one, such as `parseStorageEnv` in `@spy4x/server/storage`.
+workingDirectory	function	@spy4x/platform/server/process	The process's working directory: `Deno.cwd()` on Deno, `process.cwd()` on Node and Bun.
 writeStderr	function	@spy4x/platform/server/process	Write `text` to standard error as it is, with no line break added: for a prompt, where `console.error` would end the line.
 DEFAULT_REMINDER_CATCH_UP_MS	constant	@spy4x/platform/server/reminder-runner	Deprecated: Import from `@spy4x/tasks/reminder-runner`. How far back the runner catches up unless `catchUpMs` says otherwise: one hour.
 DEFAULT_REMINDER_INTERVAL_MS	constant	@spy4x/platform/server/reminder-runner	Deprecated: Import from `@spy4x/tasks/reminder-runner`. How often the runner ticks unless `intervalMs` says otherwise: once a minute.
@@ -1190,6 +1195,9 @@ RunCommandStdin	type	@spy4x/platform/server/run-command	Where the child's standa
 SpawnOptions	interface	@spy4x/platform/server/run-command	The subset of `Deno.CommandOptions` runCommand passes to its spawner.
 nodeSpawner	function	@spy4x/platform/server/run-command	A CommandSpawner over `node:child_process`, for Node and Bun.
 runCommand	function	@spy4x/platform/server/run-command	Run `command` (the program, then its arguments) and resolve with its outcome.
+FsErrorKind	type	@spy4x/platform/server/runtime-fs	A file-system failure that `fsError` makes and `isFsError` recognises on every runtime.
+fsError	function	@spy4x/platform/server/runtime-fs	A file-system error of `kind` for the running runtime, for code that reports a failure the way the platform would.
+isFsError	function	@spy4x/platform/server/runtime-fs	Whether `error` is a file-system error of `kind` from any runtime: one fsError made, one Deno threw (its `name` is the kind), or one Node or Bun threw (its `code`, such as `ENOENT`).
 nodeFileSystem	constant	@spy4x/platform/server/runtime-fs	FileSystemPort over `node:fs/promises`, for Node and Bun.
 runtimeFileSystem	constant	@spy4x/platform/server/runtime-fs	The file system of the running runtime: `denoFileSystem` on Deno, nodeFileSystem on Node and Bun.
 ShutdownSignalError	class	@spy4x/platform/server/shutdown-signal	The reason a shutdownSignal carries when an operating-system signal aborted it.
@@ -2827,4 +2835,4 @@ firstIssueMessage	function	@spy4x/validation/validate	First issue message in a v
 isArkErrors	function	@spy4x/validation/validate	Whether a value is an arktype rejection, without relying on `instanceof`.
 toValidationError	function	@spy4x/validation/validate	Build a ValidationError from arktype's issues.
 validate	function	@spy4x/validation/validate	Parse `value` with an arktype schema exactly once.
-# export surface: sha256 cf71d22016b5158c5c5488d4cc4a0063a1dd06a67363ff112a355d15ad0a2deb
+# export surface: sha256 df0bc4fe7b6be8e4f07abac820ba52b25fd3e82262caf111e20616f108d38c26
