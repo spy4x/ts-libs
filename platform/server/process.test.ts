@@ -10,6 +10,7 @@ import {
   type RuntimeHost,
   signalListenersOver,
   standardInputOver,
+  workingDirectoryOf,
   writeStderrOver,
 } from "./_runtime-host.ts"
 import {
@@ -54,6 +55,18 @@ describe("processIdOf", () => {
     expect(processIdOf(denoHost)).toBe(11)
     expect(processIdOf(nodeHost)).toBe(22)
     expect(processIdOf({})).toBeUndefined()
+  })
+})
+
+describe("workingDirectoryOf", () => {
+  it("asks Deno.cwd on Deno, even where process is defined too, and process.cwd on Node and Bun", () => {
+    const deno: RuntimeHost = { Deno: { cwd: () => "/from-deno" }, process: { cwd: () => "/node" } }
+    expect(workingDirectoryOf(deno)).toBe("/from-deno")
+    expect(workingDirectoryOf({ process: { cwd: () => "/from-node" } })).toBe("/from-node")
+  })
+
+  it("throws on a runtime with neither, instead of resolving against an empty directory", () => {
+    expect(() => workingDirectoryOf({})).toThrow("no working directory")
   })
 })
 

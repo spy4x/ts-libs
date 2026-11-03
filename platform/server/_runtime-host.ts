@@ -46,6 +46,8 @@ export interface RuntimeHost {
     }
     addSignalListener?(signal: Deno.Signal, handler: () => void): void
     removeSignalListener?(signal: Deno.Signal, handler: () => void): void
+    cwd?(): string
+    errors?: Partial<Record<FsErrorKind, new (message: string) => Error>>
   }
   process?: {
     env?: Record<string, string | undefined>
@@ -56,6 +58,7 @@ export interface RuntimeHost {
     stdin?: NodeStdin
     on?(event: string, listener: () => void): unknown
     off?(event: string, listener: () => void): unknown
+    cwd?(): string
   }
 }
 
@@ -90,6 +93,41 @@ export function envReaderOver(host: () => RuntimeHost): EnvReader {
       throw new Error("no environment: this runtime has neither Deno.env nor process.env")
     },
   }
+}
+
+/**
+ * The working directory from `host`: `Deno.cwd()`, or `process.cwd()` on Node and Bun.
+ *
+ * @throws {Error} When the host has neither.
+ */
+export function workingDirectoryOf(host: RuntimeHost): string {
+  if (host.Deno?.cwd) return host.Deno.cwd()
+  if (host.process?.cwd) return host.process.cwd()
+  throw new Error("no working directory: this runtime has neither Deno.cwd nor process.cwd")
+}
+
+/** A file-system failure that callers tell apart: see `fsError` in `./runtime-fs.ts`. */
+export type FsErrorKind = "NotFound" | "AlreadyExists" | "WriteZero"
+
+/** Node's `code` for each kind that has one. Node has no code for a write that made no progress. */
+export const FS_ERROR_CODES: Record<FsErrorKind, string | undefined> = {
+  NotFound: "ENOENT",
+  AlreadyExists: "EEXIST",
+  WriteZero: undefined,
+}
+
+/**
+ * A `kind` error for `host`: `Deno.errors[kind]` on Deno, so `instanceof` checks keep working
+ * there; elsewhere a plain `Error` named `kind`, with Node's `code` when the kind has one.
+ */
+export function fsErrorOver(host: RuntimeHost, kind: FsErrorKind, message: string): Error {
+  const DenoError = host.Deno?.errors?.[kind]
+  if (DenoError) return new DenoError(message)
+  const error = new Error(message) as Error & { code?: string }
+  error.name = kind
+  const code = FS_ERROR_CODES[kind]
+  if (code !== undefined) error.code = code
+  return error
 }
 
 /** The process id from `host`, or `undefined` on a runtime that has none (a browser, a worker). */

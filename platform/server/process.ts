@@ -1,9 +1,9 @@
 /**
- * The running process, on Deno, Node and Bun: its environment variables, id, arguments, exit,
- * standard error and standard input.
+ * The running process, on Deno, Node and Bun: its environment variables, id, working directory,
+ * arguments, exit, standard error and standard input.
  *
- * The one place in this package that reads `Deno.env`, `process.env`, a process id, the arguments
- * or the standard streams. A module that needs one takes it as an option and defaults to what this
+ * The one place in this package that reads `Deno.env`, `process.env`, a process id, the working
+ * directory, the arguments or the standard streams. A module that needs one takes it as an option and defaults to what this
  * module exports, so it runs unchanged on every runtime and its test injects a fixed value instead.
  *
  * @example
@@ -27,6 +27,7 @@ import {
   exitOver,
   processIdOf,
   standardInputOver,
+  workingDirectoryOf,
   writeStderrOver,
 } from "./_runtime-host.ts"
 
@@ -74,6 +75,16 @@ export function readEnvRecord<Name extends string>(
  */
 export function processId(): number | undefined {
   return processIdOf(currentHost())
+}
+
+/**
+ * The process's working directory: `Deno.cwd()` on Deno, `process.cwd()` on Node and Bun. On Deno
+ * it needs `--allow-read`.
+ *
+ * @throws {Error} On a runtime with neither (a browser).
+ */
+export function workingDirectory(): string {
+  return workingDirectoryOf(currentHost())
 }
 
 /**

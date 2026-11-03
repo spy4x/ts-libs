@@ -1,6 +1,7 @@
 /**
- * {@link runtimeFileSystem}, a `FileSystemPort` for whichever runtime runs it, and
- * {@link nodeFileSystem}, the one for Node and Bun.
+ * {@link runtimeFileSystem}, a `FileSystemPort` for whichever runtime runs it,
+ * {@link nodeFileSystem}, the one for Node and Bun, and {@link fsError} and {@link isFsError}, which
+ * make and recognise a file-system error the same way on all three.
  *
  * `node:fs/promises` is imported on the first call on Node or Bun, never at import time, so Deno
  * code that only imports this module never loads it, and its type check never sees Node's types.
@@ -22,7 +23,13 @@
 
 import { join } from "@std/path"
 
-import { currentHost, fileSystemOver } from "./_runtime-host.ts"
+import {
+  currentHost,
+  fileSystemOver,
+  FS_ERROR_CODES,
+  type FsErrorKind,
+  fsErrorOver,
+} from "./_runtime-host.ts"
 import { denoFileSystem } from "./deno-fs.ts"
 import type { FileSystemPort, WalkEntry } from "./ports.ts"
 
@@ -207,3 +214,30 @@ export const runtimeFileSystem: FileSystemPort = fileSystemOver(currentHost, {
   deno: denoFileSystem,
   node: nodeFileSystem,
 })
+
+export type { FsErrorKind }
+
+/**
+ * A file-system error of `kind` for the running runtime, for code that reports a failure the way
+ * the platform would. On Deno it is `Deno.errors[kind]`, so `instanceof Deno.errors.NotFound`
+ * keeps working. On Node and Bun it is an `Error` whose `name` is `kind`, with Node's `code`
+ * (`ENOENT`, `EEXIST`) when the kind has one. Recognise it with {@link isFsError}.
+ *
+ * @example
+ * ```ts
+ * if (bytes === null) throw fsError("NotFound", `No such object: ${path}`)
+ * ```
+ */
+export function fsError(kind: FsErrorKind, message: string): Error {
+  return fsErrorOver(currentHost(), kind, message)
+}
+
+/**
+ * Whether `error` is a file-system error of `kind` from any runtime: one {@link fsError} made, one
+ * Deno threw (its `name` is the kind), or one Node or Bun threw (its `code`, such as `ENOENT`).
+ */
+export function isFsError(error: unknown, kind: FsErrorKind): boolean {
+  if (!(error instanceof Error)) return false
+  const code = FS_ERROR_CODES[kind]
+  return error.name === kind || (code !== undefined && (error as { code?: unknown }).code === code)
+}
