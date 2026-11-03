@@ -2338,7 +2338,8 @@ export const config = loadConfig(configSchema)
 `RedisKvStore`. A small wrapper over `@iuioiua/redis`'s `RedisClient`: `get`, `set` with a TTL,
 `take`, `del`, `eval`, `reset`, `close`. Extracted from `template/libs/server/kv/+index.ts` (#75);
 `financy`'s copy differs from the template's by one import line (its own module alias for the cache
-interface) and was not otherwise consulted.
+interface) and was not otherwise consulted. It runs on Deno, Node and Bun: the socket comes from
+`@spy4x/platform/server/tcp`'s `connectTcp` (`Deno.connect` on Deno, `node:net` on Node and Bun).
 
 **Password and ACL user.** `RedisKvStore.connect(host, port, prefix, { username?, password? })` sends
 `AUTH` before `PING`, on the first connection and on every reconnect. Without a `password` nothing
@@ -2442,8 +2443,8 @@ worth logging.
 every method recorded the failure once and threw `RedisKvStoreConnectionError` forever after, even
 once Redis came back. Nothing watches the connection on its own; a dropped socket is noticed only
 when a call next tries to use it. A call that finds the connection already recorded dead opens a
-fresh one first (the same `Deno.connect` + `PING` steps `connect()` itself runs, each bounded to a
-fixed 5-second timeout, because an unreachable host hangs `Deno.connect` for the OS's multi-minute
+fresh one first (the same TCP connect + `PING` steps `connect()` itself runs, each bounded to a
+fixed 5-second timeout, because an unreachable host hangs a TCP connect for the OS's multi-minute
 timeout and a host that accepts the connection but never answers would hang the `PING` forever),
 swaps it in, and only then sends its command. Concurrent calls that all find the connection dead
 share one in-flight reconnect instead of each opening its own socket. `close()` racing a reconnect
