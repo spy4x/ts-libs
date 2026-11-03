@@ -1096,6 +1096,7 @@ LockHandle	interface	@spy4x/platform/server	A held file lock.
 LockState	enum	@spy4x/platform/server	Lock state, so a check can distinguish "held" from "held by me".
 LockUnavailableError	class	@spy4x/platform/server	Raised when another holder owns the lock.
 LogRecord	type	@spy4x/platform/server	One log record: the caller's event plus a timestamp.
+NodeChildProcess	interface	@spy4x/platform/server	The subset of `node:child_process` and `node:os` that nodeSpawner uses.
 ReadJsonOptions	interface	@spy4x/platform/server	Options of readJsonFile.
 ReadJsonResult	type	@spy4x/platform/server	Result of reading a JSON document.
 ReminderNotifyResult	type	@spy4x/platform/server	What `notify` says about one reminder:
@@ -1121,6 +1122,7 @@ denoFileSystem	constant	@spy4x/platform/server	FileSystemPort backed by Deno's f
 exitProcess	function	@spy4x/platform/server	End the process now with exit `code`: `Deno.exit` on Deno, `process.exit` on Node and Bun.
 formatLogLine	function	@spy4x/platform/server	Serialise a log record to one line, stamped with the clock at append time.
 nodeFileSystem	constant	@spy4x/platform/server	FileSystemPort over `node:fs/promises`, for Node and Bun.
+nodeSpawner	function	@spy4x/platform/server	A CommandSpawner over `node:child_process`, for Node and Bun.
 parseLogLines	function	@spy4x/platform/server	Parse JSONL text, skipping blank lines and reporting the lines that do not parse.
 processArgs	function	@spy4x/platform/server	The command-line arguments after the script: `Deno.args` on Deno, `process.argv` without the runtime and script paths on Node and Bun.
 processEnv	constant	@spy4x/platform/server	The process environment, read through `Deno.env` on Deno and `process.env` on Node and Bun.
@@ -1181,10 +1183,12 @@ ReminderRunnerStep	type	@spy4x/platform/server/reminder-runner	Deprecated: Impor
 ReminderStatePort	interface	@spy4x/platform/server/reminder-runner	Deprecated: Import from `@spy4x/tasks/reminder-runner`. Where the runner keeps its ReminderRunnerState.
 createReminderRunner	function	@spy4x/platform/server/reminder-runner	Deprecated: Import from `@spy4x/tasks/reminder-runner`. Builds a runner; nothing runs until ReminderRunner.start or ReminderRunner.tick.
 CommandSpawner	type	@spy4x/platform/server/run-command	A `Deno.Command`-shaped factory: builds a command whose `output()` runs it to completion.
+NodeChildProcess	interface	@spy4x/platform/server/run-command	The subset of `node:child_process` and `node:os` that nodeSpawner uses.
 RunCommandOutput	interface	@spy4x/platform/server/run-command	What a finished child process reports; the subset of `Deno.CommandOutput` this module reads.
 RunCommandResult	interface	@spy4x/platform/server/run-command	The outcome of runCommand.
 RunCommandStdin	type	@spy4x/platform/server/run-command	Where the child's standard input comes from: the caller's own (`"inherit"`) or nothing (`"null"`, so a read gets end-of-file at once).
 SpawnOptions	interface	@spy4x/platform/server/run-command	The subset of `Deno.CommandOptions` runCommand passes to its spawner.
+nodeSpawner	function	@spy4x/platform/server/run-command	A CommandSpawner over `node:child_process`, for Node and Bun.
 runCommand	function	@spy4x/platform/server/run-command	Run `command` (the program, then its arguments) and resolve with its outcome.
 nodeFileSystem	constant	@spy4x/platform/server/runtime-fs	FileSystemPort over `node:fs/promises`, for Node and Bun.
 runtimeFileSystem	constant	@spy4x/platform/server/runtime-fs	The file system of the running runtime: `denoFileSystem` on Deno, nodeFileSystem on Node and Bun.
@@ -2823,4 +2827,4 @@ firstIssueMessage	function	@spy4x/validation/validate	First issue message in a v
 isArkErrors	function	@spy4x/validation/validate	Whether a value is an arktype rejection, without relying on `instanceof`.
 toValidationError	function	@spy4x/validation/validate	Build a ValidationError from arktype's issues.
 validate	function	@spy4x/validation/validate	Parse `value` with an arktype schema exactly once.
-# export surface: sha256 9a3aed9d4d7863ff6c7a072b46d6c2be61f66c9c8f5f5354b55618335b08cf02
+# export surface: sha256 cf71d22016b5158c5c5488d4cc4a0063a1dd06a67363ff112a355d15ad0a2deb
