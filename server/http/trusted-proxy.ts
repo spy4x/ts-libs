@@ -20,7 +20,8 @@
  *    waits for a lookup at most {@link PROXY_LOOKUP_DEADLINE_MS}, and concurrent requests share one.
  *  - After the deadline a request is answered from the last good addresses, but only while they are
  *    younger than {@link PROXY_ADDRESS_HARD_MAX_AGE_MS}; past that a failing DNS refuses, so a
- *    moved proxy's old address is not trusted for the length of an outage.
+ *    moved proxy's old address is not trusted for the length of an outage. A lookup itself ends
+ *    after {@link PROXY_LOOKUP_TIMEOUT_MS}, so a resolver that never answers cannot block the next.
  *  - A failing `onError` callback no longer breaks the lookup: the last good addresses stay.
  *  - The peer address comes from a `remoteAddr` resolver (`denoServeRemoteAddr` under `deno
  *    serve`) instead of Deno's `env.remoteAddr`, so the module runs on any runtime.
@@ -47,6 +48,12 @@ export const PROXY_LOOKUP_RETRY_MS = 1_000
 export const PROXY_LOOKUP_DEADLINE_MS = 1_000
 
 /**
+ * The longest a lookup may run. Past it the lookup counts as failed, its resolver is told through
+ * its abort signal, a late answer is dropped, and the next call that needs a lookup starts a new one.
+ */
+export const PROXY_LOOKUP_TIMEOUT_MS = 5_000
+
+/**
  * How long a name's addresses stay trusted after its last successful lookup while later lookups
  * fail or hang. Past it the name trusts nothing until a lookup succeeds.
  */
@@ -61,7 +68,9 @@ export interface ProxyPeersOptions {
   hosts: readonly string[]
   /**
    * Looks a name up. Defaults to `defaultResolver` from `@spy4x/net`, the system resolver (Docker's
-   * own DNS inside a container), which needs `--allow-net` under Deno.
+   * own DNS inside a container) on Deno, Node and Bun, which needs `--allow-net` under Deno. Each
+   * lookup gets an abort signal that fires after {@link PROXY_LOOKUP_TIMEOUT_MS}; a resolver may
+   * ignore it, since its late answer is dropped anyway.
    */
   resolver?: DnsResolver
   /** The clock, in milliseconds. Defaults to `Date.now`. */
@@ -78,7 +87,7 @@ export interface ProxyPeersOptions {
   onError?: (host: string, error: unknown) => void
 }
 
-/** The addresses of one name, and when the lookup that found them started. */
+/** The addresses of one name, and when the lookup that found them finished. */
 interface Resolved {
   addresses: readonly string[]
   at: number
@@ -118,11 +127,12 @@ const defaultSetTimer = (callback: () => void, ms: number) => {
  *    to a second.
  *  - When a lookup fails (an error, or no answer by the deadline), the call is answered from the
  *    name's last good addresses while they are younger than {@link PROXY_ADDRESS_HARD_MAX_AGE_MS},
- *    counted from the start of the last lookup that succeeded. So while DNS fails, a moved proxy's
+ *    counted from the end of the last lookup that succeeded. So while DNS fails, a moved proxy's
  *    old address stays trusted for at most that long; after it the name trusts nothing until a
  *    lookup succeeds. A failure is reported to `onError`.
  *  - One lookup runs at a time. While one runs past its deadline, calls answer at once from the last
- *    good addresses, as above, instead of waiting again.
+ *    good addresses, as above, instead of waiting again. A lookup that has not answered after
+ *    {@link PROXY_LOOKUP_TIMEOUT_MS} fails, so the next call that needs a lookup starts a new one.
  *
  * A name that resolves to no address (a container that is not running) trusts nothing.
  */
@@ -142,12 +152,12 @@ export function createProxyPeers(options: ProxyPeersOptions): IsProxyPeer {
   let lookedUpAt: number | undefined
   let current: Lookup | undefined
 
-  const lookUpName = async (name: string, startedAt: number): Promise<void> => {
+  const lookUpName = async (name: string, signal: AbortSignal, timedOut: Promise<never>) => {
     try {
-      const addresses = await resolver.resolve(name)
+      const addresses = await Promise.race([resolver.resolve(name, { signal }), timedOut])
       resolved.set(name, {
         addresses: addresses.map((a) => normalizeIp(a)).filter((a) => a !== null),
-        at: startedAt,
+        at: now(),
       })
     } catch (error) {
       try {
@@ -160,13 +170,30 @@ export function createProxyPeers(options: ProxyPeersOptions): IsProxyPeer {
   /** One lookup of every name at a time; neither of its promises rejects. */
   const lookUp = (): Lookup => {
     if (current !== undefined) return current
-    let cancel = () => {}
+    let cancelDeadline = () => {}
     const deadline = new Promise<void>((resolve) => {
-      cancel = setTimer(resolve, PROXY_LOOKUP_DEADLINE_MS)
+      cancelDeadline = setTimer(resolve, PROXY_LOOKUP_DEADLINE_MS)
     })
-    const startedAt = now()
-    const done = Promise.all(names.map((name) => lookUpName(name, startedAt))).then(() => {
-      cancel()
+    // A resolver that never settles would keep this lookup `current` for good, and no later call
+    // could start another: past the timeout every name's lookup fails, whatever the resolver does.
+    const controller = new AbortController()
+    const timedOut = new Promise<never>((_, reject) => {
+      controller.signal.addEventListener("abort", () => reject(controller.signal.reason))
+    })
+    const cancelTimeout = setTimer(
+      () =>
+        controller.abort(
+          new DOMException(
+            `DNS lookup timed out after ${PROXY_LOOKUP_TIMEOUT_MS} ms`,
+            "TimeoutError",
+          ),
+        ),
+      PROXY_LOOKUP_TIMEOUT_MS,
+    )
+    const lookups = names.map((name) => lookUpName(name, controller.signal, timedOut))
+    const done = Promise.all(lookups).then(() => {
+      cancelDeadline()
+      cancelTimeout()
       lookedUpAt = now()
       current = undefined
     })
