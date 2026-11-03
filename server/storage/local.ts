@@ -1,4 +1,5 @@
-import { createDenoObjectFs } from "./fs.ts"
+import { workingDirectory } from "@spy4x/platform/server/process"
+import { createObjectFs } from "./fs.ts"
 import { assertDestinationPath, resolveStoragePath } from "./paths.ts"
 import type { FileStorage, ObjectFs, PresignOptions, UploadBody } from "./ports.ts"
 
@@ -8,7 +9,9 @@ export const DEFAULT_LOCAL_BASE_PATH = "./file-storage"
 export interface LocalStorageConfig {
   /** Base directory holding `<base>/<bucket>/<object>`. */
   basePath?: string
-  /** Filesystem adapter. Defaults to real `Deno` I/O (`--allow-read`/`--allow-write`). */
+  /**
+   * Filesystem adapter. Defaults to the running runtime's files: Deno, Node or Bun. On Deno it needs `--allow-read` and `--allow-write`.
+   */
   fs?: ObjectFs
 }
 
@@ -26,7 +29,7 @@ export class LocalStorage implements FileStorage {
 
   constructor(config: LocalStorageConfig = {}) {
     this.basePath = config.basePath ?? DEFAULT_LOCAL_BASE_PATH
-    this.fs = config.fs ?? createDenoObjectFs()
+    this.fs = config.fs ?? createObjectFs()
   }
 
   async upload(bucket: string, path: string, body: UploadBody): Promise<void> {
@@ -73,7 +76,7 @@ export class LocalStorage implements FileStorage {
 
   private fileUrl(bucket: string, path: string): string {
     const absolute = this.fullPath(bucket, path)
-    const rooted = absolute.startsWith("/") ? absolute : `${Deno.cwd()}/${absolute}`
+    const rooted = absolute.startsWith("/") ? absolute : `${workingDirectory()}/${absolute}`
     return new URL(rooted, "file:///").href
   }
 }

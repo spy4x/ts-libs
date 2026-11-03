@@ -1,5 +1,6 @@
 import { denoFileSystem } from "@spy4x/platform/server/deno-fs"
 import type { FileSystemPort } from "@spy4x/platform/server/ports"
+import { fsError, runtimeFileSystem } from "@spy4x/platform/server/runtime-fs"
 import { uuidV7 } from "@spy4x/platform/universal/uuid"
 import {
   ensureDirectoryWith,
@@ -75,14 +76,17 @@ async function replaceFile(
  *
  * A write goes to a temporary file in the same directory and is renamed into
  * place, so a write that fails midway (a download whose connection drops)
- * leaves the old object as it was. Reading a missing object rejects with
- * `Deno.errors.NotFound`, as every `ObjectFs` does.
+ * leaves the old object as it was. Reading a missing object rejects with the
+ * platform's `NotFound` error (`fsError` of `@spy4x/platform/server/runtime-fs`):
+ * `Deno.errors.NotFound` on Deno, an `Error` named `NotFound` with code `ENOENT`
+ * on Node and Bun, as every `ObjectFs` does.
  *
- * @param fs Defaults to `denoFileSystem` of `@spy4x/platform/server/deno-fs`.
+ * @param fs Defaults to `runtimeFileSystem` of `@spy4x/platform/server/runtime-fs`,
+ * which runs on Deno, Node and Bun.
  * @throws {TypeError} When `fs` lacks `readBytes`, `writeBytes` or
  * `writeStream`, which the port leaves optional.
  */
-export function createObjectFs(fs: FileSystemPort = denoFileSystem): ObjectFs {
+export function createObjectFs(fs: FileSystemPort = runtimeFileSystem): ObjectFs {
   const { readBytes, writeBytes, writeStream } = fs
   if (readBytes === undefined || writeBytes === undefined || writeStream === undefined) {
     throw new TypeError(
@@ -97,7 +101,7 @@ export function createObjectFs(fs: FileSystemPort = denoFileSystem): ObjectFs {
   return {
     readObject: async (path) => {
       const bytes = await readBytes.call(fs, path)
-      if (bytes === null) throw new Deno.errors.NotFound(`No such object: ${path}`)
+      if (bytes === null) throw fsError("NotFound", `No such object: ${path}`)
       return bytes
     },
     existsObject: (path) => fs.exists(path),
@@ -120,8 +124,11 @@ export function createObjectFs(fs: FileSystemPort = denoFileSystem): ObjectFs {
  * Every buffer and every streamed chunk is written in full: a handle may write
  * only part of what it is given (a nearly full disk, or a buffer over the
  * kernel's per-call cap), so `writeFully` keeps writing the remainder. A write
- * that makes no progress rejects with `Deno.errors.WriteZero` instead of
- * looping forever or reporting bytes that never landed.
+ * that makes no progress rejects with the platform's `WriteZero` error
+ * (`Deno.errors.WriteZero` on Deno) instead of looping forever or reporting
+ * bytes that never landed.
+ *
+ * The default `open` is `Deno.open`, so on Node and Bun pass your own.
  */
 export async function writeToFile(
   path: string,
@@ -172,7 +179,8 @@ async function writeFully(file: WritableFileHandle, data: Uint8Array): Promise<v
   while (offset < data.byteLength) {
     const written = await file.write(data.subarray(offset))
     if (written <= 0) {
-      throw new Deno.errors.WriteZero(
+      throw fsError(
+        "WriteZero",
         `write made no progress after ${offset} of ${data.byteLength} bytes`,
       )
     }
@@ -220,7 +228,7 @@ export interface DenoFsHost {
   stat(path: string): Promise<unknown>
   writeFile(path: string, data: Uint8Array): Promise<void>
   open(path: string): Promise<WritableFileHandle>
-  /** Creates a directory and its parents. Without it, `Deno.mkdir` is used. */
+  /** Creates a directory and its parents. Without it, the running runtime's `mkdirp` is used. */
   mkdir?(path: string): Promise<void>
   /**
    * Renames a file over another. With it, a write goes to a temporary file and

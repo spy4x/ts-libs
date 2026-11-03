@@ -7,6 +7,8 @@
  * @module
  */
 
+import { isFsError, runtimeFileSystem } from "@spy4x/platform/server/runtime-fs"
+
 /**
  * Directory that must exist before writing `filePath`, or `undefined` when
  * nothing has to be created.
@@ -43,9 +45,12 @@ export function parentDirectory(filePath: string): string | undefined {
 /** Creates a directory and every missing parent. */
 export type MakeDirectory = (path: string) => Promise<void>
 
-/** The real `MakeDirectory`: `Deno.mkdir` with `recursive`, which needs `--allow-write`. */
+/**
+ * The real `MakeDirectory`: `mkdirp` of the running runtime's file system. On Deno it needs
+ * `--allow-write`.
+ */
 export function makeDirectoryRecursive(path: string): Promise<void> {
-  return Deno.mkdir(path, { recursive: true })
+  return runtimeFileSystem.mkdirp(path)
 }
 
 /**
@@ -65,6 +70,6 @@ export async function ensureDirectoryWith(
   try {
     await makeDirectory(parent)
   } catch (error) {
-    if (!(error instanceof Deno.errors.AlreadyExists)) throw error
+    if (!isFsError(error, "AlreadyExists")) throw error
   }
 }

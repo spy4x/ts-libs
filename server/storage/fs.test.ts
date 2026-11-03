@@ -171,6 +171,13 @@ describe("ensureDirectoryWith, behind ensureFileDirectory", () => {
 
     await ensureDirectoryWith("a/b/file.bin", exists)
   })
+
+  it("swallows Node's EEXIST the same way, so a write on Node and Bun gets past it", async () => {
+    const nodeExists = () =>
+      Promise.reject(Object.assign(new Error("EEXIST: file already exists"), { code: "EEXIST" }))
+
+    await ensureDirectoryWith("a/b/file.bin", nodeExists)
+  })
 })
 
 /**

@@ -48,11 +48,17 @@ export interface PresignOptions {
 }
 
 /**
- * Minimal object-store filesystem port. The shipped adapter wraps `Deno`, and
+ * Minimal object-store filesystem port. The default adapter wraps the running
+ * runtime's files (Deno, Node or Bun), and
  * keeping the provider behind an interface is what lets the local provider be
  * tested with an in-memory implementation instead of real disk writes.
  */
 export interface ObjectFs {
+  /**
+   * The object's bytes. A missing object rejects with the platform's `NotFound`
+   * error: test for it with `isFsError(error, "NotFound")` of
+   * `@spy4x/platform/server/runtime-fs` (`Deno.errors.NotFound` on Deno).
+   */
   readObject(path: string): Promise<Uint8Array>
   /**
    * Write `data` to `path`, creating parents. Returns the number of bytes

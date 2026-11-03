@@ -1,5 +1,5 @@
 import { StorageError } from "./errors.ts"
-import { createDenoObjectFs } from "./fs.ts"
+import { createObjectFs } from "./fs.ts"
 import { assertBucket, assertDestinationPath, encodeS3Path, resolveObjectKey } from "./paths.ts"
 import type { FileStorage, ObjectFs, PresignOptions, UploadBody } from "./ports.ts"
 import {
@@ -98,7 +98,7 @@ export interface S3StorageConfig {
   clock?: () => Date
   /** Fetch used for data transfer. Injected so tests never touch the network. */
   fetch?: typeof fetch
-  /** Filesystem destination for `download`. Defaults to real `Deno` I/O. */
+  /** Filesystem destination for `download`. Defaults to the running runtime's files: Deno, Node or Bun. */
   fs?: ObjectFs
 }
 
@@ -139,7 +139,7 @@ export class S3Storage implements FileStorage {
     this.config = config
     this.fetcher = config.fetch ?? fetch
     this.clock = config.clock ?? (() => new Date())
-    this.fs = config.fs ?? createDenoObjectFs()
+    this.fs = config.fs ?? createObjectFs()
     this.expiresIn = expiresIn
   }
 
