@@ -1,7 +1,13 @@
 import { expect } from "@std/expect"
 import { describe, it } from "@std/testing/bdd"
 
-import { type DnsHost, dnsResolverOver, type NodeDns, txtResolverOver } from "./_dns-host.ts"
+import {
+  type DnsHost,
+  dnsResolverOver,
+  type NodeDns,
+  rejoinSplitTxt,
+  txtResolverOver,
+} from "./_dns-host.ts"
 
 /** An error shaped like Deno's `NotFound` or Node's coded DNS errors. */
 const named = (name: string) => Object.assign(new Error(name), { name })
@@ -111,6 +117,29 @@ describe("txtResolverOver", () => {
     const resolve = txtResolverOver(() => ({ process: {} }), node.load)
     expect(await resolve("sel._domainkey.example.com")).toEqual(records)
     expect(node.calls).toEqual(["txt:sel._domainkey.example.com"])
+  })
+
+  it("joins on Bun the strings of one record that Bun answers as separate records", async () => {
+    const head = "v=DKIM1; k=rsa; p=" + "A".repeat(237)
+    const flattened = [[head], ["IDAQAB"], ["google-site-verification=x"]]
+    const bun = txtResolverOver(
+      () => ({ process: { versions: { bun: "1.4.4" } } }),
+      nodeDns({ txt: flattened }).load,
+    )
+    const node = txtResolverOver(
+      () => ({ process: { versions: {} } }),
+      nodeDns({ txt: flattened }).load,
+    )
+    const joined = [[head, "IDAQAB"], ["google-site-verification=x"]]
+    expect(await bun("sel._domainkey.example.com")).toEqual(joined)
+    expect(await node("sel._domainkey.example.com")).toEqual(flattened)
+  })
+
+  it("leaves an answer whose records hold several strings, the shape Bun did not flatten", () => {
+    expect(rejoinSplitTxt(records)).toEqual(records)
+    const short = [["a"], ["b"]]
+    expect(rejoinSplitTxt(short)).toEqual(short)
+    expect(rejoinSplitTxt([])).toEqual([])
   })
 
   it("answers no TXT record with an empty list on every runtime, and lets a timeout through", async () => {

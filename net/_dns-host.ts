@@ -109,6 +109,33 @@ export function txtResolverOver(
       loadNodeDns,
       options?.signal,
       (resolveDns) => resolveDns(hostname, "TXT", options) as Promise<string[][]>,
-      (dns) => dns.resolveTxt(hostname),
+      async (dns) => {
+        const records = await dns.resolveTxt(hostname)
+        const versions = (host().process as { versions?: { bun?: string } }).versions
+        return versions?.bun === undefined ? records : rejoinSplitTxt(records)
+      },
     )
+}
+
+/** The most octets one string of a TXT record holds (RFC 1035 §3.3, `<character-string>`). */
+const TXT_STRING_MAX = 255
+
+/**
+ * Bun (1.4.4) answers each string of a TXT record as a record of its own, where Node and Deno keep
+ * a record's strings together: a 2048-bit DKIM key, published as two strings of one record, comes
+ * back as two records, and neither parses. A long value is split into strings of the most a string
+ * holds, so a string of that length is joined with the ones after it until a shorter one ends the
+ * record. Records are left as they are when any of them has more than one string: that is the
+ * shape of an answer this bug did not flatten.
+ */
+export function rejoinSplitTxt(records: string[][]): string[][] {
+  if (records.some((record) => record.length !== 1)) return records
+  const joined: string[][] = []
+  let open: string[] | undefined
+  for (const [text] of records) {
+    if (open === undefined) joined.push(open = [])
+    open.push(text)
+    if (text.length < TXT_STRING_MAX) open = undefined
+  }
+  return joined
 }
