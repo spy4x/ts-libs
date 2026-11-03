@@ -35,6 +35,23 @@ export { INDEXNOW_MAX_URLS, submitIndexNow } from "./indexnow.ts"
 export type { IndexNowOptions, IndexNowResult } from "./indexnow.ts"
 
 export {
+  createDevtoArticle,
+  DEVTO_MAX_PAGES,
+  DEVTO_MAX_TAGS,
+  DEVTO_PAGE_SIZE,
+  findDevtoArticleByCanonical,
+} from "./devto.ts"
+export type {
+  CreateDevtoArticleOptions,
+  DevtoArticleInput,
+  DevtoArticleRef,
+  DevtoClientOptions,
+  DevtoCreateResult,
+  DevtoFindResult,
+  FindDevtoArticleByCanonicalOptions,
+} from "./devto.ts"
+
+export {
   checkUmami,
   checkUmamiWebsite,
   createUmamiLink,

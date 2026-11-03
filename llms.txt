@@ -264,6 +264,13 @@ CloudflarePurgeOptions	interface	@spy4x/integrations	Options for purgeUrls.
 CloudflarePurgeResult	interface	@spy4x/integrations	Outcome of a purge: `output` describes what happened on success, `error` on failure.
 CombinedSignatureHeader	interface	@spy4x/integrations	One header that carries the timestamp and the signatures together, as a list of `key=value` pairs: Stripe's `Stripe-Signature: t=1492774577,v1=5257…,v0=6ffb…` is `{ name: "Stripe-Signature", pairSeparator: ",", timestampKey: "t", signatureKey: "v1" }`.
 DEFAULT_REQUEST_TIMEOUT_MS	constant	@spy4x/integrations	Bounds a single outgoing request, used by every client in this package unless a caller overrides it.
+DEVTO_MAX_PAGES	constant	@spy4x/integrations	Pages the lookup reads at most before it gives up, so a looping answer cannot run forever.
+DEVTO_MAX_TAGS	constant	@spy4x/integrations	The most tags Dev.to accepts on one article.
+DEVTO_PAGE_SIZE	constant	@spy4x/integrations	Articles asked for per page of the lookup: the API's documented maximum.
+DevtoArticleRef	interface	@spy4x/integrations	A Dev.to article: its numeric id and public address.
+DevtoClientOptions	interface	@spy4x/integrations	Settings both calls share.
+DevtoCreateResult	type	@spy4x/integrations	Outcome of createDevtoArticle: the new article on success, `error` on failure.
+DevtoFindResult	type	@spy4x/integrations	Outcome of findDevtoArticleByCanonical: the article, or `null` when none of the key's articles has that canonical address.
 HealthchecksClient	class	@spy4x/integrations	healthchecks.io client.
 HealthchecksErrorCode	type	@spy4x/integrations	Failure reasons `ping` can report.
 HealthchecksFailure	interface	@spy4x/integrations	A ping that could not be delivered after retrying.
@@ -320,9 +327,11 @@ WebhookVerifierConfig	interface	@spy4x/integrations	Shared secret and header nam
 WebhookVerifyResult	type	@spy4x/integrations	Result of verifyWebhookRequest: the verified body, or why it was rejected.
 checkUmami	function	@spy4x/integrations	Asks Umami's `GET /api/heartbeat` whether the instance answers.
 checkUmamiWebsite	function	@spy4x/integrations	Checks that the token is accepted and can view the website, and says which of the two failed: `token` when Umami refuses the token, `website` when the token works but no website with that id is visible to it, `unreachable` for anything else.
+createDevtoArticle	function	@spy4x/integrations	Posts `article` to Dev.to and returns its id and address.
 createExponentialBackoff	function	@spy4x/integrations	Deprecated: Thin wrapper over `backoffDelay` from "@spy4x/platform/universal/async" (`#71`), kept for this module's existing 1-based-attempt, `Retry-After`-aware call shape. Exponential backoff, clamped and optionally jittered.
 createUmamiLink	function	@spy4x/integrations	Creates an Umami link and returns it.
 describeTransportError	function	@spy4x/integrations	Describes a transport failure **without** the request URL.
+findDevtoArticleByCanonical	function	@spy4x/integrations	Finds the key owner's article whose `canonical_url` is `canonicalUrl`, published or not.
 healthchecksConfigFromEnv	function	@spy4x/integrations	Reads a ping URL from an environment reader.
 isPermanentStatus	function	@spy4x/integrations	Deprecated: No client in this package uses it; compare `status >= 400 && status < 500` in place. Statuses that will never succeed on a retry: the request itself is wrong.
 isRequestTimeout	function	@spy4x/integrations	True when `cause` is the `TimeoutError` an `AbortSignal.timeout()` firing produces.
@@ -344,6 +353,15 @@ CloudflarePurgeOptions	interface	@spy4x/integrations/cloudflare	Options for purg
 CloudflarePurgeResult	interface	@spy4x/integrations/cloudflare	Outcome of a purge: `output` describes what happened on success, `error` on failure.
 PURGE_BATCH_SIZE	constant	@spy4x/integrations/cloudflare	Cloudflare's purge-by-URL endpoint accepts at most this many files per call.
 purgeUrls	function	@spy4x/integrations/cloudflare	Purges `urls` from a Cloudflare zone, 30 per call, and reports the outcome.
+DEVTO_MAX_PAGES	constant	@spy4x/integrations/devto	Pages the lookup reads at most before it gives up, so a looping answer cannot run forever.
+DEVTO_MAX_TAGS	constant	@spy4x/integrations/devto	The most tags Dev.to accepts on one article.
+DEVTO_PAGE_SIZE	constant	@spy4x/integrations/devto	Articles asked for per page of the lookup: the API's documented maximum.
+DevtoArticleRef	interface	@spy4x/integrations/devto	A Dev.to article: its numeric id and public address.
+DevtoClientOptions	interface	@spy4x/integrations/devto	Settings both calls share.
+DevtoCreateResult	type	@spy4x/integrations/devto	Outcome of createDevtoArticle: the new article on success, `error` on failure.
+DevtoFindResult	type	@spy4x/integrations/devto	Outcome of findDevtoArticleByCanonical: the article, or `null` when none of the key's articles has that canonical address.
+createDevtoArticle	function	@spy4x/integrations/devto	Posts `article` to Dev.to and returns its id and address.
+findDevtoArticleByCanonical	function	@spy4x/integrations/devto	Finds the key owner's article whose `canonical_url` is `canonicalUrl`, published or not.
 HealthchecksClient	class	@spy4x/integrations/healthchecks	healthchecks.io client.
 HealthchecksErrorCode	type	@spy4x/integrations/healthchecks	Failure reasons `ping` can report.
 HealthchecksFailure	interface	@spy4x/integrations/healthchecks	A ping that could not be delivered after retrying.
@@ -2863,4 +2881,4 @@ firstIssueMessage	function	@spy4x/validation/validate	First issue message in a v
 isArkErrors	function	@spy4x/validation/validate	Whether a value is an arktype rejection, without relying on `instanceof`.
 toValidationError	function	@spy4x/validation/validate	Build a ValidationError from arktype's issues.
 validate	function	@spy4x/validation/validate	Parse `value` with an arktype schema exactly once.
-# export surface: sha256 09bb1e379f768fb17a97f337882fdc9f220c401d76a0796fb0caf415c32954e3
+# export surface: sha256 ae650d9f889d495fd1b1f5d789dcc4bd0b10986cf2fcc8e2fe73e83d27e42ead
