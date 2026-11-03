@@ -131,7 +131,7 @@ DkimPublicKey	interface	@spy4x/email	A DKIM public key extracted from a DNS TXT 
 DkimSignatureHeader	interface	@spy4x/email	Parsed `DKIM-Signature` header value.
 DkimVerificationResult	interface	@spy4x/email	Outcome of verifyDkim.
 DkimVerifyOptions	interface	@spy4x/email	Options for verifyDkim and fetchDkimPublicKey.
-DnsTxtResolver	interface	@spy4x/email	DNS TXT lookup contract, defaulting to `Deno.resolveDns(name, "TXT")`, which needs `--allow-net`.
+DnsTxtResolver	interface	@spy4x/email	DNS TXT lookup contract, defaulting to `resolveTxt` of `@spy4x/net/dns`, which works on Deno, Node and Bun and needs `--allow-net` on Deno.
 EmailAddress	interface	@spy4x/email	A parsed mailbox: the addr-spec, plus the display name that preceded it.
 EmailAttachment	interface	@spy4x/email	One attachment: text content plus the metadata the MIME part needs.
 EmailMessage	interface	@spy4x/email	Everything one send needs.
@@ -201,7 +201,7 @@ DkimPublicKey	interface	@spy4x/email/dkim-verify	A DKIM public key extracted fro
 DkimSignatureHeader	interface	@spy4x/email/dkim-verify	Parsed `DKIM-Signature` header value.
 DkimVerificationResult	interface	@spy4x/email/dkim-verify	Outcome of verifyDkim.
 DkimVerifyOptions	interface	@spy4x/email/dkim-verify	Options for verifyDkim and fetchDkimPublicKey.
-DnsTxtResolver	interface	@spy4x/email/dkim-verify	DNS TXT lookup contract, defaulting to `Deno.resolveDns(name, "TXT")`, which needs `--allow-net`.
+DnsTxtResolver	interface	@spy4x/email/dkim-verify	DNS TXT lookup contract, defaulting to `resolveTxt` of `@spy4x/net/dns`, which works on Deno, Node and Bun and needs `--allow-net` on Deno.
 MIN_RSA_KEY_BITS	constant	@spy4x/email/dkim-verify	RFC 8301 §3.2: "Verifiers MUST NOT consider signatures using RSA keys of less than 1024 bits as valid."
 TRANSIT_ADDED_HEADER_NAMES	constant	@spy4x/email/dkim-verify	Header field names a relay is expected to add to a message in transit.
 canonicalizeBody	function	@spy4x/email/dkim-verify	Deprecated: An internal step of `verifyDkim`, exported by mistake; it goes in 2.0. Canonicalize a message body per RFC 6376 §3.4.3 (simple) / §3.4.4 (relaxed).
@@ -473,6 +473,7 @@ DEFAULT_MAX_BYTES	constant	@spy4x/net	Default ceiling for a body read: 5 MiB.
 DEFAULT_MAX_REDIRECTS	constant	@spy4x/net	Redirects followed before the chain is refused.
 DEFAULT_TIMEOUT_MS	constant	@spy4x/net	Total budget for the whole redirect chain.
 DENY_NET_ADDRESSES	constant	@spy4x/net	Addresses to refuse at connection time, in the spelling `--deny-net` takes.
+DnsLookupOptions	interface	@spy4x/net	Options of one DNS lookup.
 DnsResolutionError	class	@spy4x/net	DNS lookup failure — either the resolver threw or it returned no records.
 DnsResolver	interface	@spy4x/net	Resolves a hostname to all A/AAAA addresses.
 EXPLICIT_SCHEME	constant	@spy4x/net	Any `scheme:` prefix, with or without `//`, so `javascript:` is caught too.
@@ -513,6 +514,7 @@ readBoundedJson	function	@spy4x/net	Read a body as JSON under the same cap and s
 readBoundedText	function	@spy4x/net	Read a body as text, decoding incrementally so the cap is enforced before the whole payload is materialised as one string.
 readContentLength	function	@spy4x/net	Read the declared `Content-Length`, if the sender provided a usable one.
 resolveDns	function	@spy4x/net	The addresses of `hostname`'s `A` or `AAAA` records: `Deno.resolveDns` on Deno, `node:dns/promises` on Node and Bun.
+resolveTxt	function	@spy4x/net	`hostname`'s `TXT` records, one array per record holding its strings as they came, unjoined: `Deno.resolveDns(hostname, "TXT")` on Deno, `node:dns/promises` on Node and Bun, which answer in that same shape.
 safeFetch	function	@spy4x/net	Fetch a URL following redirects manually, validating each `Location` through the public-URL policy.
 safeRedirectPath	function	@spy4x/net	The path to send a person to next: `value` when it is a path on this origin, `fallback` otherwise.
 validatePublicUrl	function	@spy4x/net	Validate a URL and return the canonical form.
@@ -529,7 +531,9 @@ readBoundedJson	function	@spy4x/net/bounded-body	Read a body as JSON under the s
 readBoundedText	function	@spy4x/net/bounded-body	Read a body as text, decoding incrementally so the cap is enforced before the whole payload is materialised as one string.
 readContentLength	function	@spy4x/net/bounded-body	Read the declared `Content-Length`, if the sender provided a usable one.
 AddressRecordType	type	@spy4x/net/dns	The address record types a lookup asks for.
+DnsLookupOptions	interface	@spy4x/net/dns	Options of one DNS lookup.
 resolveDns	function	@spy4x/net/dns	The addresses of `hostname`'s `A` or `AAAA` records: `Deno.resolveDns` on Deno, `node:dns/promises` on Node and Bun.
+resolveTxt	function	@spy4x/net/dns	`hostname`'s `TXT` records, one array per record holding its strings as they came, unjoined: `Deno.resolveDns(hostname, "TXT")` on Deno, `node:dns/promises` on Node and Bun, which answer in that same shape.
 CLOUDFLARE_IP_RANGES	constant	@spy4x/net/ip	Cloudflare's published edge ranges, IPv4 then IPv6, from https://www.cloudflare.com/ips-v4 and https://www.cloudflare.com/ips-v6 as of 2026-09-26.
 ParsedIp	interface	@spy4x/net/ip	An address that parseIp accepted.
 ipHint	function	@spy4x/net/ip	The address with only its network part shown, for display in a list of signed-in devices: the first three parts of an IPv4 address (`203.0.113.*`) or the first two groups of an IPv6 one (`2001:db8:*`).
@@ -2158,6 +2162,7 @@ PROXY_ADDRESS_HARD_MAX_AGE_MS	constant	@spy4x/server/http/trusted-proxy	How long
 PROXY_ADDRESS_MAX_AGE_MS	constant	@spy4x/server/http/trusted-proxy	How long looked-up addresses of a proxy answer without a new lookup.
 PROXY_LOOKUP_DEADLINE_MS	constant	@spy4x/server/http/trusted-proxy	The longest a call waits for a lookup before it answers from the last good addresses.
 PROXY_LOOKUP_RETRY_MS	constant	@spy4x/server/http/trusted-proxy	The least time between the end of a lookup and the next one that an unknown peer starts.
+PROXY_LOOKUP_TIMEOUT_MS	constant	@spy4x/server/http/trusted-proxy	The longest a lookup may run.
 RequireProxyOptions	interface	@spy4x/server/http/trusted-proxy	Options for requireProxyForForwardedHeaders.
 createProxyPeers	function	@spy4x/server/http/trusted-proxy	The trusted proxies, by address.
 requireProxyForForwardedHeaders	function	@spy4x/server/http/trusted-proxy	Hono middleware that refuses, with 403 and `{ error: message }`, a request that carries one of the FORWARDED_HEADERS and whose peer is not a trusted proxy (or is unknown).
@@ -2835,4 +2840,4 @@ firstIssueMessage	function	@spy4x/validation/validate	First issue message in a v
 isArkErrors	function	@spy4x/validation/validate	Whether a value is an arktype rejection, without relying on `instanceof`.
 toValidationError	function	@spy4x/validation/validate	Build a ValidationError from arktype's issues.
 validate	function	@spy4x/validation/validate	Parse `value` with an arktype schema exactly once.
-# export surface: sha256 df0bc4fe7b6be8e4f07abac820ba52b25fd3e82262caf111e20616f108d38c26
+# export surface: sha256 ba2cb4efdf909ca2400ac346628daad928bd0bf9bd44748bb9fc383268916c9d
