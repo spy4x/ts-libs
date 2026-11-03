@@ -3,7 +3,13 @@
 import { describe, it } from "@std/testing/bdd"
 import { expect } from "@std/expect"
 
-import { type CommandSpawner, runCommand, type SpawnOptions } from "./run-command.ts"
+import {
+  type CommandSpawner,
+  type NodeChildProcess,
+  nodeSpawner,
+  runCommand,
+  type SpawnOptions,
+} from "./run-command.ts"
 
 const encode = (text: string) => new TextEncoder().encode(text)
 
@@ -152,5 +158,105 @@ describe("runCommand", () => {
     await runCommand(["cat"], { spawn, stdin: "inherit", signal })
     expect(seen[0].stdin).toBe("inherit")
     expect(seen[0].signal).toBe(signal)
+  })
+})
+
+/** A fake `node:child_process` whose child ends as `finish` says, recording the spawn call. */
+function fakeNode(
+  finish: (child: {
+    out(text: string): void
+    err(text: string): void
+    emit(event: "error" | "close", ...args: unknown[]): void
+  }) => void,
+) {
+  const calls: { command: string; args: string[]; options: Record<string, unknown> }[] = []
+  const node: NodeChildProcess = {
+    signals: { SIGTERM: 15, SIGKILL: 9 },
+    spawn(command, args, options) {
+      calls.push({ command, args, options })
+      const listeners: Record<string, ((...args: never[]) => void)[]> = {}
+      const on = (event: string) => (listener: (...args: never[]) => void) =>
+        void (listeners[event] ??= []).push(listener)
+      const child = {
+        stdout: { on: (_: string, listener: (chunk: Uint8Array) => void) => on("out")(listener) },
+        stderr: { on: (_: string, listener: (chunk: Uint8Array) => void) => on("err")(listener) },
+        on: (event: string, listener: (...args: never[]) => void) => on(event)(listener),
+      }
+      queueMicrotask(() =>
+        finish({
+          out: (text) =>
+            listeners.out?.forEach((l) => (l as (c: Uint8Array) => void)(encode(text))),
+          err: (text) =>
+            listeners.err?.forEach((l) => (l as (c: Uint8Array) => void)(encode(text))),
+          emit: (event, ...args) =>
+            listeners[event]?.forEach((l) => (l as (...a: unknown[]) => void)(...args)),
+        })
+      )
+      return child as ReturnType<NodeChildProcess["spawn"]>
+    },
+  }
+  return { calls, spawn: nodeSpawner(() => Promise.resolve(node)) }
+}
+
+describe("nodeSpawner", () => {
+  it("collects both streams and the exit code of a child that exits", async () => {
+    const { spawn } = fakeNode((child) => {
+      child.out("hel")
+      child.out("lo")
+      child.err("warn")
+      child.emit("close", 3, null)
+    })
+    expect(await runCommand(["tool", "a"], { spawn })).toEqual({
+      success: false,
+      code: 3,
+      stdout: "hello",
+      stderr: "warn",
+    })
+  })
+
+  it("adds env to the inherited environment and passes cwd, stdin and the arguments", async () => {
+    const { calls, spawn } = fakeNode((child) => child.emit("close", 0, null))
+    await runCommand(["tool", "a", "b"], {
+      spawn,
+      cwd: "/work",
+      env: { EXTRA: "1" },
+      stdin: "inherit",
+    })
+    const [call] = calls
+    expect(call.command).toBe("tool")
+    expect(call.args).toEqual(["a", "b"])
+    expect(call.options.cwd).toBe("/work")
+    expect(call.options.stdio).toEqual(["inherit", "pipe", "pipe"])
+    const env = call.options.env as Record<string, string>
+    expect(env.EXTRA).toBe("1")
+    expect(env.PATH).toBe(Deno.env.get("PATH"))
+  })
+
+  it("gives the child no standard input by default", async () => {
+    const { calls, spawn } = fakeNode((child) => child.emit("close", 0, null))
+    await runCommand(["tool"], { spawn })
+    expect(calls[0].options.stdio).toEqual(["ignore", "pipe", "pipe"])
+  })
+
+  it("reports a killed child as Deno does: the signal, and 128 plus its number", async () => {
+    const { spawn } = fakeNode((child) => {
+      child.emit("error", Object.assign(new Error("aborted"), { name: "AbortError" }))
+      child.emit("close", null, "SIGTERM")
+    })
+    const result = await runCommand(["tool"], { spawn })
+    expect(result).toMatchObject({ success: false, code: 143, signal: "SIGTERM" })
+    expect(result.error).toBeUndefined()
+  })
+
+  it("turns a start-up failure into the could-not-start result", async () => {
+    const { spawn } = fakeNode((child) => {
+      child.emit("error", new Error("spawn tool ENOENT"))
+      child.emit("close", -2, null)
+    })
+    expect(await runCommand(["tool"], { spawn })).toMatchObject({
+      success: false,
+      code: -1,
+      error: "spawn tool ENOENT",
+    })
   })
 })

@@ -21,7 +21,8 @@
  * own standard input, such as data piped into `restic backup --stdin`.
  *
  * The spawner is injected. The root `test` task grants no `--allow-run`, so the tests pass a fake
- * shaped like `Deno.Command`; the default spawner is `new Deno.Command(...)`.
+ * shaped like `Deno.Command`. The default spawner is `new Deno.Command(...)` on Deno and
+ * {@link nodeSpawner} (`node:child_process`) on Node and Bun.
  *
  * @module
  */
@@ -76,11 +77,11 @@ export interface RunCommandOptions {
    * Aborting it kills the child with `SIGTERM`; the result then has `success: false` and `signal`
    * set. Already aborted: the process never starts, and the result has `code: -1` and `error`.
    * `AbortSignal.timeout(ms)` bounds a command in time. The kill is the spawner's job: the
-   * default `Deno.Command` does it, but a custom `spawn` that ignores the signal makes the call
+   * default spawner does it, but a custom `spawn` that ignores the signal makes the call
    * wait for the child to exit by itself.
    */
   signal?: AbortSignal
-  /** Spawner override, for tests. Defaults to `new Deno.Command(...)`. */
+  /** Spawner override, for tests. Defaults to `new Deno.Command(...)`, or {@link nodeSpawner}. */
   spawn?: CommandSpawner
 }
 
@@ -100,7 +101,83 @@ export interface RunCommandResult {
   signal?: Deno.Signal
 }
 
-const defaultSpawner: CommandSpawner = (command, options) => new Deno.Command(command, options)
+/** The subset of `node:child_process` and `node:os` that {@link nodeSpawner} uses. */
+export interface NodeChildProcess {
+  spawn(command: string, args: string[], options: {
+    cwd?: string
+    env: Record<string, string | undefined>
+    stdio: ["inherit" | "ignore", "pipe", "pipe"]
+    signal?: AbortSignal
+  }): {
+    stdout: { on(event: "data", listener: (chunk: Uint8Array) => void): void }
+    stderr: { on(event: "data", listener: (chunk: Uint8Array) => void): void }
+    on(event: "error", listener: (error: Error) => void): void
+    on(event: "close", listener: (code: number | null, signal: string | null) => void): void
+  }
+  /** Signal numbers by name, as `os.constants.signals`. */
+  signals: Record<string, number>
+}
+
+async function loadNodeChildProcess(): Promise<NodeChildProcess> {
+  // Computed specifiers keep `deno check` from pulling in `@types/node`.
+  const [childProcess, os] = await Promise.all([
+    import(["node", "child_process"].join(":")),
+    import(["node", "os"].join(":")),
+  ])
+  return { spawn: childProcess.spawn, signals: os.constants.signals }
+}
+
+/**
+ * A {@link CommandSpawner} over `node:child_process`, for Node and Bun. It behaves like
+ * `Deno.Command`: `env` adds to the inherited environment, a child killed by a signal reports
+ * `128 +` the signal's number as its code, and a start-up failure (a missing binary) rejects.
+ */
+export function nodeSpawner(load = loadNodeChildProcess): CommandSpawner {
+  return (command, options) => ({
+    async output() {
+      const node = await load()
+      const env = (globalThis as { process?: { env: Record<string, string | undefined> } }).process
+        ?.env
+      return new Promise<RunCommandOutput>((resolve, reject) => {
+        const child = node.spawn(command, options.args, {
+          ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
+          env: { ...env, ...options.env },
+          stdio: [options.stdin === "inherit" ? "inherit" : "ignore", "pipe", "pipe"],
+          ...(options.signal === undefined ? {} : { signal: options.signal }),
+        })
+        const stdout: Uint8Array[] = []
+        const stderr: Uint8Array[] = []
+        child.stdout.on("data", (chunk) => stdout.push(chunk))
+        child.stderr.on("data", (chunk) => stderr.push(chunk))
+        child.on("error", (error) => {
+          // An abort also emits `error` (AbortError); the `close` that follows carries the signal.
+          if (error.name !== "AbortError") reject(error)
+        })
+        child.on("close", (code, signal) =>
+          resolve({
+            success: code === 0,
+            code: code ?? 128 + (node.signals[signal ?? ""] ?? 0),
+            stdout: concat(stdout),
+            stderr: concat(stderr),
+            signal: signal as Deno.Signal | null,
+          }))
+      })
+    },
+  })
+}
+
+function concat(chunks: Uint8Array[]): Uint8Array {
+  const all = new Uint8Array(chunks.reduce((length, chunk) => length + chunk.length, 0))
+  let offset = 0
+  for (const chunk of chunks) {
+    all.set(chunk, offset)
+    offset += chunk.length
+  }
+  return all
+}
+
+const defaultSpawner: CommandSpawner = (command, options) =>
+  "Deno" in globalThis ? new Deno.Command(command, options) : nodeSpawner()(command, options)
 
 /**
  * Run `command` (the program, then its arguments) and resolve with its outcome. Never rejects.
