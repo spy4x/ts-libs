@@ -143,21 +143,29 @@ export type RemoteAddrResolver<E extends Env = Record<string, never>> = (
 ) => string | undefined
 
 /**
- * The {@link RemoteAddrResolver} for an app run by `deno serve` (or handed to `Deno.serve` as
- * `app.fetch`): Deno passes the connection's info to Hono as `env`, and this reads its
- * `remoteAddr.hostname`, the peer's IP address. Anything else in that place, such as a Unix socket
- * address with no `hostname`, or no `env` at all under `app.request()` in a test, gives
- * `undefined`.
- *
- * Kept here so an app holds no Deno-specific code of its own; a Node or Bun app writes the
- * equivalent for its own server.
+ * The {@link RemoteAddrResolver} for an app run by `serve` from `@spy4x/platform/server/serve`, on
+ * Deno, Node or Bun, or by `deno serve` (or handed to `Deno.serve` as `app.fetch`): each passes the
+ * connection's info to Hono as `env`, and this reads its `remoteAddr.hostname`, the peer's IP
+ * address, taken from the connection and never from a header. Anything else in that place, such as
+ * a Unix socket address with no `hostname`, or no `env` at all under `app.request()` in a test,
+ * gives `undefined`.
  */
-export function denoServeRemoteAddr<E extends Env = Record<string, never>>(
+export function serveRemoteAddr<E extends Env = Record<string, never>>(
   context: RateLimitContext<E>,
 ): string | undefined {
   const env = context.env as { remoteAddr?: { hostname?: unknown } } | undefined
   const hostname = env?.remoteAddr?.hostname
   return typeof hostname === "string" ? hostname : undefined
+}
+
+/**
+ * The same resolver as {@link serveRemoteAddr}, under the name it had while only Deno filled
+ * `remoteAddr` in. Kept for the apps that import it.
+ */
+export function denoServeRemoteAddr<E extends Env = Record<string, never>>(
+  context: RateLimitContext<E>,
+): string | undefined {
+  return serveRemoteAddr(context)
 }
 
 /**
@@ -191,7 +199,7 @@ export interface RateLimitMiddlewareOptions<E extends Env = Record<string, never
    *
    * ```ts
    * app.use(createRateLimitMiddleware(limiter, {
-   *   remoteAddr: denoServeRemoteAddr,
+   *   remoteAddr: serveRemoteAddr,
    *   keyResolver: userThenIp(() => undefined, { trustedProxy: false }),
    * }))
    * ```

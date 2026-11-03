@@ -57,6 +57,7 @@ export {
   REJECTION_STATUSES,
   type RejectionStatus,
   type RemoteAddrResolver,
+  serveRemoteAddr,
   userThenIp,
   type UserThenIpOptions,
 } from "./hono.ts"

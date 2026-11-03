@@ -8,6 +8,7 @@ import {
   denoServeRemoteAddr,
   type KeyResolver,
   type RejectionStatus,
+  serveRemoteAddr,
   userThenIp,
 } from "./hono.ts"
 import { createMemoryRateLimiter, type RateLimitDecision } from "./memory.ts"
@@ -765,5 +766,26 @@ describe("denoServeRemoteAddr", () => {
     assertEquals(denoServeRemoteAddr({ req, env: unix as never }), undefined)
     const wrongType = { remoteAddr: { hostname: 7 } }
     assertEquals(denoServeRemoteAddr({ req, env: wrongType as never }), undefined)
+  })
+})
+
+describe("serveRemoteAddr", () => {
+  it("keys a request on the connection's address, not on a forwarding header", async () => {
+    const seen: (string | undefined)[] = []
+    const app = new Hono()
+    app.use(createRateLimitMiddleware(createMemoryRateLimiter({ windowMs: 60_000, limit: 5 }), {
+      remoteAddr: serveRemoteAddr,
+      keyResolver: (_req, context) => {
+        const peer = (context as { remoteAddr?: string }).remoteAddr
+        seen.push(peer)
+        return peer ?? "none"
+      },
+    }))
+    app.get("/", (c) => c.text("ok"))
+    const env = { remoteAddr: { hostname: "192.0.2.7", port: 40000 } }
+    const headers = { "x-forwarded-for": "203.0.113.9" }
+
+    assertEquals((await app.request("/", { headers }, env)).status, 200)
+    assertEquals(seen, ["192.0.2.7"])
   })
 })
