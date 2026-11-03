@@ -8,6 +8,8 @@
  * @module
  */
 
+import { currentHost, signalListenersOver } from "./_runtime-host.ts"
+
 /** The reason a {@link shutdownSignal} carries when an operating-system signal aborted it. */
 export class ShutdownSignalError extends Error {
   /** The signal that fired first. */
@@ -30,9 +32,15 @@ export interface ShutdownSignalOptions {
    * aborts with the parent's reason, so a caller that stops for another reason leaks nothing.
    */
   signal?: AbortSignal
-  /** Registers a listener. Defaults to `Deno.addSignalListener`; injected by tests. */
+  /**
+   * Registers a listener. Defaults to `Deno.addSignalListener` on Deno and `process.on` on Node and
+   * Bun; injected by tests.
+   */
   addSignalListener?: (signal: Deno.Signal, handler: () => void) => void
-  /** Removes a listener. Defaults to `Deno.removeSignalListener`; injected by tests. */
+  /**
+   * Removes a listener. Defaults to `Deno.removeSignalListener` on Deno and `process.off` on Node
+   * and Bun; injected by tests.
+   */
   removeSignalListener?: (signal: Deno.Signal, handler: () => void) => void
   /**
    * Receives an error thrown while removing a listener. Removal runs inside a signal or abort
@@ -45,7 +53,7 @@ export interface ShutdownSignalOptions {
 /**
  * Return an `AbortSignal` that aborts on the first of `options.signals` (default `SIGINT` and
  * `SIGTERM`). It aborts exactly once, with a {@link ShutdownSignalError} naming the signal, and
- * on that first signal removes every listener it added, so a second Ctrl+C falls back to Deno's
+ * on that first signal removes every listener it added, so a second Ctrl+C falls back to the runtime's
  * default behaviour and ends the process.
  *
  * If registering one of the signals throws, the listeners already added are removed before that
@@ -61,8 +69,12 @@ export interface ShutdownSignalOptions {
  */
 export function shutdownSignal(options: ShutdownSignalOptions = {}): AbortSignal {
   const signals = options.signals ?? ["SIGINT", "SIGTERM"]
-  const add = options.addSignalListener ?? Deno.addSignalListener
-  const remove = options.removeSignalListener ?? Deno.removeSignalListener
+  // The runtime is looked up only when a listener is not injected, so a test needs no runtime.
+  const runtime = options.addSignalListener && options.removeSignalListener
+    ? undefined
+    : signalListenersOver(currentHost())
+  const add = options.addSignalListener ?? runtime!.add
+  const remove = options.removeSignalListener ?? runtime!.remove
   const parent = options.signal
   const onError = options.onError ?? console.error
   const controller = new AbortController()

@@ -40,6 +40,8 @@
  * @module
  */
 
+import { exitProcess } from "@spy4x/platform/server/process"
+
 /** A connected socket, narrowed to what a probe needs: closing it again. */
 export interface ProbeConnection {
   /** Release the socket. Must not escape; always called by the probe. */
@@ -105,7 +107,7 @@ export interface HealthcheckOptions {
    * straight through.
    */
   hostname?: string
-  /** Connector for the TCP probe. Defaults to {@link denoConnector}. */
+  /** Connector for the TCP probe. Defaults to {@link runtimeConnector}. */
   connector?: ProbeConnector
   /**
    * Path to `GET` on the loopback host, starting with `/`, such as
@@ -197,7 +199,7 @@ export async function withDeadline<T>(
  */
 export async function probeLoopback(options: HealthcheckOptions): Promise<ProbeResult> {
   const { port, hostname = "127.0.0.1" } = options
-  const connector = options.connector ?? denoConnector
+  const connector = options.connector ?? runtimeConnector
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS
   const timer = options.timer ?? platformTimer
 
@@ -310,14 +312,15 @@ export interface ExitAdapter {
 /**
  * Compute the exit code and terminate the process.
  *
- * The exit happens after the probe has closed its socket.
+ * The exit happens after the probe has closed its socket. `exit` defaults to `exitProcess` of
+ * `@spy4x/platform/server/process`: `Deno.exit` on Deno, `process.exit` on Node and Bun.
  *
  * @throws {RangeError} Forwarded from {@link probeLoopback} for an invalid port.
  */
 export async function runHealthcheck(
   options: HealthcheckOptions & { exit?: ExitAdapter["exit"] },
 ): Promise<void> {
-  const exit = options.exit ?? ((code: number): never => Deno.exit(code))
+  const exit = options.exit ?? exitProcess
   exit(await healthcheckExitCode(options))
 }
 
@@ -354,10 +357,47 @@ export function resolveHealthcheckPort(
   return DEFAULT_PORT
 }
 
-/** Adapter over `Deno.connect`, used when no connector is injected. */
+/** Adapter over `Deno.connect`. Deno only; {@link runtimeConnector} picks it on Deno. */
 export const denoConnector: ProbeConnector = {
   connect: async (options) => {
     const connection = await Deno.connect(options)
     return { close: () => connection.close() }
   },
+}
+
+/** `node:net`, as far as {@link nodeConnector} uses it. */
+interface NodeNet {
+  createConnection(options: { host: string; port: number }): {
+    once(event: "connect", listener: () => void): unknown
+    once(event: "error", listener: (error: Error) => void): unknown
+    destroy(): void
+  }
+}
+
+/**
+ * Adapter over `node:net`, for Node and Bun. The module is loaded on the first connect through a
+ * computed specifier, so `deno check` never pulls in `@types/node`. A socket that fails is
+ * destroyed before the promise rejects.
+ */
+export const nodeConnector: ProbeConnector = {
+  connect: async ({ hostname, port }) => {
+    const net = await import(["node", "net"].join(":")) as NodeNet
+    const socket = net.createConnection({ host: hostname, port })
+    await new Promise<void>((resolve, reject) => {
+      socket.once("connect", resolve)
+      socket.once("error", (error) => {
+        socket.destroy()
+        reject(error)
+      })
+    })
+    return { close: () => socket.destroy() }
+  },
+}
+
+/**
+ * The connector for the running runtime, used when none is injected: {@link denoConnector} on Deno,
+ * {@link nodeConnector} on Node and Bun. The runtime is checked on each connect, not at import.
+ */
+export const runtimeConnector: ProbeConnector = {
+  connect: (options) => ("Deno" in globalThis ? denoConnector : nodeConnector).connect(options),
 }

@@ -1,5 +1,5 @@
 /**
- * Reading environment values without touching `Deno.env` at import time.
+ * Reading environment values without touching the process environment at import time.
  *
  * Ported from this repository's own `ops/env.ts`, removed from the tree in #67
  * (`git log --all --oneline -- ops/env.ts`), trimmed to the environment-reading primitive:
@@ -44,12 +44,24 @@ function blankToUndefined(value: string | undefined): string | undefined {
 }
 
 /**
- * The process environment through `Deno.env`, read on each call and never at module scope. Code
- * that must also run on Node or Bun passes `processEnv` of `@spy4x/platform/server/process`
- * instead, which reads `Deno.env` the same way on Deno and `process.env` elsewhere.
+ * The process environment, read on each call and never at module scope: `Deno.env` on Deno,
+ * `process.env` on Node and Bun. The lookup is written here rather than imported from
+ * `@spy4x/platform/server/process`, whose `processEnv` does the same, because this file imports
+ * nothing (#443).
+ *
+ * @throws {Error} From `get`, on a runtime with neither (a browser).
  */
 export const systemEnv: EnvReader = {
-  get: (name) => blankToUndefined(Deno.env.get(name)),
+  get: (name) => {
+    const { Deno, process } = globalThis as {
+      Deno?: { env: { get(name: string): string | undefined } }
+      process?: { env: Record<string, string | undefined> }
+    }
+    // Deno first: Deno 2 also defines `process`.
+    if (Deno) return blankToUndefined(Deno.env.get(name))
+    if (process) return blankToUndefined(process.env[name])
+    throw new Error("no environment: this runtime has neither Deno.env nor process.env")
+  },
 }
 
 /**

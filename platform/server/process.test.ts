@@ -8,6 +8,7 @@ import {
   type NodeStdin,
   processIdOf,
   type RuntimeHost,
+  signalListenersOver,
   standardInputOver,
   writeStderrOver,
 } from "./_runtime-host.ts"
@@ -338,5 +339,36 @@ describe("processArgs, processStdin and writeStderr", () => {
     expect(processArgs()).toEqual(Deno.args)
     expect(processStdin.isTerminal()).toBe(Deno.stdin.isTerminal())
     writeStderr("")
+  })
+})
+
+describe("signalListenersOver", () => {
+  const recorder = () => {
+    const calls: string[] = []
+    const record = (name: string) => (signal: string) => void calls.push(`${name} ${signal}`)
+    return { calls, record }
+  }
+
+  it("uses Deno's signal listeners on Deno, even where process is defined too", () => {
+    const { calls, record } = recorder()
+    const signals = signalListenersOver({
+      Deno: { addSignalListener: record("deno-add"), removeSignalListener: record("deno-remove") },
+      process: { on: record("on"), off: record("off") },
+    })
+    signals.add("SIGTERM", () => {})
+    signals.remove("SIGTERM", () => {})
+    expect(calls).toEqual(["deno-add SIGTERM", "deno-remove SIGTERM"])
+  })
+
+  it("uses process.on and process.off on Node and Bun", () => {
+    const { calls, record } = recorder()
+    const signals = signalListenersOver({ process: { on: record("on"), off: record("off") } })
+    signals.add("SIGINT", () => {})
+    signals.remove("SIGINT", () => {})
+    expect(calls).toEqual(["on SIGINT", "off SIGINT"])
+  })
+
+  it("throws on a runtime with neither", () => {
+    expect(() => signalListenersOver({})).toThrow("no signals")
   })
 })

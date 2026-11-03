@@ -44,6 +44,8 @@ export interface RuntimeHost {
       read(buffer: Uint8Array): Promise<number | null>
       readonly readable: ReadableStream<Uint8Array>
     }
+    addSignalListener?(signal: Deno.Signal, handler: () => void): void
+    removeSignalListener?(signal: Deno.Signal, handler: () => void): void
   }
   process?: {
     env?: Record<string, string | undefined>
@@ -52,6 +54,8 @@ export interface RuntimeHost {
     exit?(code: number): never
     stderr?: { write(text: string): unknown }
     stdin?: NodeStdin
+    on?(event: string, listener: () => void): unknown
+    off?(event: string, listener: () => void): unknown
   }
 }
 
@@ -280,4 +284,33 @@ export function fileSystemOver(
     makeTempDir: (parent) => pick().makeTempDir!(parent),
     removeTree: (path) => pick().removeTree!(path),
   }
+}
+
+/** Registers and removes operating-system signal listeners. */
+export interface SignalListeners {
+  add(signal: Deno.Signal, handler: () => void): void
+  remove(signal: Deno.Signal, handler: () => void): void
+}
+
+/**
+ * Signal listeners over `host`: `Deno.addSignalListener` and `Deno.removeSignalListener` on Deno,
+ * `process.on` and `process.off` on Node and Bun.
+ *
+ * @throws {Error} On a runtime with neither (a browser).
+ */
+export function signalListenersOver(host: RuntimeHost): SignalListeners {
+  const { Deno, process } = host
+  if (Deno?.addSignalListener && Deno.removeSignalListener) {
+    return {
+      add: (signal, handler) => Deno.addSignalListener!(signal, handler),
+      remove: (signal, handler) => Deno.removeSignalListener!(signal, handler),
+    }
+  }
+  if (process?.on && process.off) {
+    return {
+      add: (signal, handler) => void process.on!(signal, handler),
+      remove: (signal, handler) => void process.off!(signal, handler),
+    }
+  }
+  throw new Error("no signals: this runtime has neither Deno.addSignalListener nor process.on")
 }

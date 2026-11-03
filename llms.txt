@@ -1905,13 +1905,13 @@ loadConfig	function	@spy4x/server/config	Read every environment variable `schema
 readEnvVar	function	@spy4x/server/config	Read one required value now, outside a schema — for the one variable a caller needs before the rest of its configuration can even be assembled (`ENV`, deciding which schema to validate against, for example).
 readOptionalEnvVar	function	@spy4x/server/config	Read one value that may be absent: the value, or `undefined` when `name` is unset or blank.
 stringBoolean	constant	@spy4x/server/config	`"true"` or `"false"`, exactly — an environment boolean written by a person or a deploy script, not inferred from `"1"`, `"yes"` or an empty string.
-systemEnv	constant	@spy4x/server/config	The process environment through `Deno.env`, read on each call and never at module scope.
+systemEnv	constant	@spy4x/server/config	The process environment, read on each call and never at module scope: `Deno.env` on Deno, `process.env` on Node and Bun.
 EnvReader	interface	@spy4x/server/config/env	Reads environment values.
 MissingEnvError	class	@spy4x/server/config/env	Raised when a required environment variable is missing or blank.
 createEnvReader	function	@spy4x/server/config/env	An `EnvReader` over a fixed record — what a unit test injects instead of the process environment, so a config or middleware test runs under `--allow-read --allow-env` without any environment variable actually being set.
 readEnvVar	function	@spy4x/server/config/env	Read one required value now, outside a schema — for the one variable a caller needs before the rest of its configuration can even be assembled (`ENV`, deciding which schema to validate against, for example).
 readOptionalEnvVar	function	@spy4x/server/config/env	Read one value that may be absent: the value, or `undefined` when `name` is unset or blank.
-systemEnv	constant	@spy4x/server/config/env	The process environment through `Deno.env`, read on each call and never at module scope.
+systemEnv	constant	@spy4x/server/config/env	The process environment, read on each call and never at module scope: `Deno.env` on Deno, `process.env` on Node and Bun.
 AES_ALGORITHM	constant	@spy4x/server/crypto	WebCrypto algorithm name.
 AES_KEY_BYTES	constant	@spy4x/server/crypto	Key size in bytes.
 CryptoError	class	@spy4x/server/crypto	The one error this module throws.
@@ -2081,11 +2081,13 @@ ProbeFailure	type	@spy4x/server/healthcheck	Why a probe failed: a TCP connect th
 ProbeFetcher	interface	@spy4x/server/healthcheck	Sends the HTTP request of an HTTP probe.
 ProbeResult	interface	@spy4x/server/healthcheck	Probe outcome, kept as data so the caller — not the probe — decides what to do.
 ProbeTimer	interface	@spy4x/server/healthcheck	Timer used for deadlines.
-denoConnector	constant	@spy4x/server/healthcheck	Adapter over `Deno.connect`, used when no connector is injected.
+denoConnector	constant	@spy4x/server/healthcheck	Adapter over `Deno.connect`.
 healthcheckExitCode	function	@spy4x/server/healthcheck	Exit code for the probe: `0` healthy, `1` unhealthy.
+nodeConnector	constant	@spy4x/server/healthcheck	Adapter over `node:net`, for Node and Bun.
 probeLoopback	function	@spy4x/server/healthcheck	Probe a loopback port: connect and close again, or, with a `path`, `GET` that path and compare the status.
 resolveHealthcheckPort	function	@spy4x/server/healthcheck	Port the healthcheck should probe, from the process environment.
 runHealthcheck	function	@spy4x/server/healthcheck	Compute the exit code and terminate the process.
+runtimeConnector	constant	@spy4x/server/healthcheck	The connector for the running runtime, used when none is injected: denoConnector on Deno, nodeConnector on Node and Bun.
 withDeadline	function	@spy4x/server/healthcheck	Race a step against a deadline, clearing the timer on every path.
 AUTHORIZATION_HEADER	constant	@spy4x/server/http/bearer-auth	The header a token is read from.
 REDACTED_TOKEN	constant	@spy4x/server/http/bearer-auth	The canonical redaction marker.
@@ -2821,4 +2823,4 @@ firstIssueMessage	function	@spy4x/validation/validate	First issue message in a v
 isArkErrors	function	@spy4x/validation/validate	Whether a value is an arktype rejection, without relying on `instanceof`.
 toValidationError	function	@spy4x/validation/validate	Build a ValidationError from arktype's issues.
 validate	function	@spy4x/validation/validate	Parse `value` with an arktype schema exactly once.
-# export surface: sha256 6fb6fe20a431ba5cef445427d6f68f2dd757e4e511b6f8c7fe297828210d30d4
+# export surface: sha256 9a3aed9d4d7863ff6c7a072b46d6c2be61f66c9c8f5f5354b55618335b08cf02
