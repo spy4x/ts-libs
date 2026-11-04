@@ -2795,6 +2795,16 @@ monthLabel	function	@spy4x/time/locale	Localised "August 2026" for the month `da
 relativeDayLabel	function	@spy4x/time/locale	A day as a person says it: "Yesterday", "Today", "Tomorrow", otherwise shortDayLabel.
 shortDayLabel	function	@spy4x/time/locale	Localised "Thu 15 Oct": weekday, day and month, no year.
 weekdayLabels	function	@spy4x/time/locale	Seven localised weekday labels, starting on the locale's own first day.
+Period	interface	@spy4x/time/period	A week or a month: an inclusive range of `YYYY-MM-DD` dates and the unit it spans.
+PeriodNow	interface	@spy4x/time/period	The instant and the zone that decide which calendar date "today" is.
+PeriodOptions	interface	@spy4x/time/period	How a week is laid out.
+PeriodUnit	enum	@spy4x/time/period	The length of a period.
+currentPeriod	function	@spy4x/time/period	The week or month that contains today in `timeZone`.
+periodLabel	function	@spy4x/time/period	The period as a person reads it in their region format: "November 2026" for a month, and "2–8 Nov 2026" or "26 Oct – 1 Nov 2026" for a week, through `Intl.DateTimeFormat`'s `formatRange`, which drops the parts both ends share.
+periodOf	function	@spy4x/time/period	The week or month that contains a calendar date.
+periodSoFar	function	@spy4x/time/period	The part of `period` up to and including today in `timeZone`: "this month so far".
+samePartOf	function	@spy4x/time/period	The same number of days as `soFar` at the start of `other`, to compare like with like: 1 to 3 November against 1 to 3 October.
+shiftPeriod	function	@spy4x/time/period	The period `steps` before or after `period`, of the same unit.
 Rrule	interface	@spy4x/time/rrule	A parsed repeat rule.
 RruleDay	interface	@spy4x/time/rrule	One `BYDAY` entry: a weekday, with an ordinal in a month (`2MO` is 2, `-1FR` is -1).
 RruleError	interface	@spy4x/time/rrule	The error half of RruleResult.
@@ -2882,4 +2892,4 @@ firstIssueMessage	function	@spy4x/validation/validate	First issue message in a v
 isArkErrors	function	@spy4x/validation/validate	Whether a value is an arktype rejection, without relying on `instanceof`.
 toValidationError	function	@spy4x/validation/validate	Build a ValidationError from arktype's issues.
 validate	function	@spy4x/validation/validate	Parse `value` with an arktype schema exactly once.
-# export surface: sha256 38e96f1458aaad8a164b99484948d90377e9e7bd6c7049da08c6dd9274feb81b
+# export surface: sha256 7a158e83dc95759114037b01803297090dd3e2b41748a63f6e6abb3c54315dc1
