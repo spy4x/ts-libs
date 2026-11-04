@@ -47,12 +47,29 @@ export enum BillingEventType {
   PaymentFailed,
 }
 
-/** One of the app's plans, mapped to the provider's price that bills it. */
+/** How often a price bills. Starts at 1, like every enum here. */
+export enum BillingPeriod {
+  /** Billed every month. */
+  Monthly = 1,
+  /** Billed every year. */
+  Yearly,
+}
+
+/**
+ * One of the app's plans, mapped to the provider's price that bills it. A plan sold for several
+ * periods is listed once per period, each with its own price and {@link period}.
+ */
 export interface PlanRef {
   /** The app's own plan ID, the only plan name the app ever passes in or reads back. */
   planId: string
   /** The provider's price ID for that plan, such as Stripe's `price_…`. */
   priceId: string
+  /**
+   * How often {@link priceId} bills. Optional: a plan with one price may leave it out, and a
+   * {@link Subscription} on that price then has no {@link Subscription.period}. Required on every
+   * listing of a plan listed more than once.
+   */
+  period?: BillingPeriod
 }
 
 /** A subscription as an event reports it. */
@@ -66,6 +83,12 @@ export interface Subscription {
   planId: string | null
   /** The provider's price ID the subscription bills, or `null` when it has no item. */
   priceId: string | null
+  /**
+   * The {@link PlanRef.period} of the {@link PlanRef} that maps {@link priceId}. Absent when the
+   * price is in no {@link PlanRef}, or in one without a period. It comes from the price the
+   * provider reports, never from the checkout request.
+   */
+  period?: BillingPeriod
   /** End of the period already paid for, or `null` when the provider gives none. */
   currentPeriodEnd: Date | null
   /** `true` when the subscription ends at {@link currentPeriodEnd} instead of renewing. */
@@ -143,6 +166,12 @@ export type ParseEventResult =
 export interface CheckoutRequest {
   /** The app's plan ID; it must be in the adapter's {@link PlanRef} list. */
   planId: string
+  /**
+   * Which of the plan's prices to bill, by its {@link PlanRef.period}. Leave it out for a plan
+   * listed once; a plan listed for several periods needs it (`invalid_request` without), and a
+   * period the plan is not listed for is `unknown_plan`.
+   */
+  period?: BillingPeriod
   /** Absolute URL the provider sends the customer to after paying. */
   successUrl: string
   /** Absolute URL the provider sends the customer to when they go back without paying. */

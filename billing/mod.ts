@@ -7,7 +7,7 @@
  * @module
  */
 
-export { BillingEventType, RefundStatus, SubscriptionStatus } from "./provider.ts"
+export { BillingEventType, BillingPeriod, RefundStatus, SubscriptionStatus } from "./provider.ts"
 export type {
   BillingError,
   BillingErrorCode,

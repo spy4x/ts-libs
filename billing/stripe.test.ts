@@ -2,6 +2,7 @@ import { expect } from "@std/expect"
 import { describe, it } from "@std/testing/bdd"
 import {
   BillingEventType,
+  BillingPeriod,
   type ParseEventResult,
   RefundStatus,
   SubscriptionStatus,
@@ -1348,5 +1349,171 @@ describe("setCancelAtPeriodEnd", () => {
       idempotencyKey: "k",
     })
     expect(!result.ok && result.error.code).toBe("malformed_response")
+  })
+})
+
+describe("plans sold monthly and yearly", () => {
+  const MONTHLY = "price_1MowQULkdIwHu7ixraBm864M"
+  const YEARLY = "price_pro_yearly_0000"
+  const PERIOD_PLANS = [
+    { planId: "pro", priceId: MONTHLY, period: BillingPeriod.Monthly },
+    { planId: "pro", priceId: YEARLY, period: BillingPeriod.Yearly },
+    { planId: "team", priceId: "price_team_0000" },
+  ]
+  const base = { secretKey: SECRET_KEY, webhookSecret: WEBHOOK_SECRET }
+  const urls = { successUrl: "https://app.example.com/ok", cancelUrl: "https://app.example.com/no" }
+
+  /** The subscription a signed `customer.subscription.created` for `priceId` parses to. */
+  const subscriptionOn = async (priceId: string) => {
+    const body = await editedFixture("customer.subscription.created", (object) => {
+      const items = object.items as { data: { price: { id: string } }[] }
+      items.data[0].price.id = priceId
+    })
+    const event = parsedEvent(
+      await billing({ plans: PERIOD_PLANS }).parseEvent(body, {
+        "Stripe-Signature": await stripeSignature(body),
+      }),
+    )
+    return event && "subscription" in event ? event.subscription : undefined
+  }
+
+  it("accepts one plan listed once per period", () => {
+    expect(() => createStripeBilling({ ...base, plans: PERIOD_PLANS })).not.toThrow()
+  })
+
+  it("refuses a plan listed twice for one period, or twice with a listing that has no period", () => {
+    const monthly = { planId: "pro", priceId: MONTHLY, period: BillingPeriod.Monthly }
+    const cases = [
+      [monthly, { ...monthly, priceId: YEARLY }],
+      [{ planId: "pro", priceId: MONTHLY }, { ...monthly, priceId: YEARLY }],
+      [monthly, { planId: "pro", priceId: YEARLY }],
+      [{ planId: "pro", priceId: MONTHLY }, { planId: "pro", priceId: YEARLY }],
+    ]
+    for (const plans of cases) {
+      expect(() => createStripeBilling({ ...base, plans })).toThrow("plan pro is listed twice")
+    }
+  })
+
+  it("refuses a price mapped to both periods, and a period that is no BillingPeriod", () => {
+    expect(() =>
+      createStripeBilling({
+        ...base,
+        plans: [PERIOD_PLANS[0], { ...PERIOD_PLANS[1], priceId: MONTHLY }],
+      })
+    ).toThrow("mapped to two plans")
+    for (const period of [0, 3, "yearly"]) {
+      expect(() =>
+        createStripeBilling({
+          ...base,
+          plans: [{ planId: "pro", priceId: MONTHLY, period: period as BillingPeriod }],
+        })
+      ).toThrow("plan pro has an unknown period")
+    }
+  })
+
+  it("bills the price of the period the checkout asks for", async () => {
+    for (
+      const [period, priceId] of [[BillingPeriod.Monthly, MONTHLY], [BillingPeriod.Yearly, YEARLY]]
+    ) {
+      const { calls, fetcher } = fakeFetch(() =>
+        json({ id: "cs_test_1", url: "https://checkout.stripe.com/c/pay/cs_test_1" })
+      )
+      const result = await billing({ plans: PERIOD_PLANS, fetch: fetcher }).createCheckout({
+        planId: "pro",
+        period: period as BillingPeriod,
+        ...urls,
+      })
+      expect(result.ok).toBe(true)
+      expect(new URLSearchParams(String(calls[0].init.body)).get("line_items[0][price]"))
+        .toBe(priceId)
+    }
+  })
+
+  it("refuses a checkout without a period for a plan sold for two, without calling Stripe", async () => {
+    const { calls, fetcher } = fakeFetch(() => json({}))
+    const result = await billing({ plans: PERIOD_PLANS, fetch: fetcher }).createCheckout({
+      planId: "pro",
+      ...urls,
+    })
+    expect(result.ok === false && result.error.code).toBe("invalid_request")
+    expect(calls.length).toBe(0)
+  })
+
+  it("refuses a period the plan is not listed for, or no BillingPeriod, without calling Stripe", async () => {
+    const { calls, fetcher } = fakeFetch(() => json({}))
+    const provider = billing({
+      plans: [{ planId: "pro", priceId: MONTHLY, period: BillingPeriod.Monthly }, PERIOD_PLANS[2]],
+      fetch: fetcher,
+    })
+    const yearly = await provider.createCheckout({
+      planId: "pro",
+      period: BillingPeriod.Yearly,
+      ...urls,
+    })
+    expect(yearly.ok === false && yearly.error.code).toBe("unknown_plan")
+    const team = await provider.createCheckout({
+      planId: "team",
+      period: BillingPeriod.Monthly,
+      ...urls,
+    })
+    expect(team.ok === false && team.error.code).toBe("unknown_plan")
+    const bogus = await provider.createCheckout({
+      planId: "pro",
+      period: 3 as BillingPeriod,
+      ...urls,
+    })
+    expect(bogus.ok === false && bogus.error.code).toBe("invalid_request")
+    expect(calls.length).toBe(0)
+  })
+
+  it("bills a plan listed once for its only period when the checkout names none", async () => {
+    const { calls, fetcher } = fakeFetch(() =>
+      json({ id: "cs_test_1", url: "https://checkout.stripe.com/c/pay/cs_test_1" })
+    )
+    const result = await billing({
+      plans: [{ planId: "pro", priceId: YEARLY, period: BillingPeriod.Yearly }],
+      fetch: fetcher,
+    }).createCheckout({ planId: "pro", ...urls })
+    expect(result.ok).toBe(true)
+    expect(new URLSearchParams(String(calls[0].init.body)).get("line_items[0][price]"))
+      .toBe(YEARLY)
+  })
+
+  it("reports the plan and period of the price Stripe reports on the subscription", async () => {
+    expect(await subscriptionOn(YEARLY)).toMatchObject({
+      planId: "pro",
+      priceId: YEARLY,
+      period: BillingPeriod.Yearly,
+    })
+    expect(await subscriptionOn(MONTHLY)).toMatchObject({
+      planId: "pro",
+      priceId: MONTHLY,
+      period: BillingPeriod.Monthly,
+    })
+  })
+
+  it("puts a subscription on an unknown price on no plan and no period", async () => {
+    const subscription = await subscriptionOn("price_unmapped")
+    expect(subscription).toMatchObject({ planId: null, priceId: "price_unmapped" })
+    expect(subscription !== undefined && "period" in subscription).toBe(false)
+  })
+
+  it("reports no period for a price whose listing has none", async () => {
+    const subscription = await subscriptionOn("price_team_0000")
+    expect(subscription).toMatchObject({ planId: "team", priceId: "price_team_0000" })
+    expect(subscription !== undefined && "period" in subscription).toBe(false)
+  })
+
+  it("reports the period on the subscription a quantity change answers", async () => {
+    const yearly = await recordedSubscription((object) => {
+      const items = object.items as { data: { price: { id: string } }[] }
+      items.data[0].price.id = YEARLY
+    })
+    const { fetcher } = scripted([json(yearly), json(yearly)])
+    const result = await billing({ plans: PERIOD_PLANS, fetch: fetcher }).updateQuantity({
+      subscriptionId: SUBSCRIPTION_ID,
+      quantity: 2,
+    })
+    expect(result.ok && result.value).toMatchObject({ planId: "pro", period: BillingPeriod.Yearly })
   })
 })

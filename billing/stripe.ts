@@ -28,6 +28,7 @@ import {
   type BillingError,
   type BillingEvent,
   BillingEventType,
+  BillingPeriod,
   type BillingProvider,
   type CheckoutRequest,
   type CheckoutSession,
@@ -60,7 +61,10 @@ export interface StripeBillingOptions {
   secretKey: string
   /** The webhook endpoint's signing secret (`whsec_…`). Required. */
   webhookSecret: string
-  /** The app's plans and their Stripe price IDs. At least one; no plan or price twice. */
+  /**
+   * The app's plans and their Stripe price IDs. At least one; no price twice, and a plan twice only
+   * with a different {@link PlanRef.period} on each listing.
+   */
   plans: readonly PlanRef[]
   /** Defaults to `globalThis.fetch`. Called with `redirect: "manual"` and a timeout signal. */
   fetch?: typeof fetch
@@ -125,8 +129,12 @@ const stripeDecimals = (currency: string): number => {
   return 2
 }
 
+/** Every {@link BillingPeriod}, the only values a period may take. */
+const billingPeriodSchema = type.enumerated(BillingPeriod.Monthly, BillingPeriod.Yearly)
+
 const checkoutRequestSchema = type({
   planId: "string > 0",
+  "period?": billingPeriodSchema,
   successUrl: "string.url",
   cancelUrl: "string.url",
   "customerId?": "string > 0",
@@ -321,7 +329,8 @@ const checkedPlans = (plans: readonly PlanRef[]): readonly PlanRef[] => {
   if (!Array.isArray(plans) || plans.length === 0) {
     throw new Error("createStripeBilling: plans must list at least one plan")
   }
-  const planIds = new Set<string>()
+  /** The periods each plan is listed for so far; `undefined` stands for a listing without one. */
+  const periods = new Map<string, (BillingPeriod | undefined)[]>()
   const priceIds = new Set<string>()
   for (const plan of plans) {
     if (typeof plan?.planId !== "string" || plan.planId === "") {
@@ -330,16 +339,28 @@ const checkedPlans = (plans: readonly PlanRef[]): readonly PlanRef[] => {
     if (typeof plan.priceId !== "string" || plan.priceId === "") {
       throw new Error(`createStripeBilling: plan ${plan.planId} needs a priceId`)
     }
-    if (planIds.has(plan.planId)) {
+    if (plan.period !== undefined && billingPeriodSchema(plan.period) instanceof type.errors) {
+      throw new Error(`createStripeBilling: plan ${plan.planId} has an unknown period`)
+    }
+    const listed = periods.get(plan.planId) ?? []
+    // A plan listed again needs a new period on every listing, or checkout could not pick a price.
+    if (listed.length > 0 && [...listed, plan.period].some((period) => period === undefined)) {
       throw new Error(`createStripeBilling: plan ${plan.planId} is listed twice`)
+    }
+    if (plan.period !== undefined && listed.includes(plan.period)) {
+      throw new Error(`createStripeBilling: plan ${plan.planId} is listed twice for one period`)
     }
     if (priceIds.has(plan.priceId)) {
       throw new Error(`createStripeBilling: price ${plan.priceId} is mapped to two plans`)
     }
-    planIds.add(plan.planId)
+    periods.set(plan.planId, [...listed, plan.period])
     priceIds.add(plan.priceId)
   }
-  return plans.map((plan) => ({ planId: plan.planId, priceId: plan.priceId }))
+  return plans.map((plan) => ({
+    planId: plan.planId,
+    priceId: plan.priceId,
+    ...(plan.period === undefined ? {} : { period: plan.period }),
+  }))
 }
 
 const requireSecret = (value: unknown, name: string): string => {
@@ -377,8 +398,8 @@ const checkoutForm = (request: CheckoutRequest, priceId: string): URLSearchParam
  * A Stripe {@link BillingProvider}.
  *
  * Throws when `secretKey` or `webhookSecret` is missing or blank, or when `plans` is empty, lacks
- * an ID or maps a plan or a price twice: each is a configuration error to catch at start-up, not on
- * a customer's checkout. Every other failure is a returned result. It has every optional member of
+ * an ID, has an unknown period, maps a price twice, or lists a plan twice without a different period
+ * on each listing: each is a configuration error to catch at start-up, not on a customer's checkout. Every other failure is a returned result. It has every optional member of
  * {@link BillingProvider}, so a caller needs no check before the operator actions.
  */
 export function createStripeBilling(options: StripeBillingOptions): Required<BillingProvider> {
@@ -397,8 +418,8 @@ export function createStripeBilling(options: StripeBillingOptions): Required<Bil
     throw new Error("createStripeBilling: toleranceSeconds must be a positive finite number")
   }
 
-  const priceForPlan = new Map(plans.map((plan) => [plan.planId, plan.priceId]))
-  const planForPrice = new Map(plans.map((plan) => [plan.priceId, plan.planId]))
+  /** The listing each configured price belongs to: the only source of a subscription's period. */
+  const planForPrice = new Map(plans.map((plan) => [plan.priceId, plan]))
 
   /** The error, with any copy of the secret key cut out before it can reach a log. */
   const failure = (
@@ -490,6 +511,7 @@ export function createStripeBilling(options: StripeBillingOptions): Required<Bil
     const items = stripe.items.data
     const item = items.find((candidate) => planForPrice.has(candidate.price.id)) ?? items[0]
     const priceId = item?.price.id ?? null
+    const plan = priceId === null ? undefined : planForPrice.get(priceId)
     const reference = stripe.metadata?.[REFERENCE_KEY]
     return {
       ok: true,
@@ -497,8 +519,9 @@ export function createStripeBilling(options: StripeBillingOptions): Required<Bil
         id: stripe.id,
         customerId: stripe.customer,
         status,
-        planId: priceId === null ? null : planForPrice.get(priceId) ?? null,
+        planId: plan?.planId ?? null,
         priceId,
+        ...(plan?.period === undefined ? {} : { period: plan.period }),
         currentPeriodEnd: fromSeconds(item?.current_period_end),
         cancelAtPeriodEnd: stripe.cancel_at_period_end,
         trialEnd: fromSeconds(stripe.trial_end),
@@ -608,13 +631,27 @@ export function createStripeBilling(options: StripeBillingOptions): Required<Bil
           "checkout request: trialWithoutPaymentMethod needs trialDays",
         )
       }
-      const priceId = priceForPlan.get(checked.planId)
-      if (priceId === undefined) {
-        return failure("unknown_plan", `plan ${JSON.stringify(checked.planId)} is not configured`)
+      const listings = plans.filter((plan) => plan.planId === checked.planId)
+      if (checked.period === undefined && listings.length > 1) {
+        return failure(
+          "invalid_request",
+          `checkout request: plan ${JSON.stringify(checked.planId)} needs a period`,
+        )
+      }
+      const listing = checked.period === undefined
+        ? listings[0]
+        : listings.find((plan) => plan.period === checked.period)
+      if (listing === undefined) {
+        return failure(
+          "unknown_plan",
+          checked.period === undefined
+            ? `plan ${JSON.stringify(checked.planId)} is not configured`
+            : `plan ${JSON.stringify(checked.planId)} is not configured for that period`,
+        )
       }
       const result = await postSession(
         "/checkout/sessions",
-        checkoutForm(checked, priceId),
+        checkoutForm(checked, listing.priceId),
         checked.idempotencyKey,
       )
       return result.ok ? { ok: true, value: result.value satisfies CheckoutSession } : result
