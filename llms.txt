@@ -2627,7 +2627,7 @@ Task	interface	@spy4x/tasks/model	One task as a screen shows it.
 TaskDate	type	@spy4x/tasks/model	A due or start value.
 TaskList	interface	@spy4x/tasks/model	A task list: a CalDAV calendar that holds tasks.
 TaskNode	interface	@spy4x/tasks/model	A task with its subtasks, for the tree a list shows.
-TaskReminder	interface	@spy4x/tasks/model	A reminder the task carries.
+TaskReminder	interface	@spy4x/tasks/model	A reminder the task carries; `editTask` changes them.
 TaskSource	interface	@spy4x/tasks/model	What the CalDAV server hands over for one task.
 TaskStatus	enum	@spy4x/tasks/model	The STATUS of a task.
 dateDay	function	@spy4x/tasks/model	The calendar day (`YYYY-MM-DD`) on which a due or start value falls for a viewer in `zone`.
@@ -2792,7 +2792,7 @@ Task	interface	@spy4x/time/ical-tasks-model	Deprecated: Import from `@spy4x/task
 TaskDate	type	@spy4x/time/ical-tasks-model	Deprecated: Import from `@spy4x/tasks/model`. A due or start value.
 TaskList	interface	@spy4x/time/ical-tasks-model	Deprecated: Import from `@spy4x/tasks/model`. A task list: a CalDAV calendar that holds tasks.
 TaskNode	interface	@spy4x/time/ical-tasks-model	Deprecated: Import from `@spy4x/tasks/model`. A task with its subtasks, for the tree a list shows.
-TaskReminder	interface	@spy4x/time/ical-tasks-model	Deprecated: Import from `@spy4x/tasks/model`. A reminder the task carries.
+TaskReminder	interface	@spy4x/time/ical-tasks-model	Deprecated: Import from `@spy4x/tasks/model`. A reminder the task carries; `editTask` changes them.
 TaskSource	interface	@spy4x/time/ical-tasks-model	Deprecated: Import from `@spy4x/tasks/model`. What the CalDAV server hands over for one task.
 TaskStatus	enum	@spy4x/time/ical-tasks-model	Deprecated: Import from `@spy4x/tasks/model`. The STATUS of a task.
 dateDay	function	@spy4x/time/ical-tasks-model	Deprecated: Import from `@spy4x/tasks/model`. The calendar day (`YYYY-MM-DD`) on which a due or start value falls for a viewer in `zone`.
@@ -2865,7 +2865,7 @@ WallClockKind	enum	@spy4x/time/tz	How often a wall clock occurs in a zone on its
 WallClockResolution	interface	@spy4x/time/tz	The answer of resolveWallClock.
 ZoneLabelParts	interface	@spy4x/time/tz	The parts zoneLabel joins, for a caller that writes them in another order.
 addDays	function	@spy4x/time/tz	Add `n` days to a `YYYY-MM-DD` date, in `tz` when one is given.
-canonicalTimeZone	function	@spy4x/time/tz	`tz` with its spelling normalised where that is safe, never renamed to another zone name.
+canonicalTimeZone	function	@spy4x/time/tz	`tz` with its spelling normalised where that is safe: only a name with no `/` becomes another zone name.
 canonicalTimeZoneOr	function	@spy4x/time/tz	canonicalTimeZone of `value` when it is a real zone, `fallback` otherwise.
 canonicalValidTimeZoneOrNull	function	@spy4x/time/tz	canonicalTimeZone of `value`, or `null` when it is missing or not a zone this runtime knows.
 dayOfWeek	function	@spy4x/time/tz	Abbreviated weekday name in `tz`, uppercased: `"FRI"`.
@@ -2936,4 +2936,4 @@ firstIssueMessage	function	@spy4x/validation/validate	First issue message in a v
 isArkErrors	function	@spy4x/validation/validate	Whether a value is an arktype rejection, without relying on `instanceof`.
 toValidationError	function	@spy4x/validation/validate	Build a ValidationError from arktype's issues.
 validate	function	@spy4x/validation/validate	Parse `value` with an arktype schema exactly once.
-# export surface: sha256 b8ec3a849f9dd9daec0e858f6614fbbb1f9a3f036b7263c2c28f89f89871b19a
+# export surface: sha256 ec9cd2be01ab439db7b9dbc1e2c65d1dbc7fcc439fa2881de575a6a6c6a533e4

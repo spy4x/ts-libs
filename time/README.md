@@ -563,8 +563,8 @@ city, area and offset in another order. Neither it nor `zoneOffsetLabel` throws 
 runtime does not know: both return the name, because a stored zone from another device must not
 break the page that shows it.
 
-`canonicalTimeZone` never renames a zone. It returns a name the runtime lists as it is, resolves
-slash-less aliases (`Japan`), and fixes letter case when `Intl` spells the same name
+`canonicalTimeZone` renames only a slash-less alias. It returns a name the runtime lists as it is,
+resolves slash-less aliases (`Japan` becomes `Asia/Tokyo`, `GMT` becomes `UTC`), and fixes letter case when `Intl` spells the same name
 (`america/new_york`); a miscased name that `Intl` would rename (`asia/kolkata`) comes back unchanged.
 For any other spelling it asks `Intl` and keeps
 the answer only if it is the same name in other casing; otherwise it returns the input unchanged.

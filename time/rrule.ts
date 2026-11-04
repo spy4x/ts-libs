@@ -546,9 +546,10 @@ export interface NextOccurrenceOptions {
  * A `start` that does not match the rule is not itself an
  * occurrence; the series begins at the first day the rule selects on or after it.
  *
- * Fails with {@link RruleErrorCode.InvalidStart} when `start` is malformed or a zone is unknown,
- * and with {@link RruleErrorCode.SearchLimit} when the rule selects nothing within the search
- * limit (such as `FREQ=YEARLY;BYMONTH=2;BYMONTHDAY=30`).
+ * Fails with {@link RruleErrorCode.InvalidStart} when `start` is malformed or a zone is unknown
+ * (its time is checked for the `hh:mm:ss` shape only, not for a real clock time), and with
+ * {@link RruleErrorCode.SearchLimit} when the rule selects nothing within the search limit (such
+ * as `FREQ=YEARLY;BYMONTH=2;BYMONTHDAY=30`).
  */
 export function nextOccurrence(
   rule: Rrule,
