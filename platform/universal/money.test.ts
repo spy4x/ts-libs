@@ -1,13 +1,26 @@
 import { describe, it } from "@std/testing/bdd"
 import { expect } from "@std/expect"
 
+import { type } from "arktype"
+
 import {
+  allocate,
+  convertMoney,
+  crossRate,
+  currencies,
+  CURRENCIES_PUBLISHED,
+  currencyCode,
   currencyDecimals,
+  currencyOptions,
+  type ExchangeRate,
   formatMoney,
   formatMoneyParts,
+  isCurrencyCode,
   moneyDecimalString,
   parseMoney,
+  sumMoney,
 } from "./money.ts"
+import { seededRandom } from "./statistics.ts"
 
 /** Locales exercised by the round-trip test below — see its own doc for what each one covers. */
 const ROUND_TRIP_LOCALES = [
@@ -359,5 +372,291 @@ describe("money with a blank currency code", () => {
       expect(() => parseMoney("1.00", code)).toThrow(RangeError)
       expect(() => parseMoney("", code, "en", { decimals: 2 })).toThrow(RangeError)
     }
+  })
+})
+
+describe("the ISO 4217 currency table", () => {
+  it("gives currencyDecimals the table's value for every code, without a decimals option", () => {
+    const codes = Object.keys(currencies)
+    expect(codes.length).toBe(165)
+    for (const code of codes) {
+      expect([code, currencyDecimals(code)]).toEqual([code, currencies[code]])
+      expect([code, currencyDecimals(code, "ar-EG")]).toEqual([code, currencies[code]])
+    }
+  })
+
+  it("answers ISO, not the runtime, for the codes the runtimes disagree on", () => {
+    expect(currencyDecimals("RSD")).toBe(2)
+    expect(currencyDecimals("IQD")).toBe(3)
+    expect(currencyDecimals("HUF")).toBe(2)
+    expect(currencyDecimals("VND")).toBe(0)
+    expect(currencyDecimals("UYW")).toBe(4)
+    expect(currencyDecimals("YER")).toBe(2)
+  })
+
+  it("leaves out the codes whose minor unit is N.A.", () => {
+    for (const code of ["XAU", "XAG", "XDR", "XTS", "XXX"]) {
+      expect(Object.hasOwn(currencies, code)).toBe(false)
+    }
+    expect(CURRENCIES_PUBLISHED).toBe("2026-09-17")
+  })
+
+  it("still lets a code the table lacks fall back to Intl", () => {
+    // The Italian lira is no longer in ISO 4217; Intl still knows it, with no decimals.
+    expect(Object.hasOwn(currencies, "ITL")).toBe(false)
+    expect(currencyDecimals("ITL")).toBe(0)
+  })
+})
+
+describe("isCurrencyCode and currencyCode", () => {
+  it("accepts ISO codes and refuses anything else", () => {
+    expect(isCurrencyCode("EUR")).toBe(true)
+    expect(isCurrencyCode("RSD")).toBe(true)
+    for (const code of ["XYZ", "usd", "XAU", "EURO", "", "constructor", 978, null]) {
+      expect([code, isCurrencyCode(code)]).toEqual([code, false])
+    }
+  })
+
+  it("makes an arktype schema refuse XYZ", () => {
+    const schema = type({ currency: currencyCode })
+    expect(schema({ currency: "EUR" })).toEqual({ currency: "EUR" })
+    expect(schema({ currency: "XYZ" })).toBeInstanceOf(type.errors)
+  })
+})
+
+describe("currencyOptions", () => {
+  it("lists every ISO code with its name, symbol, decimals and search aliases", () => {
+    const options = currencyOptions("en")
+    expect(options.length).toBe(165)
+    expect(options.find((option) => option.code === "EUR")).toEqual({
+      code: "EUR",
+      name: "Euro",
+      symbol: "€",
+      decimals: 2,
+      aliases: ["EUR", "€"],
+    })
+    expect(options.find((option) => option.code === "RSD")?.decimals).toBe(2)
+  })
+
+  it("names currencies in the display locale and keeps the English name as an alias", () => {
+    const usd = currencyOptions("ru").find((option) => option.code === "USD")
+    expect(usd?.name).toBe("доллар США")
+    expect(usd?.aliases).toContain("US Dollar")
+    expect(usd?.aliases).toContain("USD")
+  })
+
+  it("sorts by name in the display locale", () => {
+    const names = currencyOptions("en").map((option) => option.name)
+    const collator = new Intl.Collator("en")
+    expect(names).toEqual([...names].sort(collator.compare))
+  })
+
+  it("adds a custom currency with its own decimals", () => {
+    const options = currencyOptions("en", [{ code: "BTC", name: "Bitcoin", decimals: 8 }])
+    expect(options.length).toBe(166)
+    expect(options.find((option) => option.code === "BTC")).toEqual({
+      code: "BTC",
+      name: "Bitcoin",
+      symbol: "BTC",
+      decimals: 8,
+      aliases: ["BTC"],
+    })
+  })
+
+  it("refuses a custom currency that is ISO, repeated, unnamed, badly coded or past 8 decimals", () => {
+    const bad = [
+      [{ code: "EUR", name: "Euro", decimals: 2 }],
+      [{ code: "BTC", name: "Bitcoin", decimals: 8 }, { code: "BTC", name: "Again", decimals: 8 }],
+      [{ code: "BTC", name: " ", decimals: 8 }],
+      [{ code: "btc", name: "Bitcoin", decimals: 8 }],
+      [{ code: "BTC", name: "Bitcoin", decimals: 9 }],
+      [{ code: "BTC", name: "Bitcoin", decimals: 1.5 }],
+    ]
+    for (const extra of bad) expect(() => currencyOptions("en", extra)).toThrow(RangeError)
+    expect(currencyOptions("en", [{ code: "SHIB", name: "Shiba Inu", decimals: 0 }]).length)
+      .toBe(166)
+  })
+})
+
+describe("sumMoney", () => {
+  it("adds amounts of one currency exactly", () => {
+    const max = Number.MAX_SAFE_INTEGER
+    expect(sumMoney([], "USD")).toEqual({ ok: true, value: 0 })
+    expect(sumMoney([{ amount: 1250, currency: "USD" }, { amount: -250, currency: "USD" }], "USD"))
+      .toEqual({ ok: true, value: 1000 })
+    // The running total passes the safe range and comes back: the exact total is still safe.
+    const back = [max, 2, -2].map((amount) => ({ amount, currency: "USD" }))
+    expect(sumMoney(back, "USD")).toEqual({ ok: true, value: max })
+  })
+
+  it("refuses a yen amount in a dollar sum", () => {
+    const items = [{ amount: 1000, currency: "USD" }, { amount: 1000, currency: "JPY" }]
+    expect(sumMoney(items, "USD")).toEqual({ ok: false, error: "mixed-currencies" })
+  })
+
+  it("refuses a total past Number.MAX_SAFE_INTEGER instead of rounding it", () => {
+    const max = Number.MAX_SAFE_INTEGER
+    const over = [{ amount: max, currency: "USD" }, { amount: 1, currency: "USD" }]
+    expect(sumMoney(over, "USD")).toEqual({ ok: false, error: "unsafe-sum" })
+    const under = [{ amount: -max, currency: "USD" }, { amount: -1, currency: "USD" }]
+    expect(sumMoney(under, "USD")).toEqual({ ok: false, error: "unsafe-sum" })
+  })
+})
+
+describe("allocate", () => {
+  it("gives the leftover units to the largest remainders, earlier parts first on a tie", () => {
+    expect(allocate(1000, [1, 1, 1])).toEqual([334, 333, 333])
+    expect(allocate(-1000, [1, 1, 1])).toEqual([-334, -333, -333])
+    expect(allocate(100, [1, 2])).toEqual([33, 67])
+    expect(allocate(5, [0, 1, 0])).toEqual([0, 5, 0])
+    expect(allocate(0, [1, 1])).toEqual([0, 0])
+  })
+
+  it("returns parts that add up to the amount exactly, over random amounts and weights", () => {
+    const random = seededRandom(815)
+    const max = Number.MAX_SAFE_INTEGER
+    for (let run = 0; run < 2000; run++) {
+      const amount = Math.floor((random() * 2 - 1) * (run % 2 ? max : 100_000))
+      const weights = Array.from(
+        { length: 1 + Math.floor(random() * 7) },
+        () => Math.floor(random() * 1000),
+      )
+      if (!weights.some((weight) => weight > 0)) weights[0] = 1
+      const parts = allocate(amount, weights)
+      expect(parts.length).toBe(weights.length)
+      expect(parts.reduce((sum, part) => sum + BigInt(part), 0n)).toBe(BigInt(amount))
+      for (const [index, part] of parts.entries()) {
+        const share = Number(amount) * weights[index] / weights.reduce((a, b) => a + b, 0)
+        expect(Math.abs(part - share)).toBeLessThan(1 + Math.abs(share) * 1e-12)
+      }
+    }
+  })
+
+  it("refuses no weights, negative or fractional weights, and all-zero weights", () => {
+    expect(() => allocate(100, [])).toThrow(/at least one weight/)
+    expect(() => allocate(100, [-1, 2])).toThrow(/safe integer of zero or more/)
+    expect(() => allocate(100, [0.5, 1])).toThrow(/safe integer of zero or more/)
+    expect(() => allocate(100, [0, 0])).toThrow(/a weight above zero/)
+    expect(() => allocate(1.5, [1])).toThrow(/safe integer, got 1.5/)
+  })
+})
+
+/** An exchange rate dated and sourced like a real one, for the conversion tests. */
+function rate(base: string, quote: string, value: string, date = "2026-11-03"): ExchangeRate {
+  return { base, quote, rate: value, date, source: "ECB" }
+}
+
+describe("convertMoney", () => {
+  it("converts EUR to VND by hand-worked numbers", () => {
+    // €12.50 × 27,500.5 = 343,756.25 VND, which has no minor unit → 343,756.
+    expect(convertMoney(1250, "EUR", "VND", rate("EUR", "VND", "27500.5")))
+      .toEqual({ ok: true, value: 343756 })
+  })
+
+  it("uses the same rate from VND back to EUR", () => {
+    // 343,756 VND ÷ 27,500.5 = €12.4999909… → 1,249.99909 cents → 1,250.
+    expect(convertMoney(343756, "VND", "EUR", rate("EUR", "VND", "27500.5")))
+      .toEqual({ ok: true, value: 1250 })
+  })
+
+  it("keeps every digit of a rate of 0.000012907", () => {
+    // 1,000,000 VND × 0.000012907 = €12.907 → 1,290.7 cents → 1,291.
+    expect(convertMoney(1_000_000, "VND", "EUR", rate("VND", "EUR", "0.000012907")))
+      .toEqual({ ok: true, value: 1291 })
+    // 77,479 VND × 0.000012907 = €1.000021553 → 100.0021553 cents → 100.
+    expect(convertMoney(77479, "VND", "EUR", rate("VND", "EUR", "0.000012907")))
+      .toEqual({ ok: true, value: 100 })
+  })
+
+  it("rounds half a unit away from zero, once", () => {
+    const half = rate("USD", "EUR", "0.5")
+    expect(convertMoney(1, "USD", "EUR", half)).toEqual({ ok: true, value: 1 })
+    expect(convertMoney(-1, "USD", "EUR", half)).toEqual({ ok: true, value: -1 })
+    expect(convertMoney(3, "USD", "EUR", half)).toEqual({ ok: true, value: 2 })
+    expect(convertMoney(-3, "USD", "EUR", half)).toEqual({ ok: true, value: -2 })
+  })
+
+  it("returns no-rate for a missing rate instead of 0", () => {
+    expect(convertMoney(1250, "EUR", "USD", undefined)).toEqual({ ok: false, error: "no-rate" })
+    expect(convertMoney(1250, "EUR", "USD", null)).toEqual({ ok: false, error: "no-rate" })
+  })
+
+  it("returns wrong-pair for a rate between other currencies", () => {
+    expect(convertMoney(1250, "EUR", "USD", rate("EUR", "VND", "27500.5")))
+      .toEqual({ ok: false, error: "wrong-pair" })
+  })
+
+  it("returns unsafe for a result past Number.MAX_SAFE_INTEGER", () => {
+    expect(convertMoney(Number.MAX_SAFE_INTEGER, "EUR", "VND", rate("EUR", "VND", "27500.5")))
+      .toEqual({ ok: false, error: "unsafe" })
+  })
+
+  it("returns the amount itself for the same currency, with no rate needed", () => {
+    expect(convertMoney(1250, "EUR", "EUR", undefined)).toEqual({ ok: true, value: 1250 })
+  })
+
+  it("takes the decimals of a coin the table lacks", () => {
+    // 1 BTC in satoshis at $65,000.12 → 6,500,012 cents.
+    const btc = rate("BTC", "USD", "65000.12")
+    expect(convertMoney(100_000_000, "BTC", "USD", btc, { fromDecimals: 8 }))
+      .toEqual({ ok: true, value: 6500012 })
+  })
+
+  it("refuses a malformed rate or date", () => {
+    for (const value of ["", "0", "0.000", "-1", "1e5", "1,5", " 1", ".5", "1."]) {
+      expect(() => convertMoney(1, "EUR", "USD", rate("EUR", "USD", value))).toThrow(RangeError)
+    }
+    expect(() => convertMoney(1, "EUR", "USD", rate("EUR", "USD", "1.1", "2026/11/03")))
+      .toThrow(RangeError)
+  })
+})
+
+describe("crossRate", () => {
+  it("derives USD to VND from EUR to USD and EUR to VND, dated by the older rate", () => {
+    const derived = crossRate(
+      rate("EUR", "USD", "1.25", "2026-11-03"),
+      rate("EUR", "VND", "30000", "2026-11-02"),
+    )
+    expect(derived).toEqual({
+      ok: true,
+      value: { base: "USD", quote: "VND", rate: "24000", date: "2026-11-02", source: "ECB" },
+    })
+  })
+
+  it("takes either rate quoted the other way round and joins two sources", () => {
+    const usdEur = { ...rate("USD", "EUR", "0.8"), source: "Fed" }
+    const derived = crossRate(usdEur, rate("EUR", "VND", "30000"))
+    expect(derived).toEqual({
+      ok: true,
+      value: { base: "USD", quote: "VND", rate: "24000", date: "2026-11-03", source: "Fed, ECB" },
+    })
+  })
+
+  it("keeps 20 significant digits of a rate that does not end", () => {
+    const derived = crossRate(rate("EUR", "USD", "3"), rate("EUR", "VND", "1"))
+    expect(derived.ok && derived.value.rate).toBe("0.33333333333333333333")
+    const back = crossRate(rate("EUR", "USD", "3"), rate("EUR", "VND", "2"))
+    expect(back.ok && back.value.rate).toBe("0.66666666666666666667")
+  })
+
+  it("returns wrong-pair for rates that share no currency, or both", () => {
+    expect(crossRate(rate("EUR", "USD", "1.1"), rate("GBP", "VND", "33000")))
+      .toEqual({ ok: false, error: "wrong-pair" })
+    expect(crossRate(rate("EUR", "USD", "1.1"), rate("USD", "EUR", "0.9")))
+      .toEqual({ ok: false, error: "wrong-pair" })
+  })
+})
+
+describe("signDisplay", () => {
+  it("prints a plus on a positive amount where the locale puts the sign", () => {
+    const sign = { signDisplay: "exceptZero" } as const
+    expect(formatMoney(1200, "EUR", "en", sign)).toBe("+€12.00")
+    expect(formatMoney(-1200, "EUR", "en", sign)).toBe("-€12.00")
+    expect(formatMoney(0, "EUR", "en", sign)).toBe("€0.00")
+    expect(formatMoney(1200, "EUR", "de", sign)).toBe("+12,00\u00a0€")
+    expect(formatMoney(1_000_000, "USDT", "en", { ...sign, decimals: 6 })).toBe(
+      "+USDT\u00a01.000000",
+    )
+    expect(formatMoney(1200, "EUR", "en")).toBe("€12.00")
   })
 })

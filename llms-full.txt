@@ -1507,6 +1507,7 @@ Runs on: server (Deno).
 | `./push-file-store` | `createFilePushSubscriptionStore` — push subscriptions in one JSON file           |
 | `./push-reminders`  | `createReminderNotify`, `reminderPushMessage`, `reminderDeliveryOutcome`          |
 | `./telegram`        | `TelegramClient`, `TelegramBot`, `createTelegramWebhookHandler`, polling          |
+| `./llm`             | `createChatClient`, `chatJson`, `LLM_PRESETS` — JSON from an OpenAI-style API     |
 
 ## Contracts
 
@@ -1814,6 +1815,93 @@ refused before any request, as are a `type`, `unit`, `limit` or time zone Umami 
 - **`checkUmamiWebsite({ baseUrl, token, websiteId })`** says why a website cannot be read:
   `problem` is `settings` (a base address or token that cannot work), `token` (Umami refuses it),
   `website` (an id that is no UUID, or one the working token does not see) or `unreachable`.
+
+### `createChatClient`, `chatJson` — JSON from an OpenAI-compatible model
+
+Sends a conversation to any server that speaks OpenAI's `POST /chat/completions` and returns the
+reply's JSON, checked with an arktype schema. A thin `fetch` wrapper, no SDK.
+
+```ts
+import { chatJson, createChatClient, LLM_PRESETS } from "@spy4x/integrations/llm"
+import { type } from "arktype"
+
+const client = createChatClient({ baseUrl: LLM_PRESETS.deepseek, apiKey, model: `deepseek-flash` })
+const result = await chatJson(client, {
+  messages: [{ role: `user`, content: `Reply in json, like {"amount": 450}: …` }],
+  schema: type({ amount: `number.integer` }),
+  maxTokens: 500,
+  guard, // optional SpendGuard, below
+})
+if (result.success) result.output.value.amount // result.output.usage holds the token counts
+else result.error.code // "truncated", "insufficient-balance", …
+```
+
+**Presets.** `LLM_PRESETS` is data: each entry is the API root `/chat/completions` is appended to,
+whether a key is needed, and which field caps the reply's tokens. `baseUrl` also takes any other
+URL (a key is then required), or a preset spread over another host, such as
+`{ ...LLM_PRESETS.ollama, baseUrl: "http://ollama:11434/v1" }`. Checked on 2026-11-04:
+
+| Preset     | `baseUrl`                                                 | Key | Token cap field         | Source                                                                      |
+| ---------- | --------------------------------------------------------- | --- | ----------------------- | --------------------------------------------------------------------------- |
+| `openai`   | `https://api.openai.com/v1`                               | yes | `max_completion_tokens` | [API reference](https://platform.openai.com/docs/api-reference/chat/create) |
+| `deepseek` | `https://api.deepseek.com`                                | yes | `max_tokens`            | [API docs](https://api-docs.deepseek.com/api/create-chat-completion)        |
+| `gemini`   | `https://generativelanguage.googleapis.com/v1beta/openai` | yes | `max_tokens`            | [OpenAI compatibility](https://aistudio.google.com/docs/openai)             |
+| `ollama`   | `http://localhost:11434/v1`                               | no  | `max_tokens`            | [OpenAI compatibility](https://docs.ollama.com/api/openai-compatibility)    |
+
+OpenAI marks `max_tokens` deprecated and its reasoning models refuse it; DeepSeek documents only
+`max_tokens`. No preset names a default model: names change every few months, so the app sets one.
+
+- **One request, never a retry.** A request that timed out may already be billed; only the caller
+  decides to send it again. `timeoutMs` (default 120 s) covers the request and the reply.
+- **The reply is checked.** Content that is blank (DeepSeek can send spaces with
+  `finish_reason: "stop"`) is `empty-reply`; a reply cut at `maxTokens` is `truncated`; content that
+  is not JSON or fails `schema` is `invalid-reply`, never data. `maxTokens` has no default, because
+  DeepSeek's own is 8K. JSON mode needs the word "json" in a message, so a request without it is
+  refused before it is sent.
+- **Errors.** `401` is `bad-key`, `402` `insufficient-balance`, `429` `rate-limited`, `500`, `502`,
+  `503` and `504` `unavailable`, `400` and `422` `invalid-request`, a redirect `redirected` (never
+  followed), and a timeout `timeout`. No message carries the key, the URL, the prompt or the reply:
+  HTTP failures give the status alone, because a provider's error text can echo the request.
+- **The key.** It is sent only in `Authorization: Bearer`, only over `https` or to `localhost`, and
+  the client object holds neither the key nor the URL, so logging it prints only the model.
+- **Spend guard.** `SpendGuard { reserve(request), record(usage) }` is a port the app implements.
+  `reserve({ model, maxTokens, promptCharacters })` runs before anything is sent; `false`, or a
+  throw, is `over-budget` and no request leaves the host. `record` receives every reply's
+  `{ promptTokens, completionTokens, cacheHitTokens, cacheMissTokens }`, a reply that then fails
+  the schema included, because it was billed. Over `@spy4x/server/quota`, counting tokens:
+
+```ts
+import { QuotaDecision, type QuotaMeter, type QuotaPrincipal } from "@spy4x/server/quota"
+import type { SpendGuard } from "@spy4x/integrations/llm"
+
+const tokenGuard = (meter: QuotaMeter, principal: QuotaPrincipal): SpendGuard => {
+  let reserved = 0
+  let reservedAt: number | undefined
+  return {
+    async reserve({ maxTokens, promptCharacters }) {
+      reserved = maxTokens + Math.ceil(promptCharacters / 2) // a generous token estimate
+      const state = await meter.reserve(principal, reserved)
+      reservedAt = state.reservedAt
+      return state.decision === QuotaDecision.Allowed
+    },
+    async record({ promptTokens, completionTokens }) {
+      const spent = promptTokens + completionTokens
+      if (spent < reserved) await meter.release(principal, reserved - spent, { reservedAt })
+      if (spent > reserved) await meter.record(principal, spent - reserved)
+    },
+  }
+}
+```
+
+**Where DeepSeek keeps the data.** Ask a person's consent before you send DeepSeek anything about
+them. Its [privacy policy](https://cdn.deepseek.com/policies/en-US/deepseek-privacy-policy.html)
+(updated 2026-02-10) says DeepSeek will "directly collect, process and store your Personal Data in
+People's Republic of China". It may use inputs to train its models, with an opt-out by request to
+`privacy@deepseek.com`, and keeps them as long as the account exists. Its
+[Open Platform terms](https://cdn.deepseek.com/policies/en-US/deepseek-open-platform-terms-of-service.html)
+(effective 2026-04-29) are governed by the law of mainland China. DeepSeek's balance is prepaid, so
+a `402` stops spending at zero; for OpenAI, set a project budget limit before use. A self-hosted
+Ollama keeps everything on your own machine.
 
 ### `verifyWebhookRequest`
 
@@ -2435,7 +2523,7 @@ browser- and server-only halves are the other two subpaths.
 | `universal/key-value-store` | `KeyValueStore` — a dependency-free port, the one home for it and for `browser/storage`'s deprecated `StorageLike` and `@spy4x/realtime`'s deprecated `KeyValueStore` alias (#71)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
 | `universal/markdown`        | `renderMarkdown`, `RenderedMarkdown`, `MarkdownHeading`, `renderMarkdownSegments` and its types — Markdown to HTML that is safe on a public page: raw HTML escaped, link and image addresses only `http`, `https`, `mailto` or relative, `rel="noopener noreferrer"` on external links, lazy images, and every heading with a stable `id`, returned for a table of contents. Built on `marked`; import it from `@spy4x/platform/universal/markdown`, the root export does not load it                                                                                                                                                                                                                       |
 | `universal/metrics`         | `Counter`, `MetricLabels`, `createCounter`, `renderPrometheus` — a labelled counter and its Prometheus text exposition; no registry, no histograms                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
-| `universal/money`           | `currencyDecimals`, `formatMoney`, `formatMoneyParts`, `moneyDecimalString`, `parseMoney`, `MoneyOptions` — money as a smallest-unit integer, parsed and formatted without a float step; an optional `{ decimals }` gives the decimals of `USDT` (6) or `BTC` (8), which `Intl` rejects or gets wrong                                                                                                                                                                                                                                                                                                                                                                                                       |
+| `universal/money`           | `currencyDecimals`, `formatMoney`, `formatMoneyParts`, `moneyDecimalString`, `parseMoney`, `MoneyOptions`, `currencies`, `CURRENCIES_PUBLISHED`, `isCurrencyCode`, `currencyCode`, `currencyOptions`, `sumMoney`, `allocate`, `convertMoney`, `crossRate`, `Money`, `ExchangeRate` — money as a smallest-unit integer with no float step; decimals from the ISO 4217 table, the same on every runtime, or `{ decimals }` for `BTC`; sums that refuse mixed currencies and unsafe totals, splits that lose no unit, exact conversion with a dated rate                                                                                                                                                       |
 | `universal/result`          | `Result`, `ok`, `err`, `unwrap`, `unwrapOr`, `CommandEnvelope`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 | `universal/schema`          | `InferSchema` — the only arktype type helper this package needs                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 | `universal/seo`             | `canonicalUrl`, `normalizeCanonical`, `breadcrumbItems`, `breadcrumbListJsonLd`, `faqPageJsonLd`, `blogPostingJsonLd`, `productJsonLd`, `itemListJsonLd`, `jsonLdText`, `sitemapXml`, `rssXml`, `llmsTxt`, `Crumb`, `BreadcrumbListItem`, `BreadcrumbListJsonLd`, `SitemapEntry`, `SitemapAlternate`, `RssChannel`, `RssItem`, `BlogPost`, `BlogPostingJsonLd`, `ProductPage`, `ProductVariant`, `ProductJsonLd`, `ProductGroupJsonLd`, `ItemListJsonLd`, `LlmsTxtDocument` — the canonical address, JSON-LD (articles, FAQs, products and catalog lists), `sitemap.xml` with images and language versions, RSS feed and `llms.txt` a server-rendered site publishes                                        |
@@ -3105,7 +3193,6 @@ else here knows about tasks.
 
 ## Out of scope
 
-- Money and currency (see the dedicated issue).
 - `types`, `config`, `uuid` — still template modules; not re-extracted here.
 - `rate-limit` — issue #4.
 - Preact components and anything that renders markup.
@@ -8374,6 +8461,7 @@ plus an RFC 5545 iCalendar writer and a lossless iCalendar editor. Zero runtime 
 | `time/date`                 | Zone-free arithmetic on `YYYY-MM-DD`: `parseIsoDate`, `formatIsoDate`, `shiftMonth`, `startOfMonth`, `endOfMonth`, `daysInMonth`, `dayInMonth`, `monthFirstWeekday`, `startOfWeek`, quarter and year bounds, `isSameDay`, `isValidDateRange`, `recentIsoDates`, `DateRange` |
 | `time/locale`               | Calendar labels from `Intl`: `localeFirstWeekday`, `monthLabel`, `dayLabel`, `shortDayLabel`, `relativeDayLabel`, `weekdayLabels`, `WeekdayLabel`, `localeOptions` (region formats for a picker)                                                                            |
 | `time/tz`                   | IANA zone helpers: `zonedDateTime`, `resolveWallClock`, `formatInstantLong`, `addDays` (zone optional), `canonicalTimeZone`, `zoneCity`, `zoneOffsetLabel`, `zoneLabel`, `timeZoneOptions` (zones for a picker), …                                                          |
+| `time/period`               | Weeks and months in a time zone: `periodOf`, `currentPeriod`, `shiftPeriod`, `periodSoFar`, `samePartOf`, `periodLabel`, `Period`, `PeriodUnit`                                                                                                                             |
 | `time/format`               | `createFormatters(settings)` — date, time, date-time, day-and-month, exact-to-the-second, relative time and number formatting for a person's region format, time zone and clock, each automatic (the device's) when unset; `.utc()` for the same in UTC; `regionHourCycle`  |
 | `time/ics`                  | `generateIcs(event, options)` — RFC 5545 VCALENDAR/VEVENT writer                                                                                                                                                                                                            |
 | `time/ics-core`             | RFC 5545 wire primitives: `foldLine`, `unfoldLines`, `icsEscape`, …                                                                                                                                                                                                         |
@@ -8447,6 +8535,38 @@ where a zone skipped a whole day: `Pacific/Apia` has no `2011-12-30`, so `addDay
 `@spy4x/platform`'s `normalizeCalendarDate` is not a second copy of `parseIsoDate`: it also accepts
 `YYYY.MM.DD` and returns the normalised string or `null`, where `parseIsoDate` accepts only
 `YYYY-MM-DD`, returns midnight UTC in milliseconds and throws.
+
+## Weeks and months in a zone
+
+`time/period` answers "which month or week is it for this household" and steps from there. Only
+the first step reads a zone: `currentPeriod` takes `now` and a `timeZone` from the caller, so a
+server total and the month a screen shows cover the same days, and a test pins the clock. At
+2026-10-31T17:30Z that is November in `Asia/Ho_Chi_Minh` and October in `Europe/Berlin`. A period
+is an inclusive `DateRange` of plain dates with its `unit`, so stepping across a year or a
+daylight-saving change cannot lose or double a day.
+
+```ts
+import {
+  currentPeriod,
+  periodLabel,
+  periodSoFar,
+  PeriodUnit,
+  samePartOf,
+  shiftPeriod,
+} from "@spy4x/time/period"
+
+const clock = { now: new Date(), timeZone: "Asia/Ho_Chi_Minh" }
+const month = currentPeriod(PeriodUnit.Month, clock) // { from: "2026-11-01", to: "2026-11-30" }
+const soFar = periodSoFar(month, clock) // 1 to 3 November, or null before the month starts
+const before = soFar && samePartOf(shiftPeriod(month, -1), soFar) // 1 to 3 October
+periodLabel(month, "en-GB") // "November 2026"
+periodLabel(currentPeriod(PeriodUnit.Week, { ...clock, firstWeekday: 7 })) // "1–7 Nov 2026"
+```
+
+A week starts on `firstWeekday`, `1` for Monday (the default) to `7` for Sunday; `localeFirstWeekday`
+in `time/locale` reads it from a locale. `samePartOf` stops at the other period's last day, so all
+of March compares with all of February. Quarters, years and months that start on another day than
+the 1st are not here.
 
 ## Why `Intl` and not a date library
 

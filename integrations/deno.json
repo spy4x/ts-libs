@@ -13,6 +13,7 @@
     "./push": "./push.ts",
     "./push-file-store": "./push-file-store.ts",
     "./push-reminders": "./push-reminders.ts",
-    "./telegram": "./telegram.ts"
+    "./telegram": "./telegram.ts",
+    "./llm": "./llm.ts"
   }
 }

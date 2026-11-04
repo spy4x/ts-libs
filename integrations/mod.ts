@@ -88,6 +88,21 @@ export type {
   UmamiWebsiteRead,
 } from "./umami.ts"
 
+export { chatJson, createChatClient, LLM_DEFAULT_TIMEOUT_MS, LLM_PRESETS } from "./llm.ts"
+export type {
+  ChatClient,
+  ChatClientOptions,
+  ChatJsonRequest,
+  ChatJsonResult,
+  ChatMessage,
+  LlmEndpoint,
+  LlmError,
+  LlmErrorCode,
+  LlmUsage,
+  SpendGuard,
+  SpendRequest,
+} from "./llm.ts"
+
 export { NotificationSeverity, NtfyClient, ntfyConfigFromEnv, NtfyPriority } from "./ntfy.ts"
 export type {
   NtfyClientConfig,
