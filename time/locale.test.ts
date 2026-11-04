@@ -5,6 +5,7 @@ import {
   localeFirstWeekday,
   localeOptions,
   monthLabel,
+  monthLabels,
   relativeDayLabel,
   shortDayLabel,
   weekdayLabels,
@@ -87,6 +88,19 @@ describe("monthLabel", () => {
 
   it("honours a locale", () => {
     expect(monthLabel("2026-08-23", "fr-FR")).toBe("août 2026")
+  })
+})
+
+describe("monthLabels", () => {
+  it("returns twelve months from January in the locale's language", () => {
+    const labels = monthLabels("en-US")
+    expect(labels).toHaveLength(12)
+    expect(labels[0]).toEqual({ short: "Jan", long: "January" })
+    expect(labels[8]).toEqual({ short: "Sep", long: "September" })
+  })
+
+  it("names a month as it stands alone, not as part of a date", () => {
+    expect(monthLabels("ru")[8].long).toBe("сентябрь")
   })
 })
 
