@@ -137,6 +137,9 @@
     // `platform/universal/uuid.ts`'s version 7 generator (#541): its stable `./v7` entry builds the
     // id, so the layout is not hand-written.
     "@std/uuid": "jsr:@std/uuid@1.1.2",
+    // `platform/universal/csv.ts`'s reader (#818): RFC 4180 parsing is well solved, so the parser
+    // stays; the reader adds the encoding guess, the delimiter sniff and the size limits.
+    "@std/csv": "jsr:@std/csv@1.0.6",
 
     // HTTP framework. `server/http` (#9) and `platform/rate-limit` (#4)
     // middleware.
