@@ -14,6 +14,7 @@ import {
   writeStderrOver,
 } from "./_runtime-host.ts"
 import {
+  type OsSignal,
   processArgs,
   processEnv,
   processId,
@@ -383,5 +384,14 @@ describe("signalListenersOver", () => {
 
   it("throws on a runtime with neither", () => {
     expect(() => signalListenersOver({})).toThrow("no signals")
+  })
+})
+
+describe("OsSignal", () => {
+  it("names the same signals as Deno.Signal", () => {
+    // Fails to type-check when either list gains a name the other lacks.
+    const fromDeno: OsSignal = "SIGTERM" as Deno.Signal
+    const toDeno: Deno.Signal = "SIGINT" as OsSignal
+    expect([fromDeno, toDeno]).toEqual(["SIGTERM", "SIGINT"])
   })
 })
