@@ -399,8 +399,9 @@ const checkoutForm = (request: CheckoutRequest, priceId: string): URLSearchParam
  *
  * Throws when `secretKey` or `webhookSecret` is missing or blank, or when `plans` is empty, lacks
  * an ID, has an unknown period, maps a price twice, or lists a plan twice without a different period
- * on each listing: each is a configuration error to catch at start-up, not on a customer's checkout. Every other failure is a returned result. It has every optional member of
- * {@link BillingProvider}, so a caller needs no check before the operator actions.
+ * on each listing: each is a configuration error to catch at start-up, not on a customer's checkout.
+ * Every other failure is a returned result. It has every optional member of {@link BillingProvider},
+ * so a caller needs no check before the operator actions.
  */
 export function createStripeBilling(options: StripeBillingOptions): Required<BillingProvider> {
   const secretKey = requireSecret(options?.secretKey, "secretKey")
