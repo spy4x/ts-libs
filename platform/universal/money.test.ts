@@ -402,10 +402,9 @@ describe("the ISO 4217 currency table", () => {
   })
 
   it("still lets a code the table lacks fall back to Intl", () => {
-    expect(currencyDecimals("XXX")).toBe(
-      new Intl.NumberFormat("en", { style: "currency", currency: "XXX" }).resolvedOptions()
-        .maximumFractionDigits,
-    )
+    // The Italian lira is no longer in ISO 4217; Intl still knows it, with no decimals.
+    expect(Object.hasOwn(currencies, "ITL")).toBe(false)
+    expect(currencyDecimals("ITL")).toBe(0)
   })
 })
 
@@ -534,10 +533,11 @@ describe("allocate", () => {
   })
 
   it("refuses no weights, negative or fractional weights, and all-zero weights", () => {
-    for (const weights of [[], [-1, 2], [0.5, 1], [0, 0]]) {
-      expect(() => allocate(100, weights)).toThrow(RangeError)
-    }
-    expect(() => allocate(1.5, [1])).toThrow(RangeError)
+    expect(() => allocate(100, [])).toThrow(/at least one weight/)
+    expect(() => allocate(100, [-1, 2])).toThrow(/safe integer of zero or more/)
+    expect(() => allocate(100, [0.5, 1])).toThrow(/safe integer of zero or more/)
+    expect(() => allocate(100, [0, 0])).toThrow(/a weight above zero/)
+    expect(() => allocate(1.5, [1])).toThrow(/safe integer, got 1.5/)
   })
 })
 
