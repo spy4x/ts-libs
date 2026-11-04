@@ -48,7 +48,8 @@ if (sourceFiles.length === 0) {
 console.log(`Type-checking ${sourceFiles.length} file(s).`)
 
 const command = new Deno.Command("deno", {
-  args: ["check", ...sourceFiles],
+  // `--quiet` drops a "Check <file>" line per file; type errors still print.
+  args: ["check", "--quiet", ...sourceFiles],
   stdin: "null",
   stdout: "inherit",
   stderr: "inherit",

@@ -22,10 +22,11 @@
     "./validation"
   ],
   "tasks": {
+    // Runs `fmt:check`, `lint`, `ts:check` and `test` in parallel and prints only a line per task,
+    // plus the output of a task that failed. See `infra/scripts/check.ts`.
     "check": {
-      "command": "echo 'Checks passed!'",
-      "description": "Run all checks",
-      "dependencies": ["fmt:check", "lint", "ts:check", "test"]
+      "command": "deno run --allow-run=deno infra/scripts/check.ts",
+      "description": "Format, lint, types and the unit tier; quiet unless something fails"
     },
     // Both tiers, unit first — the order issue #74 asks for. `check` itself stays
     // free of Docker so a package PR can be verified on a machine with no
