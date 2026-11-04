@@ -478,13 +478,13 @@ describe("withFallback", () => {
   })
 
   it("asks no further source once every quote has a rate", async () => {
-    const later = exchangeRateApi()
+    const later = spy(exchangeRateApi().source)
     const { fetcher } = stub(() => recorded("frankfurter/saturday-ecb.json"))
-    const chain = withFallback(createFrankfurterRates({ fetch: fetcher }), later.source)
+    const chain = withFallback(createFrankfurterRates({ fetch: fetcher }), later.wrapped)
 
     output(await chain.daily("2026-10-31", "EUR", ["USD", "GBP", "JPY"]))
 
-    assertEquals(later.calls.length, 0)
+    assertEquals(later.asked, [])
   })
 
   it("refuses to be built without a source", () => {
