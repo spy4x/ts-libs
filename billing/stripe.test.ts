@@ -749,7 +749,7 @@ describe("parseEvent: mapping edge cases", () => {
     const payment = await paymentIn("rsd", 12345)
     expect(payment).toMatchObject({ amount: 12345, currency: "RSD", decimals: 2 })
     const { amount, currency, decimals } = payment!
-    expect(formatMoney(amount, currency, "en", { decimals })).toBe(formatMoney(123, "RSD") + ".45")
+    expect(formatMoney(amount, currency, "en", { decimals })).toBe("RSD\u00a0123.45")
   })
 
   it("reports ISK and UGX with two decimals, as Stripe writes them although ISO gives none", async () => {

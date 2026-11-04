@@ -35,7 +35,12 @@
  * @module
  */
 
+import { type Type, type } from "arktype"
+
+import { currencies } from "./money-currencies.ts"
 import { err, ok, type Result } from "./result.ts"
+
+export { currencies, CURRENCIES_PUBLISHED } from "./money-currencies.ts"
 
 /**
  * Optional, additive overrides for {@link formatMoney}, {@link formatMoneyParts},
@@ -47,9 +52,17 @@ import { err, ok, type Result } from "./result.ts"
 export interface MoneyOptions {
   /**
    * How many fraction digits the smallest unit has — `6` for `USDT`, `8` for `BTC`. A whole number
-   * from 0 to 20. When omitted, `Intl` decides, exactly as before this option existed.
+   * from 0 to 20. When omitted, the ISO 4217 table ({@link currencies}) decides, and `Intl` only
+   * for a code the table lacks.
    */
   decimals?: number
+  /**
+   * Whether a positive amount gets a `+`, passed to `Intl.NumberFormat`: `"exceptZero"` prints
+   * `"+€12.00"` for `1200` in `en`, with the sign where the locale puts it, and no sign on zero.
+   * `"auto"`, the default, signs only negative amounts. Read by {@link formatMoney} and
+   * {@link formatMoneyParts}.
+   */
+  signDisplay?: `auto` | `exceptZero`
 }
 
 function checkedDecimals(decimals: number): number {
@@ -74,8 +87,10 @@ function checkedCurrency(currency: string): string {
 /**
  * How many fraction digits `currency` uses, in `locale`'s own currency display rules.
  *
- * Never assume two: the yen (`JPY`) has none, the Kuwaiti dinar (`KWD`) has three. This asks
- * `Intl` rather than hard-coding a table, so a currency this module has never seen still works.
+ * Never assume two: the yen (`JPY`) has none, the Kuwaiti dinar (`KWD`) has three. An ISO 4217
+ * code reads the checked-in table ({@link currencies}), so Deno, Node and Bun give the same answer:
+ * their `Intl` data disagree on 17 codes (`RSD` is 0 on Deno and 2 on Node; ISO says 2). Only a
+ * code the table lacks asks `Intl`, so a code this module has never seen still works.
  *
  * An empty or whitespace-only `currency` throws a `RangeError`, with or without `options.decimals`,
  * and so does every other helper here that takes a code.
@@ -87,6 +102,7 @@ export function currencyDecimals(
 ): number {
   checkedCurrency(currency)
   if (options.decimals !== undefined) return checkedDecimals(options.decimals)
+  if (Object.hasOwn(currencies, currency)) return currencies[currency]
   const { maximumFractionDigits } = new Intl.NumberFormat(locale, {
     style: "currency",
     currency,
@@ -159,7 +175,8 @@ export function formatMoneyParts(
 ): Intl.NumberFormatPart[] {
   const decimals = currencyDecimals(currency, locale, options)
   const digits = moneyDecimalString(amount, decimals) as unknown as number
-  const formatter = moneyFormatter(currency, locale, decimals)
+  const { signDisplay } = options
+  const formatter = moneyFormatter(currency, locale, decimals, signDisplay)
   if (formatter) return formatter.formatToParts(digits)
   // `Intl` rejects the code (`USDT`). Format with the placeholder code `XXX`, so the locale still
   // decides where the currency goes, then print the caller's code in its place.
@@ -169,6 +186,7 @@ export function formatMoneyParts(
     currency: "XXX",
     minimumFractionDigits: decimals,
     maximumFractionDigits: decimals,
+    signDisplay,
   })
   return placeholder.formatToParts(digits).map((part) =>
     part.type === "currency" ? { type: part.type, value: currency } : part
@@ -180,6 +198,7 @@ function moneyFormatter(
   currency: string,
   locale: string,
   decimals: number,
+  signDisplay: MoneyOptions[`signDisplay`],
 ): Intl.NumberFormat | undefined {
   try {
     return new Intl.NumberFormat(locale, {
@@ -187,6 +206,7 @@ function moneyFormatter(
       currency,
       minimumFractionDigits: decimals,
       maximumFractionDigits: decimals,
+      signDisplay,
     })
   } catch {
     return undefined
@@ -379,4 +399,322 @@ function localeMarks(locale: string): { group: string; decimal: string; minus: s
   const decimal = parts.find((part) => part.type === "decimal")?.value ?? "."
   const localeMinus = parts.find((part) => part.type === "minusSign")?.value ?? "-"
   return { group, decimal, minus: Array.from(new Set(["-", "−", localeMinus])) }
+}
+
+/**
+ * Whether `code` is an ISO 4217 currency code in {@link currencies}: `"RSD"` is, `"XYZ"`, `"usd"`
+ * and `"XAU"` (gold, which has no minor unit) are not. Asking whether `Intl.NumberFormat` throws is
+ * no check, because it accepts any three letters.
+ */
+export function isCurrencyCode(code: unknown): code is string {
+  return typeof code === `string` && Object.hasOwn(currencies, code)
+}
+
+/** A `string` that {@link isCurrencyCode} accepts, for an arktype schema. */
+export const currencyCode: Type<string> = type(`string`).narrow((value, ctx) =>
+  isCurrencyCode(value) || ctx.mustBe(`an ISO 4217 currency code like EUR`)
+)
+
+/**
+ * A currency ISO 4217 does not list, such as a crypto coin, that a person adds to a picker. `code`
+ * is 2 to 12 capital letters or digits and must not be an ISO code. `decimals` is a whole number
+ * from 0 to 8: amounts stay plain safe integers, so a coin gets as many decimals as its price
+ * needs, not as many as its chain uses.
+ */
+export interface CustomCurrency {
+  code: string
+  name: string
+  decimals: number
+}
+
+/** One row of a currency picker, from {@link currencyOptions}. */
+export interface CurrencyOption {
+  code: string
+  /** The name in the display locale: `"Euro"` in `en`, `"евро"` in `ru`. */
+  name: string
+  /** The symbol the display locale prints for it, as {@link formatMoney} does: `"€"`, `"CA$"`. */
+  symbol: string
+  decimals: number
+  /**
+   * More words a search should match: the code, the English name, and the symbol in its default
+   * and narrow forms, without repeats and without `name` itself. Shaped for `searchEntries` in
+   * `universal/text`, with `name` as the label.
+   */
+  aliases: string[]
+}
+
+const CUSTOM_CODE = /^[A-Z0-9]{2,12}$/
+const MAX_CUSTOM_DECIMALS = 8
+
+/**
+ * Every ISO 4217 currency in {@link currencies} as a picker row, plus `extra`, sorted by name in
+ * `displayLocale`. Names and symbols come from `Intl`, because they are display, not stored data;
+ * decimals come from the table, or from the custom currency.
+ *
+ * @throws {RangeError} When a custom currency has a code that is not 2 to 12 capital letters or
+ * digits, an ISO code, a code given twice, a blank name, or decimals that are not 0 to 8.
+ */
+export function currencyOptions(
+  displayLocale: string,
+  extra: readonly CustomCurrency[] = [],
+): CurrencyOption[] {
+  const names = new Intl.DisplayNames(displayLocale, { type: `currency` })
+  const englishNames = new Intl.DisplayNames(`en`, { type: `currency` })
+  const rows = Object.entries(currencies).map(([code, decimals]): CurrencyOption => {
+    const name = names.of(code) ?? code
+    const symbol = currencySymbol(code, displayLocale, `symbol`)
+    const narrow = currencySymbol(code, displayLocale, `narrowSymbol`)
+    const aliases = [code, englishNames.of(code) ?? code, symbol, narrow]
+    return { code, name, symbol, decimals, aliases: distinctAliases(aliases, name) }
+  })
+  const seen = new Set<string>()
+  for (const custom of extra) {
+    const { code, name, decimals } = custom
+    if (!CUSTOM_CODE.test(code)) {
+      throw new RangeError(
+        `a custom currency code is 2 to 12 capital letters or digits, got ${code}`,
+      )
+    }
+    if (isCurrencyCode(code)) throw new RangeError(`${code} is an ISO 4217 code, not a custom one`)
+    if (seen.has(code)) throw new RangeError(`custom currency ${code} is given twice`)
+    if (name.trim() === ``) throw new RangeError(`custom currency ${code} needs a name`)
+    if (!Number.isInteger(decimals) || decimals < 0 || decimals > MAX_CUSTOM_DECIMALS) {
+      throw new RangeError(`custom currency decimals must be 0 to 8, got ${decimals} for ${code}`)
+    }
+    seen.add(code)
+    rows.push({ code, name, symbol: code, decimals, aliases: distinctAliases([code], name) })
+  }
+  const collator = new Intl.Collator(displayLocale)
+  return rows.sort((a, b) => collator.compare(a.name, b.name) || collator.compare(a.code, b.code))
+}
+
+function currencySymbol(code: string, locale: string, display: `symbol` | `narrowSymbol`): string {
+  return new Intl.NumberFormat(locale, {
+    style: `currency`,
+    currency: code,
+    currencyDisplay: display,
+  })
+    .formatToParts(0).find((part) => part.type === `currency`)?.value ?? code
+}
+
+function distinctAliases(aliases: string[], name: string): string[] {
+  return [...new Set(aliases)].filter((alias) => alias !== name)
+}
+
+/** An amount in `currency`'s smallest unit: `{ amount: 1250, currency: "EUR" }` is €12.50. */
+export interface Money {
+  amount: number
+  currency: string
+}
+
+/**
+ * Why {@link sumMoney} gave no total: an item in another currency, or a total past
+ * `Number.MAX_SAFE_INTEGER` (either sign), which a `number` could no longer hold exactly.
+ */
+export type SumMoneyError = `mixed-currencies` | `unsafe-sum`
+
+/**
+ * The total of `items`, all in `currency`. Yen in a dollar sum is `err("mixed-currencies")`, never
+ * a number: convert first. The sum is exact, and a total past `Number.MAX_SAFE_INTEGER` is
+ * `err("unsafe-sum")` instead of a silently rounded number. An empty list sums to `0`.
+ *
+ * @throws {Error} When an item's amount is not a safe integer, a programming error.
+ */
+export function sumMoney(items: readonly Money[], currency: string): Result<number, SumMoneyError> {
+  checkedCurrency(currency)
+  let total = 0n
+  for (const item of items) {
+    if (item.currency !== currency) return err(`mixed-currencies`)
+    total += BigInt(safeAmount(item.amount))
+  }
+  return isSafeBigInt(total) ? ok(Number(total)) : err(`unsafe-sum`)
+}
+
+/**
+ * Split `amount` into parts proportional to `weights`, by largest remainder: each part is its
+ * share rounded down, then the units left over go one each to the parts with the largest
+ * remainders, ties to the earlier part. The parts always add up to `amount` exactly.
+ * `allocate(1000, [1, 1, 1])` is `[334, 333, 333]`; a negative amount splits the same way with
+ * every part negated, so `allocate(-1000, [1, 1, 1])` is `[-334, -333, -333]`.
+ *
+ * @throws {RangeError} When `amount` is not a safe integer, `weights` is empty, a weight is not a
+ * safe integer of zero or more, or every weight is zero.
+ */
+export function allocate(amount: number, weights: readonly number[]): number[] {
+  if (!Number.isSafeInteger(amount)) {
+    throw new RangeError(`money amount must be a safe integer, got ${amount}`)
+  }
+  if (weights.length === 0) throw new RangeError(`allocate needs at least one weight`)
+  for (const weight of weights) {
+    if (!Number.isSafeInteger(weight) || weight < 0) {
+      throw new RangeError(`a weight must be a safe integer of zero or more, got ${weight}`)
+    }
+  }
+  const total = weights.reduce((sum, weight) => sum + BigInt(weight), 0n)
+  if (total === 0n) throw new RangeError(`allocate needs a weight above zero`)
+  const magnitude = BigInt(Math.abs(amount))
+  const parts = weights.map((weight) => magnitude * BigInt(weight) / total)
+  const remainders = weights.map((weight) => magnitude * BigInt(weight) % total)
+  let left = magnitude - parts.reduce((sum, part) => sum + part, 0n)
+  const order = weights.map((_, index) => index).sort((a, b) =>
+    remainders[a] === remainders[b] ? a - b : remainders[a] > remainders[b] ? -1 : 1
+  )
+  for (let k = 0; left > 0n; k++, left--) parts[order[k]]++
+  return parts.map((part) => part === 0n ? 0 : Number(amount < 0 ? -part : part))
+}
+
+/**
+ * One `base` buys `rate` of `quote`, as published by `source` for `date`. `rate` is a plain decimal
+ * string such as `"27500.5"` or `"0.000012907"`, never a `number`, so no float step touches it.
+ * `date` is a calendar date, `YYYY-MM-DD`.
+ */
+export interface ExchangeRate {
+  base: string
+  quote: string
+  rate: string
+  date: string
+  source: string
+}
+
+/**
+ * Why {@link convertMoney} gave no amount: no rate at all, a rate for another pair of currencies,
+ * or a result past `Number.MAX_SAFE_INTEGER`.
+ */
+export type ConvertError = `no-rate` | `wrong-pair` | `unsafe`
+
+/**
+ * The decimals of each side of {@link convertMoney}, for a currency the ISO table lacks (a crypto
+ * coin), the same as `MoneyOptions.decimals`.
+ */
+export interface ConvertMoneyOptions {
+  fromDecimals?: number
+  toDecimals?: number
+}
+
+/**
+ * `amount` in `from`'s smallest unit, converted to `to`'s smallest unit with `rate`, which may be
+ * quoted either way round (`EUR`→`VND` also converts `VND` to `EUR`). The arithmetic is exact
+ * (`BigInt`), and the result is rounded once at the end, half away from zero: half a cent becomes
+ * one cent, minus half a cent becomes minus one. The same currency on both sides returns `amount`.
+ *
+ * A missing rate is `err("no-rate")`, never `0`; a rate for another pair is `err("wrong-pair")`; a
+ * result past `Number.MAX_SAFE_INTEGER` is `err("unsafe")`.
+ *
+ * @throws {RangeError} When `amount` is not a safe integer, a code is blank, or `rate` is
+ * malformed: a rate that is not a decimal string above zero, or a date that is not `YYYY-MM-DD`.
+ */
+export function convertMoney(
+  amount: number,
+  from: string,
+  to: string,
+  rate: ExchangeRate | null | undefined,
+  options: ConvertMoneyOptions = {},
+): Result<number, ConvertError> {
+  if (!Number.isSafeInteger(amount)) {
+    throw new RangeError(`money amount must be a safe integer, got ${amount}`)
+  }
+  const fromDecimals = currencyDecimals(from, `en`, { decimals: options.fromDecimals })
+  const toDecimals = currencyDecimals(to, `en`, { decimals: options.toDecimals })
+  if (from === to) return ok(amount)
+  if (!rate) return err(`no-rate`)
+  const [rateUnits, rateScale] = rateFraction(rate)
+  let numerator = BigInt(amount) * 10n ** BigInt(toDecimals)
+  let denominator = 10n ** BigInt(fromDecimals)
+  if (rate.base === from && rate.quote === to) {
+    numerator *= rateUnits
+    denominator *= rateScale
+  } else if (rate.base === to && rate.quote === from) {
+    numerator *= rateScale
+    denominator *= rateUnits
+  } else {
+    return err(`wrong-pair`)
+  }
+  const result = divideHalfAwayFromZero(numerator, denominator)
+  return isSafeBigInt(result) ? ok(Number(result)) : err(`unsafe`)
+}
+
+/** Significant digits of a rate {@link crossRate} derives: past any safe amount's last unit. */
+const CROSS_RATE_DIGITS = 20
+
+/**
+ * The rate between the two other currencies of two rates that share one: from `EUR`→`USD` and
+ * `EUR`→`VND` it derives `USD`→`VND`, `left`'s other currency as the base and `right`'s as the
+ * quote. Either rate may be quoted either way round. Its `date` is the older of the two, and its
+ * `source` is the one source, or both joined by `", "`. The derived rate is rounded half away from
+ * zero to 20 significant digits, far below a unit of any safe amount.
+ *
+ * Rates that share no currency, or both, are `err("wrong-pair")`.
+ *
+ * @throws {RangeError} When either rate is malformed, as in {@link convertMoney}.
+ */
+export function crossRate(
+  left: ExchangeRate,
+  right: ExchangeRate,
+): Result<ExchangeRate, `wrong-pair`> {
+  const [leftUnits, leftScale] = rateFraction(left)
+  const [rightUnits, rightScale] = rateFraction(right)
+  const shared = [left.base, left.quote].filter((code) =>
+    code === right.base || code === right.quote
+  )
+  if (shared.length !== 1) return err(`wrong-pair`)
+  const [common] = shared
+  // Each side as "one `common` buys this much of the other currency", a fraction of two integers.
+  const [aUnits, aScale] = left.base === common ? [leftUnits, leftScale] : [leftScale, leftUnits]
+  const [bUnits, bScale] = right.base === common
+    ? [rightUnits, rightScale]
+    : [rightScale, rightUnits]
+  return ok({
+    base: left.base === common ? left.quote : left.base,
+    quote: right.base === common ? right.quote : right.base,
+    rate: significantDecimal(bUnits * aScale, bScale * aUnits, CROSS_RATE_DIGITS),
+    date: left.date < right.date ? left.date : right.date,
+    source: left.source === right.source ? left.source : `${left.source}, ${right.source}`,
+  })
+}
+
+const RATE_PATTERN = /^(\d+)(?:\.(\d+))?$/
+const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/
+
+/** `rate.rate` as the integer fraction `[units, scale]`, after checking the whole rate. */
+function rateFraction(rate: ExchangeRate): [bigint, bigint] {
+  checkedCurrency(rate.base)
+  checkedCurrency(rate.quote)
+  const match = RATE_PATTERN.exec(rate.rate)
+  const units = match ? BigInt(match[1] + (match[2] ?? ``)) : 0n
+  if (!match || units === 0n) {
+    throw new RangeError(`an exchange rate is a decimal string above zero, got ${rate.rate}`)
+  }
+  if (!DATE_PATTERN.test(rate.date)) {
+    throw new RangeError(`an exchange rate date is YYYY-MM-DD, got ${rate.date}`)
+  }
+  return [units, 10n ** BigInt(match[2]?.length ?? 0)]
+}
+
+function isSafeBigInt(value: bigint): boolean {
+  const max = BigInt(Number.MAX_SAFE_INTEGER)
+  return value <= max && value >= -max
+}
+
+/** `numerator / denominator` rounded half away from zero; `denominator` is above zero. */
+function divideHalfAwayFromZero(numerator: bigint, denominator: bigint): bigint {
+  const magnitude = numerator < 0n ? -numerator : numerator
+  let quotient = magnitude / denominator
+  if ((magnitude % denominator) * 2n >= denominator) quotient++
+  return numerator < 0n ? -quotient : quotient
+}
+
+/**
+ * The positive fraction `numerator / denominator` as a decimal string with at least `digits`
+ * significant digits, rounded half away from zero, without trailing zeros: `(1n, 3n, 4)` is
+ * `"0.3333"`.
+ */
+function significantDecimal(numerator: bigint, denominator: bigint, digits: number): string {
+  const floor = 10n ** BigInt(digits - 1)
+  let places = 0
+  while (numerator * 10n ** BigInt(places) / denominator < floor) places++
+  const scaled = divideHalfAwayFromZero(numerator * 10n ** BigInt(places), denominator)
+  const text = scaled.toString().padStart(places + 1, `0`)
+  const cut = text.length - places
+  const fraction = text.slice(cut).replace(/0+$/, ``)
+  return fraction === `` ? text.slice(0, cut) : `${text.slice(0, cut)}.${fraction}`
 }
