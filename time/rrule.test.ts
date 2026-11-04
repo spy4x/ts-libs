@@ -813,9 +813,14 @@ Deno.test(`the owner's 18 Tasks.org rules all parse, step and describe`, async (
   }
 })
 
-Deno.test(`time/rrule and its local imports use web-platform APIs only`, async () => {
+Deno.test(`time/rrule, its catalogs and their local imports use web-platform APIs only`, async () => {
   const seen = new Set<string>()
-  const queue = [new URL(`./rrule.ts`, import.meta.url)]
+  const queue = [
+    new URL(`./rrule.ts`, import.meta.url),
+    ...[`ar`, `de`, `es`, `fr`, `ja`, `pt-BR`, `ru`, `zh-CN`].map((language) =>
+      new URL(`./rrule-words/${language}.ts`, import.meta.url)
+    ),
+  ]
   while (queue.length > 0) {
     const url = queue.pop()!
     if (seen.has(url.href)) continue
@@ -831,8 +836,8 @@ Deno.test(`time/rrule and its local imports use web-platform APIs only`, async (
   }
   assertEquals(
     seen.size,
-    8,
-    `rrule.ts, ical.ts, ical-timezone.ts, windows-zones.ts, ics-core.ts, tz.ts, formatter-cache.ts and date.ts`,
+    18,
+    `rrule.ts, ical.ts, ical-timezone.ts, windows-zones.ts, ics-core.ts, tz.ts, formatter-cache.ts, date.ts, locale.ts and the nine catalogs`,
   )
 })
 

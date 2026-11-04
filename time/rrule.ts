@@ -28,6 +28,8 @@ import { IcalDateKind, type IcalDateValue, resolveInstant } from "./ical.ts"
 import { formatIsoDate, parseIsoDate } from "./date.ts"
 import { wallMs } from "./ical-timezone.ts"
 import { isoDateInTz, isValidTimeZone } from "./tz.ts"
+import { dayLabel, localeFirstWeekday, monthLabels, weekdayLabels } from "./locale.ts"
+import en from "./rrule-words/en.ts"
 
 /** How often the rule repeats. Hourly and finer frequencies are outside the subset. */
 export enum RruleFreq {
@@ -775,82 +777,140 @@ export function occurrencesBetween(
   return status === `limit` ? searchLimit() : ok(found)
 }
 
-// ---- English label -----------------------------------------------------------------------------
+// ---- label ------------------------------------------------------------------------------------
 
-const WEEKDAY_NAMES = [`Mon`, `Tue`, `Wed`, `Thu`, `Fri`, `Sat`, `Sun`]
-const WEEKDAY_LONG = [`Monday`, `Tuesday`, `Wednesday`, `Thursday`, `Friday`, `Saturday`, `Sunday`]
-const MONTH_NAMES = [
-  `Jan`,
-  `Feb`,
-  `Mar`,
-  `Apr`,
-  `May`,
-  `Jun`,
-  `Jul`,
-  `Aug`,
-  `Sep`,
-  `Oct`,
-  `Nov`,
-  `Dec`,
-]
-const ORDINAL_WORDS = [`first`, `second`, `third`, `fourth`, `fifth`]
-
-function joinAnd(items: string[]): string {
-  return items.length < 2
-    ? items.join(``)
-    : `${items.slice(0, -1).join(`, `)} and ${items[items.length - 1]}`
-}
-
-function ordinalWord(n: number): string {
-  return n > 0 ? ORDINAL_WORDS[n - 1]! : n === -1 ? `last` : `${ORDINAL_WORDS[-n - 1]} to last`
-}
-
-function ordinalNumber(n: number): string {
-  const tail = n % 100
-  const suffix = tail >= 11 && tail <= 13 ? `th` : ([`th`, `st`, `nd`, `rd`][n % 10] ?? `th`)
-  return `${n}${suffix}`
-}
+/** A key of the catalogs in `./rrule-words/`, which `describeRrule` asks its words for. */
+export type RruleWordKey = keyof typeof en
 
 /**
- * An English label for the rule, such as `Every 2 weeks on Mon, Thu`, `Monthly on the last
- * Friday` or `Daily, 5 times`. It describes the rule only; the start value supplies the time of
- * day and, when the rule names no day, the day.
+ * The words {@link describeRrule} writes in. A `Translator` from `@spy4x/platform/universal/i18n`
+ * fits, made with `createTranslator({ language, catalogs: [{ source: en, translation }] })` from
+ * the catalogs `@spy4x/time/rrule-words/<language>` ships for en, ru, es, de, pt-BR, ar, fr, ja
+ * and zh-CN; an app may add its own catalog on top for another language.
  */
-export function describeRrule(rule: Rrule): string {
-  const unit = [``, `day`, `week`, `month`, `year`][rule.freq]!
-  const every = rule.interval === 1
-    ? [``, `Daily`, `Weekly`, `Monthly`, `Yearly`][rule.freq]!
-    : `Every ${rule.interval} ${unit}s`
-  let text = every
-  const monthDay = rule.byMonthDay.length
-    ? joinAnd(
-      [...rule.byMonthDay].sort((a, b) => (a > 0 === b > 0 ? a - b : b - a)).map((n) =>
-        n === -1 ? `the last day` : n < 0 ? `the ${ordinalNumber(-n)} to last day` : `day ${n}`
-      ),
+export interface RruleWords {
+  /** The BCP 47 tag `Intl` writes weekday and month names, lists, numbers and dates in. */
+  readonly language: string
+  /** The message for `key`, with `{name}` placeholders filled in; `count` picks the plural form. */
+  t(key: RruleWordKey, values?: { readonly [name: string]: string | number }): string
+}
+
+type EnglishMessage = string | { readonly one: string; readonly other: string }
+
+/** The default words: the English catalog, numbers as plain digits, as the label always read. */
+const ENGLISH: RruleWords = {
+  language: `en`,
+  t(key, values = {}) {
+    const message: EnglishMessage = en[key]
+    const text = typeof message === `string`
+      ? message
+      : values.count === 1
+      ? message.one
+      : message.other
+    return text.replace(
+      /\{(\w+)\}/g,
+      (whole, name: string) => Object.hasOwn(values, name) ? String(values[name]) : whole,
     )
-    : ``
+  },
+}
+
+const FREQ_KEYS = [``, `daily`, `weekly`, `monthly`, `yearly`] as const
+const UNIT_KEYS = [``, `days`, `weeks`, `months`, `years`] as const
+const WEEKDAY_KEYS = [
+  `monday`,
+  `tuesday`,
+  `wednesday`,
+  `thursday`,
+  `friday`,
+  `saturday`,
+  `sunday`,
+] as const
+const GENDERS = new Set([`masculine`, `feminine`, `neuter`])
+
+/**
+ * A label for the rule, such as `Every 2 weeks on Mon, Thu`, `Monthly on the last Friday` or
+ * `Daily, 5 times`. It describes the rule only; the start value supplies the time of day and, when
+ * the rule names no day, the day. `BYMONTHDAY=31` reads `on day 31` and `BYMONTHDAY=-1` reads
+ * `on the last day`, so the two never look alike.
+ *
+ * Without `words` the label is English, worded as it always was. With `words` it is in that
+ * translator's language, such as `Ежемесячно, 1-го числа`: weekday and month names come from `Intl`
+ * through `./locale.ts`, lists from `Intl.ListFormat`, and `UNTIL` is written as `Intl` writes a
+ * date in the language.
+ */
+export function describeRrule(rule: Rrule, words: RruleWords = ENGLISH): string {
+  const { language } = words
+  const t = (key: string, values?: { readonly [name: string]: string | number }) =>
+    words.t(key as RruleWordKey, values)
+  // The English label has always joined three items without a serial comma, as `en-GB` does.
+  const fullList = new Intl.ListFormat(words === ENGLISH ? `en-GB` : language)
+  const shortList = new Intl.ListFormat(language, { type: `conjunction`, style: `narrow` })
+  const weekdays = weekdayLabels(language)
+  const firstWeekday = localeFirstWeekday(language)
+  const weekday = (day: RruleWeekday) => weekdays[(day - firstWeekday + 7) % 7]!
+  const ordinalRules = new Intl.PluralRules(language, { type: `ordinal` })
+  const ordinal = (n: number) => {
+    const category = ordinalRules.select(n)
+    const form = category === `one` || category === `two` || category === `few` ? category : `other`
+    return t(`ordinalNumber.${form}`, { number: n })
+  }
+
+  let text = rule.interval === 1
+    ? t(`freq.${FREQ_KEYS[rule.freq]}`)
+    : t(`interval.${UNIT_KEYS[rule.freq]}`, { count: rule.interval })
+
   const hasOrdinal = rule.byDay.some((entry) => entry.ordinal !== undefined)
   if (hasOrdinal) {
-    const days = rule.byDay.map((entry) =>
-      entry.ordinal === undefined
-        ? `every ${WEEKDAY_LONG[entry.weekday - 1]}`
-        : `the ${ordinalWord(entry.ordinal)} ${WEEKDAY_LONG[entry.weekday - 1]}`
-    )
-    text += ` on ${joinAnd(days)}`
+    const days = rule.byDay.map((entry) => {
+      const gender = t(`gender.${WEEKDAY_KEYS[entry.weekday - 1]}`)
+      return t(`nth.${entry.ordinal ?? `every`}.${GENDERS.has(gender) ? gender : `masculine`}`, {
+        weekday: weekday(entry.weekday).long,
+      })
+    })
+    text = t(`on.nthWeekdays`, { rule: text, days: fullList.format(days) })
   } else if (rule.byDay.length) {
-    const names = [...rule.byDay].sort((a, b) => a.weekday - b.weekday)
-      .map((entry) => WEEKDAY_NAMES[entry.weekday - 1]!)
-    text += rule.freq === RruleFreq.Weekly
-      ? ` on ${names.join(`, `)}`
-      : ` on every ${names.join(`, `)}`
+    const days = shortList.format(
+      [...rule.byDay].sort((a, b) => a.weekday - b.weekday).map((entry) =>
+        weekday(entry.weekday).short
+      ),
+    )
+    text = t(rule.freq === RruleFreq.Weekly ? `on.weekdays` : `on.everyWeekday`, {
+      rule: text,
+      days,
+    })
   }
-  if (monthDay) text += rule.byDay.length ? ` when it is ${monthDay}` : ` on ${monthDay}`
+  if (rule.byMonthDay.length) {
+    const days = fullList.format(
+      [...rule.byMonthDay].sort((a, b) => (a > 0 === b > 0 ? a - b : b - a)).map((n) =>
+        n === -1
+          ? t(`monthDay.last`)
+          : n < 0
+          ? t(`monthDay.fromEnd`, { nth: ordinal(-n) })
+          : t(`monthDay`, { day: n })
+      ),
+    )
+    text = t(rule.byDay.length ? `when.monthDays` : `on.monthDays`, { rule: text, days })
+  }
   if (rule.byMonth.length) {
-    text += ` in ${
-      [...rule.byMonth].sort((a, b) => a - b).map((m) => MONTH_NAMES[m - 1]).join(`, `)
-    }`
+    const names = monthLabels(language)
+    const months = shortList.format(
+      [...rule.byMonth].sort((a, b) => a - b).map((month) => names[month - 1]!.short),
+    )
+    text = t(`in.months`, { rule: text, months })
   }
-  if (rule.count !== undefined) text += `, ${rule.count} ${rule.count === 1 ? `time` : `times`}`
-  if (rule.until) text += `, until ${rule.until.date}`
+  if (rule.count !== undefined) text = t(`count`, { rule: text, count: rule.count })
+  if (rule.until) {
+    const { date } = rule.until
+    text = t(`until`, { rule: text, date: words === ENGLISH ? date : untilLabel(date, language) })
+  }
   return text
+}
+
+/** `UNTIL`'s date as the language writes it, or as it stands when `Intl` cannot read it. */
+function untilLabel(date: string, language: string): string {
+  try {
+    return dayLabel(date, language)
+  } catch {
+    return date
+  }
 }
