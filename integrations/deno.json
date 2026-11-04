@@ -14,6 +14,10 @@
     "./push-file-store": "./push-file-store.ts",
     "./push-reminders": "./push-reminders.ts",
     "./telegram": "./telegram.ts",
-    "./llm": "./llm.ts"
+    "./llm": "./llm.ts",
+    "./exchange-rates": "./exchange-rates.ts"
+  },
+  "publish": {
+    "exclude": ["fixtures"]
   }
 }

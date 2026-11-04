@@ -88,6 +88,27 @@ export type {
   UmamiWebsiteRead,
 } from "./umami.ts"
 
+export {
+  COINGECKO_COINS,
+  createCoinGeckoRates,
+  createExchangeRateApiRates,
+  createFrankfurterRates,
+  FRANKFURTER_URL,
+  withFallback,
+} from "./exchange-rates.ts"
+export type {
+  CoinGeckoPlan,
+  CoinGeckoRatesOptions,
+  ExchangeRateApiRatesOptions,
+  ExchangeRateClientOptions,
+  ExchangeRateSource,
+  FrankfurterRatesOptions,
+  Rates,
+  RatesError,
+  RatesErrorCode,
+  RatesResult,
+} from "./exchange-rates.ts"
+
 export { chatJson, createChatClient, LLM_DEFAULT_TIMEOUT_MS, LLM_PRESETS } from "./llm.ts"
 export type {
   ChatClient,
