@@ -55,7 +55,11 @@
     // the unit run would pick up the integration suite and fail with no container.
     // `.volumes` is named here as well because `--ignore` replaces the root `exclude` for this
     // run instead of adding to it; without it a `*.test.ts` under `.volumes` would be run.
-    "test": "deno test --no-prompt --unstable-kv --allow-read --allow-env --ignore=**/*.integration.test.ts,**/*.vips.test.ts,.volumes",
+    //
+    // `platform/universal/core-bundle.test.ts` runs on its own, with `--allow-run=deno` added: it
+    // runs `deno bundle` to prove the `money-core` and `color-core` subpaths carry no arktype into
+    // a browser bundle (#863). No other test gets that grant.
+    "test": "deno test --no-prompt --unstable-kv --allow-read --allow-env --ignore=**/*.integration.test.ts,**/*.vips.test.ts,.volumes,platform/universal/core-bundle.test.ts && deno test --no-prompt --allow-read --allow-env --allow-run=deno platform/universal/core-bundle.test.ts",
     // The integration tier. The glob is the only thing that selects it, so a file
     // joins the tier by its name alone.
     //
@@ -224,6 +228,7 @@
       "server/__fixtures__",
       "server/env-age64/__fixtures__",
       "platform/server/_fake-fs.ts",
+      "platform/universal/testdata",
       "server/db/testing"
     ]
   }
