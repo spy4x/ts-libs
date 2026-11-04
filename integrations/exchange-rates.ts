@@ -326,12 +326,14 @@ export const createFrankfurterRates = (
         if (isFailure(reply)) return reply
         if (reply.status === 422) {
           const refusal = FrankfurterRefusal(reply.body)
-          const code = refusal instanceof type.errors
-            ? undefined
-            : /^invalid currency: (\S+)$/.exec(refusal.message)?.[1]
-          if (code === base) return found([], asked, base)
-          if (code !== undefined && pending.includes(code)) {
-            pending = pending.filter((quote) => quote !== code)
+          // One refusal names every unknown currency, comma-separated: `invalid currency: DOGE,ADA`.
+          const codes = refusal instanceof type.errors
+            ? []
+            : (/^invalid currency: (.+)$/.exec(refusal.message)?.[1] ?? "").split(",")
+              .map((code) => code.trim())
+          if (codes.includes(base)) return found([], asked, base)
+          if (codes.some((code) => pending.includes(code))) {
+            pending = pending.filter((quote) => !codes.includes(quote))
             continue
           }
         }

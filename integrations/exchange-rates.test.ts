@@ -144,6 +144,31 @@ describe("createFrankfurterRates", () => {
     assertEquals(future, { rates: [], missing: ["USD"] })
   })
 
+  it("lists every currency one refusal names as missing and asks again for the rest", async () => {
+    const replies = [
+      () => recorded("frankfurter/invalid-currencies.json", 422),
+      () => recorded("frankfurter/ecb-lacks-vnd-aed.json"),
+    ]
+    const { calls, fetcher } = stub((_url, index) => replies[index]())
+    const source = createFrankfurterRates({ providers: ["ECB"], fetch: fetcher })
+
+    const day = output(await source.daily("2026-10-30", "EUR", ["USD", "DOGE", "ADA"]))
+
+    assertEquals(calls.map((call) => call.url.searchParams.get("quotes")), ["USD,DOGE,ADA", "USD"])
+    assertEquals(day.rates.map((rate) => rate.quote), ["USD"])
+    assertEquals(day.missing, ["DOGE", "ADA"])
+  })
+
+  it("lists every quote as missing when one refusal names the base and a quote", async () => {
+    const { calls, fetcher } = stub(() => recorded("frankfurter/invalid-base-and-quote.json", 422))
+    const source = createFrankfurterRates({ fetch: fetcher })
+
+    const day = output(await source.daily("2026-10-30", "XXX", ["USD", "YYY"]))
+
+    assertEquals(calls.length, 1)
+    assertEquals(day, { rates: [], missing: ["USD", "YYY"] })
+  })
+
   it("calls a self-hosted Frankfurter at its baseUrl", async () => {
     const { calls, fetcher } = stub(() => recorded("frankfurter/no-rates.json"))
     const source = createFrankfurterRates({
