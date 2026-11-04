@@ -148,10 +148,10 @@ Runs on: server (Deno).
 
 ## Entry points
 
-| Export         | What it is                                                                                                 |
-| -------------- | ---------------------------------------------------------------------------------------------------------- |
-| `.` (`mod.ts`) | `BillingProvider`, `BillingEvent`, `SubscriptionStatus`, `RefundStatus`, `PlanRef`, and the Stripe adapter |
-| `./stripe`     | `createStripeBilling`, `STRIPE_API_VERSION`, `STRIPE_SIGNATURE_HEADER`                                     |
+| Export         | What it is                                                                                                                  |
+| -------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| `.` (`mod.ts`) | `BillingProvider`, `BillingEvent`, `SubscriptionStatus`, `RefundStatus`, `BillingPeriod`, `PlanRef`, and the Stripe adapter |
+| `./stripe`     | `createStripeBilling`, `STRIPE_API_VERSION`, `STRIPE_SIGNATURE_HEADER`                                                      |
 
 ## Usage
 
@@ -211,6 +211,16 @@ await billing.cancelNow({ subscriptionId, idempotencyKey })
   `createPortalSession` and `parseEvent`, and the optional operator actions below, which
   `createStripeBilling` always has (its return type is `Required<BillingProvider>`). The app names plans by its own IDs; `PlanRef` maps each
   to the provider's price. A price in no `PlanRef` comes back as `planId: null`.
+- **Monthly and yearly.** A plan sold for several periods is listed once per period, each listing
+  with its own price and a `period` (`BillingPeriod.Monthly` or `BillingPeriod.Yearly`):
+  `[{ planId: "pro", priceId: "price_m…", period: BillingPeriod.Monthly }, { planId: "pro",
+  priceId: "price_y…", period: BillingPeriod.Yearly }]`. `createCheckout({ planId, period })` bills
+  that period's price; a plan listed for several periods needs `period` (`invalid_request`
+  without), and a period the plan is not listed for is `unknown_plan`. `Subscription.period` is the
+  period of the listing that maps the price Stripe reports, never the one the checkout asked for,
+  and is absent for a price in no `PlanRef` or in one without a period. A plan listed once may leave
+  `period` out and behaves as before; a plan listed twice for one period, or twice with a listing
+  that has none, throws at start-up.
 - **Seats.** `updateQuantity({ subscriptionId, quantity, idempotencyKey })` sets how many seats the
   plan's item bills, for per-seat pricing. The change adds a charge or a credit for the rest of
   the current period to the next invoice; nothing is charged now (Stripe's
