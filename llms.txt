@@ -2508,6 +2508,7 @@ isPathInsideRoot	function	@spy4x/server/static	True when `candidate` is inside `
 nodeStaticFs	constant	@spy4x/server/static	Filesystem implementation over `node:fs/promises`, for Node and Bun (Bun implements Node's `fs`).
 resolveStaticPath	function	@spy4x/server/static	Join a request pathname to a static root, refusing anything that could escape it.
 runtimeStaticFs	constant	@spy4x/server/static	The files of the running runtime: denoStaticFs on Deno, nodeStaticFs on Node and Bun.
+serveFile	function	@spy4x/server/static	Answer `request` with the file at `path`, on Deno, Node and Bun: the runtime-neutral counterpart of `serveFile` from `@std/http/file-server`.
 serveStatic	function	@spy4x/server/static	Serve one request path from the static root.
 BucketStorage	interface	@spy4x/server/storage	A `FileStorage` provider bound to one bucket, with the bucket argument removed.
 DEFAULT_EXPIRES_IN_SECONDS	constant	@spy4x/server/storage	Fallback URL lifetime, and the ceiling S3 itself enforces.
@@ -3005,4 +3006,4 @@ firstIssueMessage	function	@spy4x/validation/validate	First issue message in a v
 isArkErrors	function	@spy4x/validation/validate	Whether a value is an arktype rejection, without relying on `instanceof`.
 toValidationError	function	@spy4x/validation/validate	Build a ValidationError from arktype's issues.
 validate	function	@spy4x/validation/validate	Parse `value` with an arktype schema exactly once.
-# export surface: sha256 23be9754511e5a3f14939b923c6643401b99f92b69e6fea29fd671ab58b86f36
+# export surface: sha256 437732bdfcbeef62499641c7d5fe102624da72b1d2d031686712cc52f9979250
