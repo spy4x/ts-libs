@@ -4,7 +4,9 @@ import {
   denoStaticFs,
   isPathInsideRoot,
   KNOWN_EXTENSIONS,
+  nodeStaticFs,
   resolveStaticPath,
+  runtimeStaticFs,
   serveStatic,
   type StaticFileHandle,
   type StaticFs,
@@ -645,4 +647,70 @@ Deno.test("static: a real file is fully readable start to finish through denoSta
 Deno.test("static: denoStaticFs refuses to open a directory as a file", async () => {
   const handle = await denoStaticFs.open(FIXTURE_ROOT)
   assertEquals(handle, null)
+})
+
+Deno.test("static: nodeStaticFs streams a file over several chunks, byte for byte", async () => {
+  // llms-full.txt is far larger than one 64 KiB chunk.
+  const path = new URL("../llms-full.txt", import.meta.url).pathname
+  const handle = await nodeStaticFs.open(path)
+  assertStrictEquals(handle !== null, true)
+  const expected = await Deno.readFile(path)
+  assertEquals(handle!.size, expected.byteLength)
+  assertEquals(new Uint8Array(await new Response(handle!.body).arrayBuffer()), expected)
+})
+
+Deno.test("static: nodeStaticFs serves a real file through serveStatic", async () => {
+  const response = await serveStatic("/index.html", { root: FIXTURE_ROOT, fs: nodeStaticFs })
+  assertStrictEquals(response !== undefined, true)
+  const body = await response!.text()
+  assertEquals(body, await Deno.readTextFile(`${FIXTURE_ROOT}/index.html`))
+  assertEquals(
+    response!.headers.get("content-length"),
+    String(new TextEncoder().encode(body).length),
+  )
+})
+
+Deno.test("static: nodeStaticFs answers null for a directory or a missing path", async () => {
+  assertEquals(await nodeStaticFs.open(FIXTURE_ROOT), null)
+  assertEquals(await nodeStaticFs.open(`${FIXTURE_ROOT}/missing.txt`), null)
+  assertEquals(await nodeStaticFs.stat(`${FIXTURE_ROOT}/missing.txt`), null)
+  assertEquals(await nodeStaticFs.stat(FIXTURE_ROOT), { isFile: false })
+  assertEquals(await nodeStaticFs.stat(`${FIXTURE_ROOT}/index.html`), { isFile: true })
+  assertEquals(await nodeStaticFs.realPath(FIXTURE_ROOT), await Deno.realPath(FIXTURE_ROOT))
+})
+
+Deno.test("static: runtimeStaticFs reads through denoStaticFs on Deno", async () => {
+  const handle = await runtimeStaticFs.open(`${FIXTURE_ROOT}/index.html`)
+  assertStrictEquals(handle !== null, true)
+  handle!.close()
+  assertEquals(await runtimeStaticFs.open(FIXTURE_ROOT), null)
+  assertEquals(await runtimeStaticFs.realPath(FIXTURE_ROOT), await Deno.realPath(FIXTURE_ROOT))
+})
+
+Deno.test("static: nodeStaticFs closes the file once the body is read or cancelled", async () => {
+  // Count closes on Node's FileHandle class, the one nodeStaticFs opens through.
+  const fs = await import(["node", "fs/promises"].join(":")) as {
+    open(path: string): Promise<{ close(): Promise<void> }>
+  }
+  const probe = await fs.open(`${FIXTURE_ROOT}/index.html`)
+  const prototype = Object.getPrototypeOf(probe) as { close(): Promise<void> }
+  await probe.close()
+  const realClose = prototype.close
+  let closes = 0
+  prototype.close = function (this: unknown) {
+    closes++
+    return realClose.call(this)
+  }
+  try {
+    const read = await nodeStaticFs.open(`${FIXTURE_ROOT}/index.html`)
+    await new Response(read!.body).arrayBuffer()
+    assertEquals(closes, 1)
+    const cancelled = await nodeStaticFs.open(`${FIXTURE_ROOT}/index.html`)
+    await cancelled!.body.cancel()
+    assertEquals(closes, 2)
+    cancelled!.close()
+    assertEquals(closes, 2)
+  } finally {
+    prototype.close = realClose
+  }
 })

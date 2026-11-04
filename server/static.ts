@@ -212,7 +212,7 @@ export interface StaticFs {
 export interface ServeStaticOptions {
   /** Static root directory, e.g. `./static`. */
   root: string
-  /** Filesystem to read through. Defaults to {@link denoStaticFs}. */
+  /** Filesystem to read through. Defaults to {@link runtimeStaticFs}. */
   fs?: StaticFs
   /**
    * Serve `<root>/index.html` for a path that does not exist, and for one that
@@ -272,7 +272,7 @@ export async function serveStatic(
   requestPath: string,
   options: ServeStaticOptions,
 ): Promise<Response | undefined> {
-  const fs = options.fs ?? denoStaticFs
+  const fs = options.fs ?? runtimeStaticFs
 
   const path = requestPath.endsWith("/") ? `${requestPath}${INDEX_FILE}` : requestPath
   let resolved = resolveStaticPath(path, options.root)
@@ -371,7 +371,7 @@ function closingStream(handle: StaticFileHandle): ReadableStream<Uint8Array> {
   })
 }
 
-/** Filesystem implementation backed by `Deno.*`, used when none is injected. */
+/** Filesystem implementation backed by `Deno.*`, the default on Deno. */
 export const denoStaticFs: StaticFs = {
   async open(path) {
     let file: Deno.FsFile
@@ -420,4 +420,107 @@ function closeQuietly(file: Deno.FsFile): void {
   } catch {
     // already closed by the stream finishing or being cancelled
   }
+}
+
+/** A `node:fs/promises` file handle, as far as {@link nodeStaticFs} uses it. */
+interface NodeFileHandle {
+  stat(): Promise<{ isFile(): boolean; size: number }>
+  read(
+    buffer: Uint8Array,
+    offset: number,
+    length: number,
+    position: null,
+  ): Promise<{ bytesRead: number }>
+  close(): Promise<void>
+}
+
+/** `node:fs/promises`, as far as {@link nodeStaticFs} uses it. */
+interface NodeFs {
+  open(path: string, flags: "r"): Promise<NodeFileHandle>
+  stat(path: string): Promise<{ isFile(): boolean }>
+  realpath(path: string): Promise<string>
+}
+
+let nodeFsModule: Promise<NodeFs> | undefined
+
+/**
+ * Load `node:fs/promises` on the first call, with a specifier the type checker does not resolve,
+ * as `@spy4x/platform/server/runtime-fs` does, so a Deno program never pulls in Node's types.
+ */
+const nodeFs = (): Promise<NodeFs> =>
+  nodeFsModule ??= import(["node", "fs/promises"].join(":")) as Promise<NodeFs>
+
+/** Bytes read from a Node file handle per pull of the response body. */
+const NODE_CHUNK_BYTES = 64 * 1024
+
+/**
+ * Filesystem implementation over `node:fs/promises`, for Node and Bun (Bun implements Node's
+ * `fs`). The body is read one 64 KiB chunk per pull, so memory stays flat whatever the file's
+ * size, and the handle closes once the body is read to the end, cancelled or fails.
+ */
+export const nodeStaticFs: StaticFs = {
+  async open(path) {
+    const fs = await nodeFs()
+    let file: NodeFileHandle
+    try {
+      file = await fs.open(path, "r")
+    } catch {
+      return null
+    }
+    let closed = false
+    const close = () => {
+      if (closed) return
+      closed = true
+      file.close().catch(() => {})
+    }
+    let info: { isFile(): boolean; size: number }
+    try {
+      info = await file.stat()
+    } catch {
+      close()
+      return null
+    }
+    if (!info.isFile()) {
+      close()
+      return null
+    }
+    const body = new ReadableStream<Uint8Array>({
+      async pull(controller) {
+        try {
+          const buffer = new Uint8Array(NODE_CHUNK_BYTES)
+          const { bytesRead } = await file.read(buffer, 0, buffer.byteLength, null)
+          if (bytesRead > 0) return controller.enqueue(buffer.subarray(0, bytesRead))
+          close()
+          controller.close()
+        } catch (error) {
+          close()
+          controller.error(error)
+        }
+      },
+      cancel: close,
+    })
+    return { size: info.size, body, close }
+  },
+  async stat(path) {
+    const fs = await nodeFs()
+    try {
+      return { isFile: (await fs.stat(path)).isFile() }
+    } catch {
+      return null
+    }
+  },
+  realPath: async (path) => await (await nodeFs()).realpath(path),
+}
+
+/** {@link denoStaticFs} on Deno, {@link nodeStaticFs} elsewhere, chosen on each call. */
+const currentStaticFs = (): StaticFs => "Deno" in globalThis ? denoStaticFs : nodeStaticFs
+
+/**
+ * The files of the running runtime: {@link denoStaticFs} on Deno, {@link nodeStaticFs} on Node and
+ * Bun. The default of {@link serveStatic}.
+ */
+export const runtimeStaticFs: StaticFs = {
+  open: (path) => currentStaticFs().open(path),
+  stat: (path) => currentStaticFs().stat(path),
+  realPath: (path) => currentStaticFs().realPath(path),
 }

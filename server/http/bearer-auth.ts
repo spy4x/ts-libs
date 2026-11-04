@@ -5,6 +5,7 @@
 
 import { crypto as stdCrypto } from "@std/crypto/crypto"
 import { timingSafeEqual } from "@std/crypto/timing-safe-equal"
+import type { EnvReader } from "@spy4x/platform/server/process"
 import { constantTimeEqualsText } from "@spy4x/platform/tokens"
 
 /** The canonical redaction marker. Used by every log path that could see a credential. */
@@ -101,11 +102,12 @@ function sha256Sync(text: string): Uint8Array {
 
 /**
  * Read a bearer token from the environment. The environment is passed in explicitly —
- * there is no `Deno.env` default — so an entry point has to opt in at startup and no
+ * `processEnv` of `@spy4x/platform/server/process` on any runtime, or `Deno.env`; there is no
+ * default — so an entry point has to opt in at startup and no
  * import can pick up a credential as a side effect. Throws on a missing or empty value,
  * so a misconfigured server fails at startup instead of serving unauthenticated.
  */
-export function bearerTokenFromEnv(name: string, env: Pick<typeof Deno.env, "get">): string {
+export function bearerTokenFromEnv(name: string, env: EnvReader): string {
   const value = env.get(name)
   if (value === undefined || value.length === 0) {
     throw new Error(`${name} is not set: refusing to start an authenticated transport without it`)
