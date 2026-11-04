@@ -89,9 +89,6 @@
     // Records the demo video in `media/demo/` (vhs, bat, ffmpeg); `--encode` re-encodes the last
     // take only. See `media/demo/recipe/README.md`.
     "demo-video": "deno run --allow-read --allow-write --allow-run --allow-env media/demo/recipe/demo-video.ts",
-    // Regenerates `docs/1.0-contract.md` (#77): the exported names and signatures of every entry
-    // point the workspace publishes, from `deno doc`. See `infra/scripts/contract.ts`.
-    "contract": "deno run --allow-read --allow-write=docs/1.0-contract.md --allow-run=deno infra/scripts/contract.ts",
     // Regenerates `llms.txt` and `llms-full.txt` (#297): the exports of every entry point, each with
     // its kind, import specifier and one-sentence JSDoc summary, and every README. See
     // `infra/scripts/llms.ts`.

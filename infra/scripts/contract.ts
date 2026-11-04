@@ -1,19 +1,10 @@
-// Writes `docs/1.0-contract.md`: for every entry point the workspace publishes, its exported names
-// and their signatures, taken from `deno doc`. Run with `deno task contract`. The entry points
-// come from the `exports` map of every workspace member's `deno.json`, grouped under one heading
-// per package and sorted; every name and signature comes from the code.
-//
-// A signature is the declaration line `deno doc` prints and, for a class or an interface, the
-// lines of its public members; an enum's members and their values come from `deno doc --json`.
-// JSDoc prose is left out: the contract is names, parameters and return types (#77, "The
-// interfaces are frozen at 1.0").
-
-const OUTPUT = "docs/1.0-contract.md"
+// The entry points every workspace member publishes, read from the `exports` map of its
+// `deno.json`, and a `deno doc` runner. `llms.ts` builds `llms.txt` from them.
 
 export interface Entry {
   /** The import specifier a consumer writes. */
   specifier: string
-  /** The package the entry belongs to, as its directory name; the document groups by it. */
+  /** The package the entry belongs to, as its directory name. */
   pkg: string
 }
 
@@ -27,7 +18,7 @@ export function workspaceDirs(rootConfigText: string): string[] {
 /**
  * Throws when a top-level directory holds a `deno.json` but is not in the `workspace` list. Deno
  * would not publish such a package, and the regex read of the list drops a member silently when a
- * comment inside the array breaks it; either way the contract would shrink without a sign. A listed
+ * comment inside the array breaks it; either way `llms.txt` would shrink without a sign. A listed
  * directory that does not exist is fine: Deno skips it.
  */
 export function assertWorkspaceComplete(listed: string[], withConfig: string[]): void {
@@ -43,7 +34,7 @@ export function assertWorkspaceComplete(listed: string[], withConfig: string[]):
 
 /**
  * Every published entry point: one per `exports` key of each workspace member, so a key added to a
- * member's `deno.json` joins the contract without a script edit. `readConfig` returns a member's
+ * member's `deno.json` joins the list without a script edit. `readConfig` returns a member's
  * parsed `deno.json`, or `undefined` when its directory does not exist (Deno skips such a member
  * too). The result is sorted by specifier, so the output does not depend on member or key order.
  * `"."` becomes the bare package name; `"./tz"` becomes `@spy4x/<dir>/tz`.
@@ -67,7 +58,7 @@ export function entriesFrom(
 /**
  * Reads and parses the `deno.json` at `path`. Only a missing file counts as absent (`undefined`);
  * any other failure, such as invalid JSON or a permission error, throws with the path in the
- * message, so a broken config stops the run instead of shrinking the contract.
+ * message, so a broken config stops the run instead of shrinking the list.
  */
 async function readConfig(
   path: string,
@@ -105,25 +96,6 @@ export async function loadEntries(root = "."): Promise<Entry[]> {
   return entriesFrom(dirs, (dir) => configs.get(dir))
 }
 
-interface DocDeclaration {
-  kind: string
-  def?: {
-    properties?: { name: string }[]
-    methods?: { name: string }[]
-    members?: EnumMember[]
-  }
-}
-
-interface EnumMember {
-  name: string
-  init?: { repr: string; value?: { kind: string } }
-}
-
-interface DocSymbol {
-  name: string
-  declarations: DocDeclaration[]
-}
-
 /** Resolves `@spy4x/<package>/<subpath>` to a file through that package's `deno.json`. */
 export async function resolveEntry(specifier: string, root = "."): Promise<string> {
   const [, pkg, ...rest] = specifier.split("/")
@@ -142,143 +114,3 @@ export async function denoDoc(args: string[]): Promise<string> {
   if (code !== 0) throw new Error(`deno doc ${args.join(" ")}: ${new TextDecoder().decode(stderr)}`)
   return new TextDecoder().decode(stdout)
 }
-
-interface Members {
-  /** Member names of every class, interface and enum exported by the file, keyed by symbol name. */
-  names: Map<string, Set<string>>
-  /**
-   * The member lines of every enum, keyed by symbol name, as `Name = value`. `deno doc`'s text
-   * rendering prints an enum member's name alone, so these come from its JSON output.
-   */
-  enums: Map<string, string[]>
-}
-
-async function members(file: string): Promise<Members> {
-  const json = JSON.parse(await denoDoc(["--json", file]))
-  const symbols = Object.values(json.nodes as Record<string, { symbols: DocSymbol[] }>)
-    .flatMap((node) => node.symbols)
-  const names = new Map<string, Set<string>>()
-  const enums = new Map<string, string[]>()
-  for (const symbol of symbols) {
-    const own = new Set<string>(["constructor"])
-    for (const declaration of symbol.declarations) {
-      const def = declaration.def ?? {}
-      for (const item of [...def.properties ?? [], ...def.methods ?? []]) own.add(item.name)
-      if (declaration.kind === "enum") {
-        enums.set(symbol.name, (def.members ?? []).map((member) => `  ${enumMember(member)}`))
-      }
-    }
-    names.set(symbol.name, own)
-  }
-  return { names, enums }
-}
-
-/**
- * `Name = value`, with a string value quoted; `Name` alone when the member has no initialiser, or
- * one `deno doc` could not statically render.
- */
-function enumMember(member: EnumMember): string {
-  if (member.init === undefined) return member.name
-  const value = member.init.value?.kind === "string"
-    ? JSON.stringify(member.init.repr)
-    : member.init.repr
-  return `${member.name} = ${value}`
-}
-
-const MODIFIERS = /^(?:(?:public|private|protected|static|readonly|abstract|async|get|set)\s+)*/
-
-/** The signature lines of one `deno doc` text block: the declaration and its member lines. */
-function signatures(block: string[], { names, enums }: Members): string[] {
-  const lines = block.filter((line) => line.trim() !== "" && !line.startsWith("Defined in "))
-  const found = lines.find((line) => !line.startsWith(" "))
-  if (found === undefined) return []
-  // A constant holding a multi-line template literal prints as its opening backtick alone, the
-  // literal's text following on lines that are not signatures; its type is `string`.
-  const head = found.replace(/^((?:export\s+)?const\s+[\w$]+): `$/, "$1: string")
-  const name = head.match(
-    /^(?:\w+\s+)*?(?:class|interface|enum|type|function|const|let|var|namespace)\s+([\w$]+)/,
-  )?.[1]
-  if (name !== undefined && enums.has(name)) return [head, ...enums.get(name)!]
-  const own = name === undefined ? undefined : names.get(name)
-  const out = [head]
-  if (own === undefined) return out
-  for (const line of lines) {
-    if (!/^ {2}\S/.test(line)) continue
-    // A private member is not part of what a caller can use, except a private constructor, which
-    // tells the caller the class is not built with `new`.
-    if (/^ {2}(?:private\s|#)/.test(line) && !/^ {2}private\s+constructor\(/.test(line)) continue
-    const body = line.slice(2).replace(MODIFIERS, "")
-    const member = body.match(/^\[?["']?([\w$]+)/)?.[1]
-    if (
-      member !== undefined && own.has(member) && /^\[?["']?[\w$]+["']?\]?\??\s*[(<:=]/.test(body)
-    ) {
-      out.push(line)
-    }
-  }
-  return out
-}
-
-async function entrySection(entry: Entry): Promise<string> {
-  const file = await resolveEntry(entry.specifier)
-  const own = await members(file)
-  const text = await denoDoc([file])
-  const blocks: string[][] = []
-  for (const line of text.split("\n")) {
-    if (line.startsWith("Defined in ")) blocks.push([])
-    else blocks.at(-1)?.push(line)
-  }
-  const rendered = blocks
-    .map((block) => signatures(block, own))
-    .filter((lines) => lines.length > 0)
-    .sort((a, b) => a[0].localeCompare(b[0]))
-    .map((lines) => lines.join("\n"))
-  return [
-    `### \`${entry.specifier}\``,
-    "",
-    `Source: \`${file}\`.`,
-    "",
-    "```text",
-    rendered.join("\n\n"),
-    "```",
-    "",
-  ].join("\n")
-}
-
-const INTRO = [
-  "# 1.0 contract — first draft",
-  "",
-  "Generated by `deno task contract` from the code on the branch it runs on. Do not edit by hand;",
-  "change the code or an `exports` map, then run the task again.",
-  "",
-  'This is the frame for condition 2 in #77 ("The interfaces are frozen at 1.0"): for every entry',
-  "point the workspace publishes, its exported names and their signatures. After 1.0, a change to",
-  "anything listed here is additive or waits for 2.0. JSDoc is left out; the code holds it.",
-  "",
-  "Each signature is `deno doc`'s own text rendering. That rendering leaves out a method's own",
-  "type parameters (`register<T extends Command<unknown, unknown>>(…)` prints as `register(…)`)",
-  "and prints a mapped type without its braces. It also leaves out a parameter's default value, so",
-  "a parameter with a default (`init: RequestInit = {}`) reads as required here although a caller",
-  "may omit it. Where a line here and the source file named under its heading differ, the source",
-  "file is the contract.",
-  "",
-]
-
-async function main() {
-  const ENTRIES = await loadEntries()
-  const sections = []
-  let previous = ""
-  for (const entry of ENTRIES) {
-    if (entry.pkg !== previous) sections.push(`## Package \`@spy4x/${entry.pkg}\`\n`)
-    previous = entry.pkg
-    sections.push(await entrySection(entry))
-  }
-
-  const document = [...INTRO, ...sections].join("\n")
-
-  await Deno.writeTextFile(OUTPUT, document)
-  const fmt = await new Deno.Command("deno", { args: ["fmt", "--quiet", OUTPUT] }).output()
-  if (fmt.code !== 0) throw new Error(`deno fmt ${OUTPUT} failed`)
-  console.log(`wrote ${OUTPUT}: ${ENTRIES.length} entry points`)
-}
-
-if (import.meta.main) await main()
