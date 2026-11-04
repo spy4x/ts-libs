@@ -1,8 +1,10 @@
 import { expect } from "@std/expect"
 import { describe, it } from "@std/testing/bdd"
 import {
+  DATE_PATTERNS,
   dayInMonth,
   daysInMonth,
+  detectDatePatterns,
   endOfMonth,
   endOfQuarter,
   endOfYear,
@@ -10,6 +12,7 @@ import {
   isSameDay,
   isValidDateRange,
   monthFirstWeekday,
+  parseDateWithPattern,
   parseIsoDate,
   recentIsoDates,
   shiftMonth,
@@ -396,5 +399,71 @@ describe("recentIsoDates", () => {
 
   it("throws when a day falls before the year 0001", () => {
     expect(() => recentIsoDates(2, new Date("0000-01-01T00:00:00Z"))).toThrow()
+  })
+})
+
+describe("parseDateWithPattern", () => {
+  it("reads each pattern as a YYYY-MM-DD date", () => {
+    expect(parseDateWithPattern("2026-04-03", "YYYY-MM-DD")).toBe("2026-04-03")
+    expect(parseDateWithPattern("03.04.2026", "DD.MM.YYYY")).toBe("2026-04-03")
+    expect(parseDateWithPattern("03/04/2026", "DD/MM/YYYY")).toBe("2026-04-03")
+    expect(parseDateWithPattern("03/04/2026", "MM/DD/YYYY")).toBe("2026-03-04")
+    expect(parseDateWithPattern("3.4.2026", "DD.MM.YYYY")).toBe("2026-04-03")
+  })
+
+  it("refuses a day the calendar lacks", () => {
+    expect(parseDateWithPattern("31.02.2026", "DD.MM.YYYY")).toBeNull()
+    expect(parseDateWithPattern("29.02.2025", "DD.MM.YYYY")).toBeNull()
+    expect(parseDateWithPattern("29.02.2024", "DD.MM.YYYY")).toBe("2024-02-29")
+    expect(parseDateWithPattern("13/01/2026", "MM/DD/YYYY")).toBeNull()
+  })
+
+  it("refuses text in another layout", () => {
+    expect(parseDateWithPattern("2026-04-03", "DD.MM.YYYY")).toBeNull()
+    expect(parseDateWithPattern("03.04.26", "DD.MM.YYYY")).toBeNull()
+    expect(parseDateWithPattern("03.04.2026x", "DD.MM.YYYY")).toBeNull()
+    expect(parseDateWithPattern("", "DD.MM.YYYY")).toBeNull()
+  })
+
+  it("reads a two-digit year as 2000-2069 or 1970-1999", () => {
+    expect(parseDateWithPattern("03.04.26", "DD.MM.YY")).toBe("2026-04-03")
+    expect(parseDateWithPattern("03.04.69", "DD.MM.YY")).toBe("2069-04-03")
+    expect(parseDateWithPattern("03.04.70", "DD.MM.YY")).toBe("1970-04-03")
+  })
+
+  it("ignores spaces around the date and a time after it", () => {
+    expect(parseDateWithPattern(" 03.04.2026 14:05 ", "DD.MM.YYYY")).toBe("2026-04-03")
+    expect(parseDateWithPattern("2026-04-03T14:05:09", "YYYY-MM-DD")).toBe("2026-04-03")
+  })
+
+  it("throws for a pattern it does not know", () => {
+    expect(() => parseDateWithPattern("2026", "YYYY" as never)).toThrow(RangeError)
+  })
+})
+
+describe("detectDatePatterns", () => {
+  it("returns both day-first and month-first until a day past 12 settles it", () => {
+    expect(detectDatePatterns(["03/04/2026", "12/04/2026"])).toEqual(["DD/MM/YYYY", "MM/DD/YYYY"])
+    expect(detectDatePatterns(["03/04/2026", "12/04/2026", "25/04/2026"])).toEqual(["DD/MM/YYYY"])
+  })
+
+  it("returns the one pattern an unambiguous column fits", () => {
+    expect(detectDatePatterns(["2026-04-03", "2026-12-31"])).toEqual(["YYYY-MM-DD"])
+    expect(detectDatePatterns(["03.04.2026", "31.12.2026"])).toEqual(["DD.MM.YYYY"])
+  })
+
+  it("skips blank samples and returns nothing when none is left", () => {
+    expect(detectDatePatterns(["", " ", "31.12.26"])).toEqual(["DD.MM.YY"])
+    expect(detectDatePatterns(["", " "])).toEqual([])
+  })
+
+  it("returns nothing when a sample is no date at all", () => {
+    expect(detectDatePatterns(["03.04.2026", "Opening balance"])).toEqual([])
+  })
+
+  it("lists every pattern in DATE_PATTERNS order", () => {
+    expect(detectDatePatterns(["01/01/2026"])).toEqual(
+      DATE_PATTERNS.filter((pattern) => pattern === "DD/MM/YYYY" || pattern === "MM/DD/YYYY"),
+    )
   })
 })

@@ -12,11 +12,15 @@ import {
   currencyCode,
   currencyDecimals,
   currencyOptions,
+  detectNumberFormat,
   type ExchangeRate,
   formatMoney,
   formatMoneyParts,
   isCurrencyCode,
+  isDebitCreditPair,
   moneyDecimalString,
+  NUMBER_FORMATS,
+  parseAmount,
   parseMoney,
   sumMoney,
 } from "./money.ts"
@@ -658,5 +662,138 @@ describe("signDisplay", () => {
       "+USDT\u00a01.000000",
     )
     expect(formatMoney(1200, "EUR", "en")).toBe("€12.00")
+  })
+})
+
+describe("parseAmount", () => {
+  const german = { decimal: ",", group: "." } as const
+  const english = { decimal: ".", group: "," } as const
+
+  it("reads a German amount in parentheses as a negative number of cents", () => {
+    expect(parseAmount("(1.234,56)", "EUR", german, { negatives: ["parentheses"] }))
+      .toEqual({ ok: true, value: -123456 })
+  })
+
+  it("reads a leading minus, U+2212 and a trailing minus when allowed", () => {
+    expect(parseAmount("-1,234.56", "USD", english)).toEqual({ ok: true, value: -123456 })
+    expect(parseAmount("−7.40", "USD", english)).toEqual({ ok: true, value: -740 })
+    expect(parseAmount("7.40-", "USD", english, { negatives: ["trailing-minus"] }))
+      .toEqual({ ok: true, value: -740 })
+    expect(parseAmount("+7.40", "USD", english)).toEqual({ ok: true, value: 740 })
+  })
+
+  it("refuses a negative written in a style not allowed", () => {
+    expect(parseAmount("(7.40)", "USD", english)).toEqual({
+      ok: false,
+      error: { type: "invalid-characters" },
+    })
+    expect(parseAmount("7.40-", "USD", english).ok).toBe(false)
+    expect(parseAmount("-7.40", "USD", english, { negatives: ["parentheses"] }).ok).toBe(false)
+  })
+
+  it("takes the decimals from the currency table", () => {
+    expect(parseAmount("1.234", "KWD", { decimal: ".", group: "" }))
+      .toEqual({ ok: true, value: 1234 })
+    expect(parseAmount("1.234", "JPY", { decimal: ",", group: "." }))
+      .toEqual({ ok: true, value: 1234 })
+    expect(parseAmount("12.5", "BTC", { decimal: ".", group: "" }, { decimals: 8 }))
+      .toEqual({ ok: true, value: 1_250_000_000 })
+  })
+
+  it("refuses extra fraction digits unless they are zeros", () => {
+    expect(parseAmount("12.505", "USD", english)).toEqual({
+      ok: false,
+      error: { type: "too-many-decimals", maxDecimals: 2 },
+    })
+    expect(parseAmount("12.5000", "USD", english)).toEqual({ ok: true, value: 1250 })
+  })
+
+  it("refuses a grouping mark out of place or not in the format", () => {
+    expect(parseAmount("12.50", "EUR", german).ok).toBe(false)
+    expect(parseAmount("1,234.56", "USD", { decimal: ".", group: "" }).ok).toBe(false)
+    expect(parseAmount("12,34", "USD", english).ok).toBe(false)
+    expect(parseAmount("1.2.3", "USD", english).ok).toBe(false)
+  })
+
+  it("reads space and apostrophe groups and lakh grouping", () => {
+    expect(parseAmount("1\u00a0234,56", "EUR", { decimal: ",", group: " " }))
+      .toEqual({ ok: true, value: 123456 })
+    expect(parseAmount("1\u2019234.56", "CHF", { decimal: ".", group: "'" }))
+      .toEqual({ ok: true, value: 123456 })
+    expect(parseAmount("12,34,567.00", "INR", english)).toEqual({ ok: true, value: 123456700 })
+  })
+
+  it("refuses empty text and an amount past the safe range", () => {
+    expect(parseAmount(" ", "USD", english)).toEqual({ ok: false, error: { type: "empty" } })
+    expect(parseAmount("()", "USD", english, { negatives: ["parentheses"] }))
+      .toEqual({ ok: false, error: { type: "empty" } })
+    expect(parseAmount("90071992547409.92", "USD", english))
+      .toEqual({ ok: false, error: { type: "too-large" } })
+  })
+
+  it("reads a negative zero as zero", () => {
+    expect(Object.is(unwrapAmount(parseAmount("-0.00", "USD", english)), 0)).toBe(true)
+  })
+})
+
+function unwrapAmount(result: ReturnType<typeof parseAmount>): number {
+  if (!result.ok) throw new Error(JSON.stringify(result.error))
+  return result.value
+}
+
+describe("detectNumberFormat", () => {
+  it("returns only the German format for 1.234,56", () => {
+    expect(detectNumberFormat(["-1.234,56", "3.100,00", "-7,40"]))
+      .toEqual([{ decimal: ",", group: "." }])
+  })
+
+  it("returns every format that reads an ambiguous column", () => {
+    expect(detectNumberFormat(["1.234"])).toEqual([
+      { decimal: ".", group: "" },
+      { decimal: ".", group: "," },
+      { decimal: ".", group: " " },
+      { decimal: ".", group: "'" },
+      { decimal: ",", group: "." },
+    ])
+  })
+
+  it("reads negatives in every style", () => {
+    expect(detectNumberFormat(["(1,234.56)", "7.40-", "-3.00"]))
+      .toEqual([{ decimal: ".", group: "," }])
+  })
+
+  it("returns nothing for a column of words or of blanks", () => {
+    expect(detectNumberFormat(["12.00", "n/a"])).toEqual([])
+    expect(detectNumberFormat(["", " "])).toEqual([])
+  })
+
+  it("hands out copies the caller may change", () => {
+    const [first] = detectNumberFormat(["1"])
+    first.group = ","
+    expect(NUMBER_FORMATS[0]).toEqual({ decimal: ".", group: "" })
+  })
+})
+
+describe("isDebitCreditPair", () => {
+  it("is true when every row holds an amount in exactly one column", () => {
+    expect(isDebitCreditPair(["12,00", "", "0,00"], ["", "3,50", "1.200,00"])).toBe(true)
+  })
+
+  it("is false when a row holds an amount in both columns or in neither", () => {
+    expect(isDebitCreditPair(["12,00", "4,00"], ["", "3,50"])).toBe(false)
+    expect(isDebitCreditPair(["12,00", ""], ["", ""])).toBe(false)
+  })
+
+  it("is false for an amount column beside an empty one", () => {
+    expect(isDebitCreditPair(["12,00", "4,00"], ["", ""])).toBe(false)
+  })
+
+  it("is false when a column holds words", () => {
+    expect(isDebitCreditPair(["12,00", "Coffee"], ["", "3,50"])).toBe(false)
+  })
+
+  it("is false for columns of different lengths or no rows", () => {
+    expect(isDebitCreditPair(["12,00", ""], ["", "3,50", "9,00"])).toBe(false)
+    expect(isDebitCreditPair([], [])).toBe(false)
   })
 })

@@ -1508,6 +1508,7 @@ Runs on: server (Deno).
 | `./push-reminders`  | `createReminderNotify`, `reminderPushMessage`, `reminderDeliveryOutcome`          |
 | `./telegram`        | `TelegramClient`, `TelegramBot`, `createTelegramWebhookHandler`, polling          |
 | `./llm`             | `createChatClient`, `chatJson`, `LLM_PRESETS` — JSON from an OpenAI-style API     |
+| `./exchange-rates`  | `withFallback`, `createFrankfurterRates` and two more — daily exchange rates      |
 
 ## Contracts
 
@@ -1902,6 +1903,54 @@ People's Republic of China". It may use inputs to train its models, with an opt-
 (effective 2026-04-29) are governed by the law of mainland China. DeepSeek's balance is prepaid, so
 a `402` stops spending at zero; for OpenAI, set a project budget limit before use. A self-hosted
 Ollama keeps everything on your own machine.
+
+### `createFrankfurterRates`, `createExchangeRateApiRates`, `createCoinGeckoRates`, `withFallback` — daily exchange rates
+
+Three sources of daily rates behind one interface, `ExchangeRateSource`, whose `daily(date, base,
+quotes)` returns the `ExchangeRate`s it found (from `@spy4x/platform/universal/money`) and the
+quotes it has none for. `withFallback` asks each source in turn for the quotes still missing.
+
+```ts
+import {
+  createExchangeRateApiRates,
+  createFrankfurterRates,
+  withFallback,
+} from "@spy4x/integrations/exchange-rates"
+
+const rates = withFallback(
+  createFrankfurterRates({ providers: [`ECB`] }), // or baseUrl: a self-hosted Frankfurter
+  createExchangeRateApiRates({ apiKey }),
+)
+const day = await rates.daily(`2026-10-31`, `EUR`, [`USD`, `VND`])
+if (day.success) {
+  day.output.rates // USD from ECB dated 2026-10-30 (a Saturday asks for Friday), VND from the other
+  day.output.missing // quotes no source had: never a rate of 0
+}
+```
+
+- **The date in a rate is the one it is for.** Asked for a weekend or a holiday, Frankfurter
+  answers with the last business day, and the rate carries that date, so a screen can say "rates
+  of 30 Oct, ECB".
+- **Rates are plain decimal strings.** A JSON number such as `5.0112e-10` becomes
+  `"0.00000000050112"`. A rate is kept when it is finite and above zero; there is no upper limit.
+- **A missing currency is missing, not an error.** A currency the source does not know, a base it
+  does not support, or a day it has no data for lists the quotes in `missing`. A bad key, a used-up
+  quota, a plan limit, a timeout or a server error is an error with the source's id and a `code`.
+- **No error holds a URL or a key.** exchangerate-api.com takes its key in the URL path, so
+  transport failures are reported by class name only. Replies are read under a 256 KiB cap, every
+  request has a timeout (10 s by default), and redirects are not followed.
+- **CoinGecko** needs a code-to-id map, because a coin's code is ambiguous there;
+  `COINGECKO_COINS` covers ten common coins. With a coin as the base, one call prices it in every
+  quote. With a currency as the base, each coin takes a call and its rate comes coin first (`BTC`
+  buys `rate` `USD`); `convertMoney` and `crossRate` take a rate either way round. `plan: "demo"`
+  uses `api.coingecko.com` with `x-cg-demo-api-key`, `plan: "pro"` uses `pro-api.coingecko.com`
+  with `x-cg-pro-api-key`.
+
+**Terms to keep.** exchangerate-api.com forbids using its rates in a product that offers
+programmatic access to exchange rate data: an app's own API or MCP server must never return them.
+CoinGecko's paid plans ask for "Data provided by CoinGecko" next to its data, stored prices
+refreshed within 24 hours, and deletion when access ends. ECB data, through Frankfurter, may be
+reused with the source named.
 
 ### `verifyWebhookRequest`
 
@@ -2514,7 +2563,7 @@ browser- and server-only halves are the other two subpaths.
 | `universal/axis`            | `niceStep`, `ticks`, `stepAxis`, `StepAxis`, `MAX_TICKS` — the one home for chart tick maths                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 | `universal/constants`       | `DEFAULT_DEBOUNCE_DELAY`, `DEFAULT_FLUSH_INTERVAL_MS`, `MIN_PASSWORD_LENGTH`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 | `universal/contact`         | `CONTACT_KINDS`, `ContactKind`, `contactKind`, `CONTACT_KIND_NAMES`, `ContactLink`, `normalizeContactValue`, `contactValueProblem`, `contactHref`, `contactJsonLd` — a website's contact channels (Telegram, Zalo, WhatsApp, Instagram, Facebook, phone, e-mail, a web page): the value checked, the link built, and the `Organization` structured data, profiles in `sameAs` and numbers and addresses in `contactPoint`                                                                                                                                                                                                                                                                                   |
-| `universal/csv`             | `CsvCellValue`, `CsvColumn`, `csvField`, `csvRow`, `csvHeaderRow`, `toCsvText`, `CSV_BYTE_ORDER_MARK`, `toCsvBytes` — RFC 4180 writer with a formula-injection guard                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| `universal/csv`             | `CsvCellValue`, `CsvColumn`, `csvField`, `csvRow`, `csvHeaderRow`, `toCsvText`, `CSV_BYTE_ORDER_MARK`, `toCsvBytes` — RFC 4180 writer with a formula-injection guard; `decodeTextFile`, `sniffCsv`, `parseCsv`, `CSV_DEFAULT_LIMITS` — reader of uploaded files: encoding, delimiter and header guesses, size limits on by default                                                                                                                                                                                                                                                                                                                                                                          |
 | `universal/error-reporter`  | `createErrorReporter`, `parseDsn`, `scrubUrl`, `scrubText`, `ErrorReporter`, `ErrorReporterOptions`, `ErrorEventTarget`, `ParsedDsn`, `ReportContext` — posts Sentry-format envelopes to GlitchTip or Sentry; no DSN means off and no request; masks secrets in URLs and text; sampling and a per-session (or per-window) cap; never throws; `install(window)` reports `error` and `unhandledrejection`                                                                                                                                                                                                                                                                                                     |
 | `universal/errors`          | `ErrType`, `Err`, `ValidationError`, `ConnectionError`, `ServerError`, `PayloadError`, `StoreError`, `RequestError`, `ResponseError`, `connectionError`, `responseError`, `isSilentError`, `OperationState`, `OperationResult`                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 | `universal/format-number`   | `round`, `formatDecimal`, `formatPct`, `formatBytes`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
@@ -2524,7 +2573,7 @@ browser- and server-only halves are the other two subpaths.
 | `universal/key-value-store` | `KeyValueStore` — a dependency-free port, the one home for it and for `browser/storage`'s deprecated `StorageLike` and `@spy4x/realtime`'s deprecated `KeyValueStore` alias (#71)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
 | `universal/markdown`        | `renderMarkdown`, `RenderedMarkdown`, `MarkdownHeading`, `renderMarkdownSegments` and its types — Markdown to HTML that is safe on a public page: raw HTML escaped, link and image addresses only `http`, `https`, `mailto` or relative, `rel="noopener noreferrer"` on external links, lazy images, and every heading with a stable `id`, returned for a table of contents. Built on `marked`; import it from `@spy4x/platform/universal/markdown`, the root export does not load it                                                                                                                                                                                                                       |
 | `universal/metrics`         | `Counter`, `MetricLabels`, `createCounter`, `renderPrometheus` — a labelled counter and its Prometheus text exposition; no registry, no histograms                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
-| `universal/money`           | `currencyDecimals`, `formatMoney`, `formatMoneyParts`, `moneyDecimalString`, `parseMoney`, `MoneyOptions`, `currencies`, `CURRENCIES_PUBLISHED`, `isCurrencyCode`, `currencyCode`, `currencyOptions`, `sumMoney`, `allocate`, `convertMoney`, `crossRate`, `Money`, `ExchangeRate` — money as a smallest-unit integer with no float step; decimals from the ISO 4217 table, the same on every runtime, or `{ decimals }` for `BTC`; sums that refuse mixed currencies and unsafe totals, splits that lose no unit, exact conversion with a dated rate                                                                                                                                                       |
+| `universal/money`           | `currencyDecimals`, `formatMoney`, `formatMoneyParts`, `moneyDecimalString`, `parseMoney`, `MoneyOptions`, `currencies`, `CURRENCIES_PUBLISHED`, `isCurrencyCode`, `currencyCode`, `currencyOptions`, `sumMoney`, `allocate`, `convertMoney`, `crossRate`, `Money`, `ExchangeRate`, `parseAmount`, `detectNumberFormat`, `isDebitCreditPair` — smallest-unit integers with no float step; ISO 4217 decimals, or `{ decimals }` for `BTC`; sums that refuse mixed currencies, splits that lose no unit, exact conversion with a dated rate; amounts from a file column in a guessed format                                                                                                                   |
 | `universal/money-core`      | Everything in `universal/money` except `currencyCode`, with no arktype import: for browser code                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 | `universal/result`          | `Result`, `ok`, `err`, `unwrap`, `unwrapOr`, `CommandEnvelope`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 | `universal/schema`          | `InferSchema` — the only arktype type helper this package needs                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
@@ -2541,7 +2590,8 @@ browser- and server-only halves are the other two subpaths.
 
 The old one-line CSV splitter and `mapConcurrent` (formerly in `universal/concurrency`) were
 removed in 1.0: `@std/csv` and `@std/async`'s `pooledMap` already cover them. `universal/csv` is now
-a different module, a writer (1.3.0), because `@std/csv` has no formula-injection guard.
+a different module: a writer (1.3.0), because `@std/csv` has no formula-injection guard, and a
+reader (#818) that parses with `@std/csv` and adds the encoding, the delimiter guess and the limits.
 
 **`universal/axis` is the single home for the chart tick maths**, ported from and matched against
 `preact-components/charts/scales.ts`. `preact-components` does not import it yet — that is a
@@ -8470,7 +8520,7 @@ plus an RFC 5545 iCalendar writer and a lossless iCalendar editor. Zero runtime 
 
 | Module                      | Exports                                                                                                                                                                                                                                                                     |
 | --------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `time/date`                 | Zone-free arithmetic on `YYYY-MM-DD`: `parseIsoDate`, `formatIsoDate`, `shiftMonth`, `startOfMonth`, `endOfMonth`, `daysInMonth`, `dayInMonth`, `monthFirstWeekday`, `startOfWeek`, quarter and year bounds, `isSameDay`, `isValidDateRange`, `recentIsoDates`, `DateRange` |
+| `time/date`                 | Zone-free `YYYY-MM-DD` maths: `parseIsoDate`, `formatIsoDate`, `shiftMonth`, month, week, quarter and year bounds, `isSameDay`, `isValidDateRange`, `recentIsoDates`, `DateRange`; file dates: `detectDatePatterns`, `parseDateWithPattern`, `DATE_PATTERNS`, `DatePattern` |
 | `time/locale`               | Calendar labels from `Intl`: `localeFirstWeekday`, `monthLabel`, `dayLabel`, `shortDayLabel`, `relativeDayLabel`, `weekdayLabels`, `WeekdayLabel`, `localeOptions` (region formats for a picker)                                                                            |
 | `time/tz`                   | IANA zone helpers: `zonedDateTime`, `resolveWallClock`, `formatInstantLong`, `addDays` (zone optional), `canonicalTimeZone`, `zoneCity`, `zoneOffsetLabel`, `zoneLabel`, `timeZoneOptions` (zones for a picker), …                                                          |
 | `time/period`               | Weeks and months in a time zone: `periodOf`, `currentPeriod`, `shiftPeriod`, `periodSoFar`, `samePartOf`, `periodLabel`, `Period`, `PeriodUnit`                                                                                                                             |
@@ -8483,7 +8533,7 @@ plus an RFC 5545 iCalendar writer and a lossless iCalendar editor. Zero runtime 
 | `time/ical-tasks-edit`      | Writing a `Task` back: `createTask`, `editTask`, `rebaseEdit`, `keepMine`, `keepMineText`, `completeTask`, `reopenTask`                                                                                                                                                     |
 | `time/ical-tasks-reminders` | Which reminders of a task fall in a time window: `dueReminders` (alarms relative to start or due, absolute ones, a Tasks.org snooze; nothing for a completed task)                                                                                                          |
 | `time/ical-duration`        | iCalendar durations (`P1DT2H`): `readDuration` (lenient, as other apps write them), `durationMs`, `Duration`                                                                                                                                                                |
-| `time/rrule`                | Repeat rules for the subset Tasks.org writes: `parseRrule`, `formatRrule`, `nextOccurrence`, `describeRrule`                                                                                                                                                                |
+| `time/rrule`                | Repeat rules for the subset Tasks.org writes: `parseRrule`, `formatRrule`, `nextOccurrence`, `occurrencesBetween`, `describeRrule` in nine languages                                                                                                                        |
 | `time/cron`                 | Cron schedules in UTC: `parseCron` (five fields, names, steps, `@daily` and the other aliases), `nextCronRun`, `describeCron` ("Every day at 03:00 UTC"), `CronSchedule`                                                                                                    |
 
 ```ts
@@ -8931,6 +8981,45 @@ const next = nextOccurrence(parsed.output, { start: due, after: new Date("2026-0
   there and no answer of ours could match.
 - **Clock changes.** Occurrences keep the start's wall clock. A time a zone skips (spring forward)
   keeps its date and wall clock; a time it repeats (fall back) occurs once, at its first reading.
+- **Month end as RFC 5545 says.** `monthEnd: RruleMonthEnd.Skip` (in `nextOccurrence` and
+  `occurrencesBetween`) turns the Tasks.org clipping off: monthly on day 31 then skips February,
+  April and June. The default is `RruleMonthEnd.Clip`.
+
+### Occurrences in a range
+
+`occurrencesBetween` lists every occurrence from `from` to `to`, both included, in order. It walks
+the same steps as `nextOccurrence`, so the two never disagree. A range with more than `limit`
+occurrences (default 1,000) is `RruleErrorCode.SearchLimit`, never a cut list.
+
+```ts
+import { occurrencesBetween, RruleMonthEnd } from "@spy4x/time/rrule"
+
+const month31 = parseRrule("FREQ=MONTHLY;BYMONTHDAY=31")
+if (!month31.success) throw new Error(month31.error.message)
+occurrencesBetween(month31.output, {
+  start: { kind: IcalDateKind.Date, date: "2026-01-31" },
+  from: new Date("2026-01-01T00:00:00Z"),
+  to: new Date("2026-06-30T23:59:59Z"),
+  monthEnd: RruleMonthEnd.Skip,
+}) // 31 January, 31 March, 31 May
+```
+
+### Labels in nine languages
+
+`describeRrule(rule)` writes English. `describeRrule(rule, words)` takes a translator of the
+`@spy4x/platform/universal/i18n` shape built from the catalogs in `@spy4x/time/rrule-words/<lang>`
+(`en`, `ru`, `es`, `de`, `pt-BR`, `ar`, `fr`, `ja`, `zh-CN`). Weekday, month and date names come
+from `Intl` in the translator's language, lists from `Intl.ListFormat`, and counts use the
+language's plural forms.
+
+```ts
+import { createTranslator } from "@spy4x/platform/universal/i18n"
+import en from "@spy4x/time/rrule-words/en"
+import ru from "@spy4x/time/rrule-words/ru"
+
+const words = createTranslator({ language: "ru", catalogs: [{ source: en, translation: ru }] })
+describeRrule(parseRrule("FREQ=MONTHLY;BYDAY=-1FR").output!, words) // "Ежемесячно: последняя пятница"
+```
 
 ### Editing the repeat rule and the reminders of a task
 
