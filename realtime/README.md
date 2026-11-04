@@ -169,7 +169,7 @@ package now adapts (see below).
 | ------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------- |
 | `ManagedSocket`     | `state`, `send`, `close`, `onOpen`, `onMessage`, `onClose`, optional `bufferedAmount`                                                                                               | `socket-port.ts`      |
 | `SocketFactory`     | `(url) => ManagedSocket`                                                                                                                                                            | `socket-port.ts`      |
-| `Clock`             | `now`, `setTimeout`/`clearTimeout`, `setInterval`/`clearInterval`                                                                                                                   | `clock.ts`            |
+| `TimerClock`        | `now`, `setTimeout`/`clearTimeout`, `setInterval`/`clearInterval`                                                                                                                   | `clock.ts`            |
 | `KeyValueStore`     | `getItem`, `setItem`, `removeItem` — satisfied by Web Storage `Storage`; a deprecated alias of `@spy4x/platform/universal/key-value-store`'s `KeyValueStore`, the actual home (#71) | `storage.ts`          |
 | `MessageCodec`      | `encode`, `decode`                                                                                                                                                                  | `codec.ts`            |
 | `CursorPort`        | `syncRequest`, `cursorFor`, `apply`, optional `markSynced`                                                                                                                          | `client-transport.ts` |
@@ -1185,7 +1185,7 @@ own wiring without inventing a second set.
 
 Dependencies: arktype (the repository's only validator) for the wire schemas,
 `@spy4x/platform` (`universal/time`, `#71`) for the plain instant source
-`clock.ts`'s `Clock` extends, `@spy4x/net` (`bounded-body`) for the capped body read in
+`clock.ts`'s `TimerClock` extends, `@spy4x/net` (`bounded-body`) for the capped body read in
 `operations.ts`, and `@std/*` in tests. No WebSocket library, no
 framework, no Preact, no signals. `web-socket-adapter.ts` is the one file that
 names the platform `WebSocket` type, and only as a type — it constructs one

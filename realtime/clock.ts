@@ -1,7 +1,7 @@
 /**
  * Time and timer ports.
  *
- * Every timing behaviour in this package goes through a {@link Clock}, so tests drive a
+ * Every timing behaviour in this package goes through a {@link TimerClock}, so tests drive a
  * deterministic scheduler instead of sleeping, and no module reads `Date.now` or the timer globals
  * at import time.
  */
@@ -20,12 +20,20 @@ export interface TimerHandle {
  * Extends `Clock` from "@spy4x/platform/universal/time" (`#71`) with the timer methods this
  * package's transport needs on top of the plain instant source.
  */
-export interface Clock extends PlatformClock {
+export interface TimerClock extends PlatformClock {
   setInterval(callback: () => void, ms: number): TimerHandle
   clearInterval(handle: TimerHandle): void
   setTimeout(callback: () => void, ms: number): TimerHandle
   clearTimeout(handle: TimerHandle): void
 }
+
+/**
+ * The old name of {@link TimerClock}.
+ *
+ * @deprecated Use `TimerClock`. `Clock` from `@spy4x/platform/universal/time` is the plain
+ * instant source this one extends.
+ */
+export type Clock = TimerClock
 
 /**
  * Clock backed by the platform timers.
@@ -34,7 +42,7 @@ export interface Clock extends PlatformClock {
  * to import on a server, in a worker and in a test that replaces `globalThis`. `now` delegates to
  * `@spy4x/platform/universal/time`'s `systemClock`, the same `Date.now()` read as before.
  */
-export function createSystemClock(): Clock {
+export function createSystemClock(): TimerClock {
   return {
     ...systemClock,
     setInterval: (callback, ms) => ({

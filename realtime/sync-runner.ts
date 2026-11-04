@@ -31,7 +31,7 @@
  */
 
 import { retryDelay } from "./backoff.ts"
-import { type Clock, createSystemClock, type TimerHandle } from "./clock.ts"
+import { createSystemClock, type TimerClock, type TimerHandle } from "./clock.ts"
 import { callListener } from "./listener-guard.ts"
 import { type PageLifecycleTarget, watchPageResume } from "./page-lifecycle.ts"
 
@@ -66,7 +66,7 @@ export interface SyncRunnerOptions {
   /** Where the browser events come from. Defaults to the global `window`. */
   target?: SyncRunnerTarget
   /** Timers and time. Defaults to the system clock. */
-  clock?: Clock
+  clock?: TimerClock
   /** Uniform source in `[0, 1)` for the backoff jitter. Defaults to `Math.random`. */
   random?: () => number
   /** The first retry's delay before jitter. Doubles per failure in a row. Default 1000. */

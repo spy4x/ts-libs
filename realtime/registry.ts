@@ -51,7 +51,7 @@ import {
 } from "./codec.ts"
 import { callListener } from "./listener-guard.ts"
 import { RealtimeRequestError } from "./errors.ts"
-import type { Clock, TimerHandle } from "./clock.ts"
+import type { TimerClock, TimerHandle } from "./clock.ts"
 import { type ManagedSocket, SocketState, type Unsubscribe } from "./socket-port.ts"
 
 /** Why a connection left the registry. */
@@ -129,7 +129,7 @@ export type MalformedFrameHandler = (frame: MalformedFrame) => void
 
 /** Options for {@link ConnectionRegistry}. */
 export interface ConnectionRegistryOptions {
-  clock: Clock
+  clock: TimerClock
   /** Interval between liveness pings. */
   heartbeatIntervalMs?: number
   /** Silence after which a socket is reaped. Must exceed `heartbeatIntervalMs`. */
@@ -200,7 +200,7 @@ const DEFAULT_REQUEST_TIMEOUT_MS = 10_000
  * mount the sync handshake and nothing else.
  */
 export class ConnectionRegistry {
-  readonly #clock: Clock
+  readonly #clock: TimerClock
   readonly #codec: MessageCodec
   readonly #heartbeatIntervalMs: number
   readonly #livenessTimeoutMs: number

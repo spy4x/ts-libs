@@ -25,7 +25,7 @@
  */
 
 import { createDataCache } from "@spy4x/platform/browser/data-cache"
-import { type Clock, createSystemClock } from "./clock.ts"
+import { createSystemClock, type TimerClock } from "./clock.ts"
 import { isForeignAnswer } from "./calls.ts"
 import { ConnectionLostError, RequestTimeoutError } from "./client-transport.ts"
 import { RealtimeRequestError } from "./errors.ts"
@@ -46,7 +46,7 @@ export interface ReadCacheOptions {
   /** The factory to open with. Defaults to `globalThis.indexedDB`. */
   indexedDB?: IDBFactory
   /** The time source for `savedAt`. Defaults to the system clock. */
-  clock?: Pick<Clock, "now">
+  clock?: Pick<TimerClock, "now">
 }
 
 /** The copies of one user: see the module documentation. */

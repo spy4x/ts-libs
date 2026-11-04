@@ -108,7 +108,7 @@ export interface FormatTimeOptions {
  * Injectable time source, so formatting and relative times are testable without a frozen host.
  *
  * The one home for the object-shaped clock (`#71`): `platform/server/ports.ts`'s `ClockPort` is
- * now an alias of this type, and `realtime/clock.ts`'s `Clock` extends it with timer methods.
+ * now an alias of this type, and `realtime/clock.ts`'s `TimerClock` extends it with timer methods.
  * `platform/rate-limit/memory.ts` also used to export its own function-shaped clock
  * (`() => number`) under the same names, `Clock`/`systemClock` — a different shape that this
  * extraction cannot merge into the interface above without breaking a 1.x caller of one shape or

@@ -45,7 +45,7 @@
  */
 
 import { type BackoffConfig, DEFAULT_BACKOFF, retryDelay } from "./backoff.ts"
-import type { Clock, TimerHandle } from "./clock.ts"
+import type { TimerClock, TimerHandle } from "./clock.ts"
 import {
   type ClientMessage,
   createJsonCodec,
@@ -166,7 +166,7 @@ export interface ClientTransportOptions {
   /** Socket URL. The transport never builds one from `location`. */
   url: string
   socketFactory: SocketFactory
-  clock: Clock
+  clock: TimerClock
   cursors: CursorPort
   /**
    * The REST pull that confirms a change and is the only thing that may move the cursor.
@@ -327,7 +327,7 @@ const DEFAULT_HANDSHAKE_ATTEMPTS = 2
  */
 export class ClientTransport {
   readonly #options: ClientTransportOptions
-  readonly #clock: Clock
+  readonly #clock: TimerClock
   readonly #codec: MessageCodec
   readonly #heartbeatIntervalMs: number
   readonly #pongTimeoutMs: number

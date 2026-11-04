@@ -25,7 +25,7 @@
  * keys; the counter only decays by waiting.
  */
 
-import { systemNow } from "../universal/time.ts"
+import { type NowFn, systemNow } from "../universal/time.ts"
 
 /**
  * Monotonic millisecond clock. Inject a fake in tests; never read `Date.now()` behind one.
@@ -97,7 +97,7 @@ export interface RateLimitOptions {
   /** Requests allowed per window per key. A fractional limit is rounded down. */
   limit: number
   /** Clock the limiter reads. Defaults to {@link systemClock}. */
-  clock?: Clock
+  clock?: NowFn
   /** Idle grace after `windowMs` before a bucket is swept. Defaults to {@link DEFAULT_IDLE_MS}. */
   idleMs?: number
 }
@@ -172,7 +172,7 @@ export class MemoryRateLimiter {
   private readonly buckets = new Map<string, EventBucket>()
   private readonly windowMs: number
   private readonly limit: number
-  private readonly clock: Clock
+  private readonly clock: NowFn
   private readonly idleMs: number
   private readonly onSweep: ((removed: number) => void) | undefined
   private readonly maxBuckets: number
@@ -427,7 +427,7 @@ export class StoreRateLimiter {
   private readonly store: RateLimitStore
   private readonly windowMs: number
   private readonly limit: number
-  private readonly clock: Clock
+  private readonly clock: NowFn
 
   constructor(store: RateLimitStore, options: RateLimitOptions) {
     if (!(options.windowMs > 0)) throw new Error("windowMs must be > 0")

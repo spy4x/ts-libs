@@ -9,7 +9,7 @@
  * @module
  */
 
-import type { Clock, TimerHandle } from "./clock.ts"
+import type { TimerClock, TimerHandle } from "./clock.ts"
 import type { ServerMessage } from "./codec.ts"
 import type { ReadCache } from "./read-cache.ts"
 import type { UserFanout } from "./notify.ts"
@@ -38,7 +38,7 @@ interface FakeTimer {
  * schedules a follow-up timer (a reconnect, a retry) is exercised in one call. No test in this
  * package sleeps, and `pendingTimers` is how a test asserts a transport leaked nothing.
  */
-export class FakeClock implements Clock {
+export class FakeClock implements TimerClock {
   #now = 0
   readonly #timers = new Map<number, FakeTimer>()
   #nextId = 1
