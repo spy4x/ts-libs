@@ -35,7 +35,10 @@
  * @module
  */
 
+import { currencies } from "./money-currencies.ts"
 import { err, ok, type Result } from "./result.ts"
+
+export { currencies, CURRENCIES_PUBLISHED } from "./money-currencies.ts"
 
 /**
  * Optional, additive overrides for {@link formatMoney}, {@link formatMoneyParts},
@@ -47,7 +50,8 @@ import { err, ok, type Result } from "./result.ts"
 export interface MoneyOptions {
   /**
    * How many fraction digits the smallest unit has — `6` for `USDT`, `8` for `BTC`. A whole number
-   * from 0 to 20. When omitted, `Intl` decides, exactly as before this option existed.
+   * from 0 to 20. When omitted, the ISO 4217 table ({@link currencies}) decides, and `Intl` only
+   * for a code the table lacks.
    */
   decimals?: number
 }
@@ -74,8 +78,10 @@ function checkedCurrency(currency: string): string {
 /**
  * How many fraction digits `currency` uses, in `locale`'s own currency display rules.
  *
- * Never assume two: the yen (`JPY`) has none, the Kuwaiti dinar (`KWD`) has three. This asks
- * `Intl` rather than hard-coding a table, so a currency this module has never seen still works.
+ * Never assume two: the yen (`JPY`) has none, the Kuwaiti dinar (`KWD`) has three. An ISO 4217
+ * code reads the checked-in table ({@link currencies}), so Deno, Node and Bun give the same answer:
+ * their `Intl` data disagree on 17 codes (`RSD` is 0 on Deno and 2 on Node; ISO says 2). Only a
+ * code the table lacks asks `Intl`, so a code this module has never seen still works.
  *
  * An empty or whitespace-only `currency` throws a `RangeError`, with or without `options.decimals`,
  * and so does every other helper here that takes a code.
@@ -87,6 +93,7 @@ export function currencyDecimals(
 ): number {
   checkedCurrency(currency)
   if (options.decimals !== undefined) return checkedDecimals(options.decimals)
+  if (Object.hasOwn(currencies, currency)) return currencies[currency]
   const { maximumFractionDigits } = new Intl.NumberFormat(locale, {
     style: "currency",
     currency,

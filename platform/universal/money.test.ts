@@ -2,6 +2,8 @@ import { describe, it } from "@std/testing/bdd"
 import { expect } from "@std/expect"
 
 import {
+  currencies,
+  CURRENCIES_PUBLISHED,
   currencyDecimals,
   formatMoney,
   formatMoneyParts,
@@ -359,5 +361,39 @@ describe("money with a blank currency code", () => {
       expect(() => parseMoney("1.00", code)).toThrow(RangeError)
       expect(() => parseMoney("", code, "en", { decimals: 2 })).toThrow(RangeError)
     }
+  })
+})
+
+describe("the ISO 4217 currency table", () => {
+  it("gives currencyDecimals the table's value for every code, without a decimals option", () => {
+    const codes = Object.keys(currencies)
+    expect(codes.length).toBe(165)
+    for (const code of codes) {
+      expect([code, currencyDecimals(code)]).toEqual([code, currencies[code]])
+      expect([code, currencyDecimals(code, "ar-EG")]).toEqual([code, currencies[code]])
+    }
+  })
+
+  it("answers ISO, not the runtime, for the codes the runtimes disagree on", () => {
+    expect(currencyDecimals("RSD")).toBe(2)
+    expect(currencyDecimals("IQD")).toBe(3)
+    expect(currencyDecimals("HUF")).toBe(2)
+    expect(currencyDecimals("VND")).toBe(0)
+    expect(currencyDecimals("UYW")).toBe(4)
+    expect(currencyDecimals("YER")).toBe(2)
+  })
+
+  it("leaves out the codes whose minor unit is N.A.", () => {
+    for (const code of ["XAU", "XAG", "XDR", "XTS", "XXX"]) {
+      expect(Object.hasOwn(currencies, code)).toBe(false)
+    }
+    expect(CURRENCIES_PUBLISHED).toBe("2026-09-17")
+  })
+
+  it("still lets a code the table lacks fall back to Intl", () => {
+    expect(currencyDecimals("XXX")).toBe(
+      new Intl.NumberFormat("en", { style: "currency", currency: "XXX" }).resolvedOptions()
+        .maximumFractionDigits,
+    )
   })
 })
