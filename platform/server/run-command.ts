@@ -27,6 +27,8 @@
  * @module
  */
 
+import type { OsSignal } from "./process.ts"
+
 /** What a finished child process reports; the subset of `Deno.CommandOutput` this module reads. */
 export interface RunCommandOutput {
   success: boolean
@@ -34,7 +36,7 @@ export interface RunCommandOutput {
   stdout: Uint8Array
   stderr: Uint8Array
   /** The signal that killed the process, or `null` when it exited on its own. */
-  signal?: Deno.Signal | null
+  signal?: OsSignal | null
 }
 
 /** The subset of `Deno.CommandOptions` {@link runCommand} passes to its spawner. */
@@ -98,7 +100,7 @@ export interface RunCommandResult {
   /** Set only when the process could not be started: why. Absent when it ran, even if it failed. */
   error?: string
   /** The signal that killed the process (`"SIGTERM"` after an abort); absent if it exited. */
-  signal?: Deno.Signal
+  signal?: OsSignal
 }
 
 /** The subset of `node:child_process` and `node:os` that {@link nodeSpawner} uses. */
@@ -159,7 +161,7 @@ export function nodeSpawner(load = loadNodeChildProcess): CommandSpawner {
             code: code ?? 128 + (node.signals[signal ?? ""] ?? 0),
             stdout: concat(stdout),
             stderr: concat(stderr),
-            signal: signal as Deno.Signal | null,
+            signal: signal as OsSignal | null,
           }))
       })
     },
