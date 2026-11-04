@@ -3,6 +3,8 @@
  * behind an app-supplied store, the signed session cookie, Hono middleware and guards, password
  * hashing with a pepper, and authenticator-app codes. See `server/README.md`.
  *
+ * The account model, sign-in keys and challenges (`AuthStore`) are in `@spy4x/server/auth`.
+ *
  * @module
  */
 
