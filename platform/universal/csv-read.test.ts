@@ -184,6 +184,7 @@ describe("parseCsv", () => {
   it("throws for a delimiter or a limit a caller cannot mean", () => {
     expect(() => parseCsv("a", { delimiter: "" })).toThrow(RangeError)
     expect(() => parseCsv("a", { delimiter: '"' })).toThrow(RangeError)
+    expect(() => parseCsv("a😀b", { delimiter: "😀" })).toThrow(RangeError)
     expect(() => parseCsv("a", { maxRows: 0 })).toThrow(RangeError)
     expect(() => parseCsv("a", { maxFieldLength: 1.5 })).toThrow(RangeError)
   })

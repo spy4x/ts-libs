@@ -245,7 +245,7 @@ export function parseCsv(
   options: ParseCsvOptions = {},
 ): Result<string[][], CsvParseError> {
   const { delimiter = ",", ...limits } = options
-  if ([...delimiter].length !== 1 || delimiter === '"' || /[\r\n]/.test(delimiter)) {
+  if (delimiter.length !== 1 || delimiter === '"' || /[\r\n]/.test(delimiter)) {
     throw new RangeError(`csv delimiter must be one character other than a quote or line break`)
   }
   const checked = { ...CSV_DEFAULT_LIMITS, ...definedLimits(limits) }
