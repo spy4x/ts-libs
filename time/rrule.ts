@@ -7,14 +7,16 @@
  * (`BYSETPOS`, `BYHOUR`, `FREQ=HOURLY`, a vendor `X-` part) is refused with the part's name, so an
  * app can say "complete this one in Tasks.org" instead of guessing. {@link nextOccurrence} steps
  * the wall clock of the start value and keeps its kind (date, floating, UTC, zoned); zone maths
- * go through `./tz.ts`. {@link describeRrule} gives an English label. {@link formatRrule} writes a
- * rule back to its `RRULE` value.
+ * go through `./tz.ts`. {@link occurrencesBetween} lists every occurrence in a range with the same
+ * stepping. {@link describeRrule} gives a label, in English or in the words of a translator made
+ * from the catalogs in `./rrule-words/`. {@link formatRrule} writes a rule back to its `RRULE` value.
  *
  * A date a month does not have (the 31st in April, 29 February in a common year) is skipped, as
  * RFC 5545 section 3.3.10 requires, with one exception that follows Tasks.org: a plain monthly
  * rule (no `BYDAY`, no `BYMONTH`, no `BYMONTHDAY` or one positive day) is anchored on that day, or
  * on the start's day without one, and uses the month's last day when a month is shorter than the
- * anchor, so 31 January is followed by 28 February. A wall clock a zone skips (a spring-forward
+ * anchor, so 31 January is followed by 28 February. {@link RruleMonthEnd.Skip} turns the exception
+ * off, for an app that follows RFC 5545 to the letter. A wall clock a zone skips (a spring-forward
  * gap) is kept: the occurrence keeps its date and wall clock, which `resolveInstant` shifts
  * forward, so a task due at 02:30 is not lost on that day.
  *
@@ -458,7 +460,7 @@ function clippedMonthDays(
 }
 
 /** The day numbers period `k` of the rule selects, ascending. */
-function periodDays(rule: Rrule, startDays: number, k: number): number[] {
+function periodDays(rule: Rrule, startDays: number, k: number, clip: boolean): number[] {
   const start = fromDays(startDays)
   switch (rule.freq) {
     case RruleFreq.Daily: {
@@ -481,7 +483,7 @@ function periodDays(rule: Rrule, startDays: number, k: number): number[] {
       const year = Math.floor(index / 12)
       const month = (index % 12) + 1
       if (rule.byMonth.length && !rule.byMonth.includes(month)) return []
-      if (clipsMonthEnd(rule)) return clippedMonthDays(rule, start, k, year, month)
+      if (clip && clipsMonthEnd(rule)) return clippedMonthDays(rule, start, k, year, month)
       return monthDays(rule, year, month, start.day)
     }
     case RruleFreq.Yearly: {
@@ -519,6 +521,112 @@ function firstPeriod(rule: Rrule, startDays: number, refDays: number): number {
   return Math.max(0, Math.floor(periods))
 }
 
+// ---- stepping through a series -----------------------------------------------------------------
+
+/** How a plain monthly rule treats a month shorter than its day. */
+export enum RruleMonthEnd {
+  /** Tasks.org's way, the default: use the month's last day, so 31 January is followed by 28 February. */
+  Clip = 1,
+  /** RFC 5545's way: skip the month, so `BYMONTHDAY=31` falls in January, March, May… */
+  Skip,
+}
+
+/** Inputs every search of a series shares. */
+interface SeriesOptions {
+  /** The rule's `DTSTART` (for a task, its due or start date). Results have the same kind. */
+  start: IcalDateValue
+  /** IANA zone that reads instants against date-only and floating values. Default `UTC`. */
+  timeZone?: string
+  /** How a plain monthly rule treats a month shorter than its day. Default {@link RruleMonthEnd.Clip}. */
+  monthEnd?: RruleMonthEnd
+}
+
+/** A validated series: everything a search needs to step through the occurrences in order. */
+interface Series {
+  /** The occurrence on `date`, with the start's kind, time and zone. */
+  make(date: string): IcalDateValue
+  /** The instant of the occurrence on `date`, or `undefined` for a date-only start. */
+  instant(date: string): number | undefined
+  /** `instant` cannot place a date-only start: such a search compares dates in `zone`. */
+  dateOnly: boolean
+  zone: string
+  /**
+   * Visit the occurrences in order, from a period safely before `refDays` (from the first period
+   * when the rule counts), until `visit` returns true (`found`), the rule ends (`ended`) or a run of
+   * {@link SEARCH_LIMIT} periods selects nothing (`limit`).
+   */
+  walk(refDays: number, visit: (date: string, days: number) => boolean): `found` | `ended` | `limit`
+}
+
+function openSeries(rule: Rrule, options: SeriesOptions): RruleResult<Series> {
+  const { start } = options
+  const zone = start.kind === IcalDateKind.Zoned ? start.tzid : options.timeZone ?? `UTC`
+  const dateOnly = start.kind === IcalDateKind.Date
+  if (
+    !Object.values(IcalDateKind).includes(start.kind) || !/^\d{4}-\d{2}-\d{2}$/.test(start.date) ||
+    (dateOnly ? start.time !== undefined : !/^\d{2}:\d{2}:\d{2}$/.test(start.time ?? ``)) ||
+    (start.kind === IcalDateKind.Zoned) !== (start.tzid !== undefined)
+  ) return fail(RruleErrorCode.InvalidStart, `start is not a well-formed value`)
+  if (!zone || !isValidTimeZone(zone)) {
+    return fail(RruleErrorCode.InvalidStart, `unknown time zone or invalid instant`)
+  }
+  const startDays = dayNumber(start.date)
+  if (startDays === undefined || isoDate(startDays) === undefined) {
+    return fail(RruleErrorCode.InvalidStart, `${start.date} is not a calendar date`)
+  }
+  const clip = (options.monthEnd ?? RruleMonthEnd.Clip) === RruleMonthEnd.Clip
+
+  const make = (date: string): IcalDateValue => {
+    const value: IcalDateValue = { kind: start.kind, date }
+    if (start.time !== undefined) value.time = start.time
+    if (start.tzid !== undefined) value.tzid = start.tzid
+    return value
+  }
+  const until = rule.until
+  // `parseUntil` has checked that the date exists.
+  const untilDays = until ? dayNumber(until.date)! : 0
+  const withinUntil = (date: string, days: number): boolean => {
+    if (!until) return true
+    if (until.kind === IcalDateKind.Utc) {
+      // A zone shifts a wall date by under a day, so two days apart needs no zone maths.
+      if (days + 2 <= untilDays) return true
+      const instant = resolveInstant(make(date), { zone })
+      const limit = resolveInstant(until)
+      return instant !== undefined && limit !== undefined && instant <= limit
+    }
+    return `${date}T${start.time ?? `00:00:00`}` <= `${until.date}T${until.time ?? `23:59:59`}`
+  }
+
+  return ok({
+    make,
+    instant: (date) => dateOnly ? undefined : resolveInstant(make(date), { zone })?.getTime(),
+    dateOnly,
+    zone,
+    walk(refDays, visit) {
+      // COUNT needs every occurrence from the start counted; otherwise skip to near `refDays`.
+      let k = rule.count === undefined ? firstPeriod(rule, startDays, refDays) : 0
+      let seen = 0
+      let emptyRun = 0
+      while (emptyRun < SEARCH_LIMIT) {
+        const days = periodDays(rule, startDays, k++, clip).filter((day) => day >= startDays)
+        emptyRun = days.length === 0 ? emptyRun + 1 : 0
+        for (const day of days) {
+          const date = isoDate(day)
+          if (date === undefined) return `ended`
+          seen++
+          if (rule.count !== undefined && seen > rule.count) return `ended`
+          if (!withinUntil(date, day)) return `ended`
+          if (visit(date, day)) return `found`
+        }
+      }
+      return `limit`
+    },
+  })
+}
+
+const searchLimit = (): RruleResult<never> =>
+  fail(RruleErrorCode.SearchLimit, `no occurrence found in ${SEARCH_LIMIT} periods in a row`)
+
 // ---- next occurrence ---------------------------------------------------------------------------
 
 /** Inputs of {@link nextOccurrence}. */
@@ -529,6 +637,8 @@ export interface NextOccurrenceOptions {
   start: IcalDateValue
   /** IANA zone that reads `after` against date-only and floating values. Default `UTC`. */
   timeZone?: string
+  /** How a plain monthly rule treats a month shorter than its day. Default {@link RruleMonthEnd.Clip}. */
+  monthEnd?: RruleMonthEnd
 }
 
 /**
@@ -554,73 +664,115 @@ export function nextOccurrence(
   rule: Rrule,
   options: NextOccurrenceOptions,
 ): RruleResult<IcalDateValue | null> {
-  const { start, after } = options
-  const zone = start.kind === IcalDateKind.Zoned ? start.tzid : options.timeZone ?? `UTC`
-  const dateOnly = start.kind === IcalDateKind.Date
-  if (
-    !Object.values(IcalDateKind).includes(start.kind) || !/^\d{4}-\d{2}-\d{2}$/.test(start.date) ||
-    (dateOnly ? start.time !== undefined : !/^\d{2}:\d{2}:\d{2}$/.test(start.time ?? ``)) ||
-    (start.kind === IcalDateKind.Zoned) !== (start.tzid !== undefined)
-  ) return fail(RruleErrorCode.InvalidStart, `start is not a well-formed value`)
-  if (!zone || !isValidTimeZone(zone) || Number.isNaN(after.getTime())) {
+  const { after } = options
+  const opened = openSeries(rule, options)
+  if (!opened.success) return opened
+  if (Number.isNaN(after.getTime())) {
     return fail(RruleErrorCode.InvalidStart, `unknown time zone or invalid instant`)
   }
-  const startDays = dayNumber(start.date)
-  if (startDays === undefined || isoDate(startDays) === undefined) {
-    return fail(RruleErrorCode.InvalidStart, `${start.date} is not a calendar date`)
-  }
-
-  const make = (date: string): IcalDateValue => {
-    const value: IcalDateValue = { kind: start.kind, date }
-    if (start.time !== undefined) value.time = start.time
-    if (start.tzid !== undefined) value.tzid = start.tzid
-    return value
-  }
-  const afterDate = isoDateInTz(after, zone)
-  const isAfter = (date: string): boolean => {
-    if (dateOnly) return date > afterDate
-    const instant = resolveInstant(make(date), { zone })
-    return instant !== undefined && instant.getTime() > after.getTime()
-  }
-  const until = rule.until
-  // `parseUntil` has checked that the date exists.
-  const untilDays = until ? dayNumber(until.date)! : 0
-  const withinUntil = (date: string, days: number): boolean => {
-    if (!until) return true
-    if (until.kind === IcalDateKind.Utc) {
-      // A zone shifts a wall date by under a day, so two days apart needs no zone maths.
-      if (days + 2 <= untilDays) return true
-      const instant = resolveInstant(make(date), { zone })
-      const limit = resolveInstant(until)
-      return instant !== undefined && limit !== undefined && instant <= limit
-    }
-    return `${date}T${start.time ?? `00:00:00`}` <= `${until.date}T${until.time ?? `23:59:59`}`
-  }
-
-  // COUNT needs every occurrence from the start counted; otherwise skip to near `after`.
+  const series = opened.output
+  const afterDate = isoDateInTz(after, series.zone)
   // `afterDate` is `after` read in `zone`, while a UTC or floating start's wall clock may lie up
   // to a day away from that; two days back is certainly before `after` whatever the kind.
   const afterDays = dayNumber(afterDate)
   // `after` reads past 9999-12-31 in `zone`: no occurrence comes after it.
   if (afterDays === undefined) return ok(null)
   const refDays = afterDays - 2
-  let k = rule.count === undefined ? firstPeriod(rule, startDays, refDays) : 0
-  let seen = 0
-  let emptyRun = 0
-  while (emptyRun < SEARCH_LIMIT) {
-    const days = periodDays(rule, startDays, k++).filter((day) => day >= startDays)
-    emptyRun = days.length === 0 ? emptyRun + 1 : 0
-    for (const day of days) {
-      const date = isoDate(day)
-      if (date === undefined) return ok(null)
-      seen++
-      if (rule.count !== undefined && seen > rule.count) return ok(null)
-      if (!withinUntil(date, day)) return ok(null)
-      // Dates far before `after` are decided by comparing days; zone maths only runs near it.
-      if (day >= refDays && isAfter(date)) return ok(make(date))
-    }
+  let found: IcalDateValue | null = null
+  const status = series.walk(refDays, (date, day) => {
+    // Dates far before `after` are decided by comparing days; zone maths only runs near it.
+    if (day < refDays) return false
+    const isAfter = series.dateOnly
+      ? date > afterDate
+      : (series.instant(date) ?? -Infinity) > after.getTime()
+    if (isAfter) found = series.make(date)
+    return isAfter
+  })
+  return status === `limit` ? searchLimit() : ok(found)
+}
+
+// ---- occurrences in a range --------------------------------------------------------------------
+
+/** Inputs of {@link occurrencesBetween}. */
+export interface OccurrencesBetweenOptions {
+  /** The rule's `DTSTART`. Every result has its kind, time of day and zone. */
+  start: IcalDateValue
+  /** The first instant of the range, included (a date-only result: its date in the zone). */
+  from: Date
+  /** The last instant of the range, included (a date-only result: its date in the zone). */
+  to: Date
+  /** IANA zone that reads `from` and `to` against date-only and floating values. Default `UTC`. */
+  timeZone?: string
+  /** The most occurrences returned; past it the result is {@link RruleErrorCode.SearchLimit}. Default 1,000. */
+  limit?: number
+  /** How a plain monthly rule treats a month shorter than its day. Default {@link RruleMonthEnd.Clip}. */
+  monthEnd?: RruleMonthEnd
+}
+
+/** The default `limit` of {@link occurrencesBetween}. */
+const RANGE_LIMIT = 1_000
+
+/**
+ * Every occurrence of `rule` from `options.from` to `options.to`, both included, in order, each a
+ * value of the same kind (and zone) as `options.start` with the start's time of day. A zoned start
+ * keeps its wall clock across a daylight-saving change: a weekly 09:00 in `Europe/Berlin` stays
+ * 09:00 there. It steps the series the same way {@link nextOccurrence} does, so the two agree:
+ * an occurrence is in the range exactly when `nextOccurrence` reaches it from before `from`.
+ *
+ * A range that ends before it starts is empty. More occurrences than `limit` fail with
+ * {@link RruleErrorCode.SearchLimit}, never a cut list that looks complete; so does a rule that
+ * selects nothing within the search limit. Fails with {@link RruleErrorCode.InvalidStart} for a
+ * start, zone or instant it cannot use. Throws a `RangeError` when `limit` is not a positive
+ * integer.
+ */
+export function occurrencesBetween(
+  rule: Rrule,
+  options: OccurrencesBetweenOptions,
+): RruleResult<IcalDateValue[]> {
+  const { from, to, limit = RANGE_LIMIT } = options
+  if (!Number.isInteger(limit) || limit < 1) {
+    throw new RangeError(`limit must be a positive integer, got ${limit}`)
   }
-  return fail(RruleErrorCode.SearchLimit, `no occurrence found in ${SEARCH_LIMIT} periods in a row`)
+  const opened = openSeries(rule, options)
+  if (!opened.success) return opened
+  if (Number.isNaN(from.getTime()) || Number.isNaN(to.getTime())) {
+    return fail(RruleErrorCode.InvalidStart, `unknown time zone or invalid instant`)
+  }
+  if (to < from) return ok([])
+  const series = opened.output
+  const fromDate = isoDateInTz(from, series.zone)
+  const toDate = isoDateInTz(to, series.zone)
+  const fromDays = dayNumber(fromDate)
+  // The range starts past 9999-12-31 in `zone`: nothing falls in it.
+  if (fromDays === undefined) return ok([])
+  const toDays = dayNumber(toDate) ?? LAST_DAY
+  // As in `nextOccurrence`: a wall date lies under a day from the instant read in `zone`.
+  const refDays = fromDays - 2
+  const found: IcalDateValue[] = []
+  let tooMany = false
+  const status = series.walk(refDays, (date, day) => {
+    if (day < refDays) return false
+    if (day > toDays + 2) return true
+    if (series.dateOnly) {
+      if (date > toDate) return true
+      if (date < fromDate) return false
+    } else if (day < fromDays + 2 || day > toDays - 2) {
+      // Only dates near either end need zone maths.
+      const instant = series.instant(date)
+      if (instant !== undefined && instant > to.getTime()) return true
+      if (instant === undefined || instant < from.getTime()) return false
+    }
+    if (found.length === limit) {
+      tooMany = true
+      return true
+    }
+    found.push(series.make(date))
+    return false
+  })
+  if (tooMany) {
+    return fail(RruleErrorCode.SearchLimit, `more than ${limit} occurrences in the range`)
+  }
+  return status === `limit` ? searchLimit() : ok(found)
 }
 
 // ---- English label -----------------------------------------------------------------------------
