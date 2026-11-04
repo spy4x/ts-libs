@@ -681,9 +681,21 @@ Deno.test("static: nodeStaticFs answers null for a directory or a missing path",
 })
 
 Deno.test("static: runtimeStaticFs reads through denoStaticFs on Deno", async () => {
-  const handle = await runtimeStaticFs.open(`${FIXTURE_ROOT}/index.html`)
-  assertStrictEquals(handle !== null, true)
-  handle!.close()
+  // Count calls to Deno.open, which only denoStaticFs makes.
+  const realOpen = Deno.open
+  let denoOpens = 0
+  Deno.open = (...args: Parameters<typeof Deno.open>) => {
+    denoOpens++
+    return realOpen(...args)
+  }
+  try {
+    const handle = await runtimeStaticFs.open(`${FIXTURE_ROOT}/index.html`)
+    assertStrictEquals(handle !== null, true)
+    handle!.close()
+  } finally {
+    Deno.open = realOpen
+  }
+  assertEquals(denoOpens, 1)
   assertEquals(await runtimeStaticFs.open(FIXTURE_ROOT), null)
   assertEquals(await runtimeStaticFs.realPath(FIXTURE_ROOT), await Deno.realPath(FIXTURE_ROOT))
 })
