@@ -258,7 +258,7 @@ describe("chatJson", () => {
 })
 
 describe("no LLM error carries the key, the prompt or the URL", () => {
-  const PROMPT_WORDS = ["COFFEE", "PERSONALNAME", "statement"]
+  const PROMPT_WORDS = ["Turn this", "COFFEE", "PERSONALNAME", "statement"]
 
   const assertClean = (label: string, value: unknown): void => {
     const text = JSON.stringify(value)
@@ -276,8 +276,6 @@ describe("no LLM error carries the key, the prompt or the URL", () => {
       Response.json({ error: { message: `Incorrect API key ${KEY} for: ${PROMPT}` } }, {
         status: 401,
       }),
-    "a reply echoing the prompt that fails the schema": () =>
-      completion(JSON.stringify({ PROMPT })),
     "a reply echoing the prompt that is not JSON": () => completion(PROMPT),
     "a reply body that is not a chat completion": () => new Response(`${PROMPT} ${KEY}`),
   }
@@ -291,11 +289,23 @@ describe("no LLM error carries the key, the prompt or the URL", () => {
     })
   }
 
+  it("keeps them out of a reply echoing the prompt that fails the schema", async () => {
+    // A literal union makes arktype quote the rejected value in its own message.
+    const { fetcher } = stub(() => completion(JSON.stringify({ kind: PROMPT })))
+    const result = await chatJson(deepseek(fetcher), {
+      ...request(),
+      schema: type({ kind: "'debit' | 'credit'" }),
+    })
+    assertEquals(result.error?.code, "invalid-reply")
+    assertClean("schema failure", result)
+  })
+
   it("keeps them out of a request that fails validation", async () => {
     const { fetcher } = stub(() => completion(`{}`))
     const result = await chatJson(
       deepseek(fetcher),
-      request({ messages: [{ role: "robot" as "user", content: PROMPT }] }),
+      // The role is checked against a literal union, whose message would quote it.
+      request({ messages: [{ role: PROMPT as "user", content: PROMPT }] }),
     )
     assertEquals(result.error?.code, "invalid-request")
     assertClean("invalid request", result)
