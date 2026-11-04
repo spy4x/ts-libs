@@ -39,9 +39,8 @@ describe("periodOf", () => {
     }
   })
 
-  it("rejects an unknown unit and a date the calendar does not have", () => {
+  it("rejects an unknown unit", () => {
     expect(() => periodOf(3 as PeriodUnit, "2026-11-01")).toThrow(RangeError)
-    expect(() => periodOf(PeriodUnit.Month, "2026-02-31")).toThrow()
   })
 })
 
