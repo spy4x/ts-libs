@@ -2056,8 +2056,9 @@ MigrationRenamedError	class	@spy4x/server/db/migrate	Thrown when a pending file 
 MigrationReport	interface	@spy4x/server/db/migrate	What one run did.
 NO_TRANSACTION_SUFFIX	constant	@spy4x/server/db/migrate	Suffix that marks a migration which must run outside a transaction.
 checksumOf	function	@spy4x/server/db/migrate	SHA-256 of a migration body, as lower-case hex.
-denoMigrationReader	constant	@spy4x/server/db/migrate	MigrationReader over the real filesystem.
+denoMigrationReader	constant	@spy4x/server/db/migrate	Deprecated: Use fileMigrationReader, the same reader, which runs on every runtime.
 discoverMigrations	function	@spy4x/server/db/migrate	A file that is not a migration is skipped, not reported: `.gitkeep` is common.
+fileMigrationReader	constant	@spy4x/server/db/migrate	MigrationReader over the real filesystem, on Deno, Node and Bun.
 parseMigrationName	function	@spy4x/server/db/migrate	Turn a file name into a Migration: strip the extension, then the `.no_transaction` suffix.
 runMigrations	function	@spy4x/server/db/migrate	Apply every pending migration under `options.folder`, in sorted file-name order.
 JsonListenerOptions	interface	@spy4x/server/db/notify	Options of listenJson.
@@ -2881,4 +2882,4 @@ firstIssueMessage	function	@spy4x/validation/validate	First issue message in a v
 isArkErrors	function	@spy4x/validation/validate	Whether a value is an arktype rejection, without relying on `instanceof`.
 toValidationError	function	@spy4x/validation/validate	Build a ValidationError from arktype's issues.
 validate	function	@spy4x/validation/validate	Parse `value` with an arktype schema exactly once.
-# export surface: sha256 ae650d9f889d495fd1b1f5d789dcc4bd0b10986cf2fcc8e2fe73e83d27e42ead
+# export surface: sha256 38e96f1458aaad8a164b99484948d90377e9e7bd6c7049da08c6dd9274feb81b

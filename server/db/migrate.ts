@@ -49,6 +49,7 @@
  */
 
 import { extname, join } from "@std/path"
+import { runtimeFileSystem } from "@spy4x/platform/server/runtime-fs"
 import { sha256Hex } from "@spy4x/platform/tokens"
 
 /** Suffix that marks a migration which must run outside a transaction. */
@@ -241,19 +242,28 @@ export interface MigrationReader {
   readText(folder: string, fileName: string): Promise<string>
 }
 
-/** {@link MigrationReader} over the real filesystem. */
-export const denoMigrationReader: MigrationReader = {
+/**
+ * {@link MigrationReader} over the real filesystem, on Deno, Node and Bun. A missing folder throws
+ * instead of listing nothing, so a wrong path never reads as "no migrations to apply".
+ */
+export const fileMigrationReader: MigrationReader = {
   async list(folder: string): Promise<string[]> {
-    const fileNames: string[] = []
-    for await (const entry of Deno.readDir(folder)) {
-      if (entry.isFile) fileNames.push(entry.name)
+    if (!(await runtimeFileSystem.exists(folder))) {
+      throw new Error(`Migrations folder not found: ${folder}`)
     }
-    return fileNames
+    return (await runtimeFileSystem.readDir(folder))
+      .filter((entry) => entry.isFile)
+      .map((entry) => entry.name)
   },
-  readText(folder: string, fileName: string): Promise<string> {
-    return Deno.readTextFile(join(folder, fileName))
+  async readText(folder: string, fileName: string): Promise<string> {
+    const text = await runtimeFileSystem.readText(join(folder, fileName))
+    if (text === null) throw new Error(`Migration not found: ${join(folder, fileName)}`)
+    return text
   },
 }
+
+/** @deprecated Use {@link fileMigrationReader}, the same reader, which runs on every runtime. */
+export const denoMigrationReader: MigrationReader = fileMigrationReader
 
 /**
  * A file that is not a migration is skipped, not reported: `.gitkeep` is common.
@@ -266,7 +276,7 @@ export async function discoverMigrations(
   options: DiscoverMigrationsOptions,
 ): Promise<string[]> {
   const extension = options.extension ?? ".sql"
-  const reader = options.reader ?? denoMigrationReader
+  const reader = options.reader ?? fileMigrationReader
   const fileNames = await reader.list(options.folder)
   return fileNames.filter((fileName) => extname(fileName) === extension).sort()
 }
@@ -341,7 +351,7 @@ async function applyPending(
   options: DiscoverMigrationsOptions,
 ): Promise<MigrationReport> {
   const extension = options.extension ?? ".sql"
-  const reader = options.reader ?? denoMigrationReader
+  const reader = options.reader ?? fileMigrationReader
   await driver.createHistoryTable()
   const known = new Map<string, string | null>()
   for (const row of await driver.appliedMigrations()) {

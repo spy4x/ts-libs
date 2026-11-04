@@ -33,6 +33,7 @@ import {
   checksumOf,
   denoMigrationReader,
   discoverMigrations,
+  fileMigrationReader,
   type Migration,
   type MigrationDriver,
   MigrationEditedError,
@@ -262,6 +263,22 @@ Deno.test("denoMigrationReader reads a real migrations directory", async () => {
 Deno.test("denoMigrationReader skips a directory entry", async () => {
   const entries = await denoMigrationReader.list(FIXTURE_FOLDER)
   assertEquals(entries.includes("nested"), false)
+})
+
+Deno.test("fileMigrationReader throws for a missing folder instead of listing nothing", async () => {
+  await assertRejects(
+    () => fileMigrationReader.list(`${FIXTURE_FOLDER}/does-not-exist`),
+    Error,
+    "Migrations folder not found",
+  )
+})
+
+Deno.test("fileMigrationReader throws for a missing migration file", async () => {
+  await assertRejects(
+    () => fileMigrationReader.readText(FIXTURE_FOLDER, "9999_missing.sql"),
+    Error,
+    "Migration not found",
+  )
 })
 
 Deno.test("parseMigrationName strips the extension and the no_transaction suffix", () => {
