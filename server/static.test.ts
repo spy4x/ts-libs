@@ -775,6 +775,12 @@ for (const withOpenAt of [true, false]) {
     assertEquals(state.opened, state.closed)
     assertEquals(state.openedAt, withOpenAt ? [4] : [])
   })
+
+  Deno.test(`serveFile: a range past the first chunk, ${label}`, async () => {
+    const { fs } = memoryFile(withOpenAt)
+    const response = await serveFile(get({ Range: "bytes=7-8" }), "/v.mp4", { fs })
+    assertEquals([response!.status, await response!.text()], [206, "78"])
+  })
 }
 
 Deno.test("serveFile: reads open-ended and suffix ranges, and clamps the end", async () => {
@@ -841,7 +847,7 @@ Deno.test("serveFile: If-Modified-Since works to the second, and If-None-Match w
   )
 })
 
-Deno.test("serveFile: If-Range that does not match ignores the range", async () => {
+Deno.test("serveFile: If-Range other than Last-Modified ignores the range", async () => {
   const { fs, mtime } = memoryFile(true)
   const etag = (await serveFile(get({ Range: "bytes=0-0" }), "/v.mp4", { fs }))!.headers.get(
     "etag",
@@ -852,7 +858,7 @@ Deno.test("serveFile: If-Range that does not match ignores the range", async () 
     })
     return [response!.status, await response!.text()]
   }
-  assertEquals(await read(etag), [206, "23"])
+  assertEquals(await read(etag), [200, "0123456789"])
   assertEquals(await read(mtime.toUTCString()), [206, "23"])
   assertEquals(await read('W/"stale"'), [200, "0123456789"])
 })

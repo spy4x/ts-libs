@@ -649,8 +649,9 @@ function windowStream(
  *
  * - **Range.** One `bytes=` range is answered `206` with `Content-Range`, which Safari needs to
  *   play a video; a range past the end is `416` with a `Content-Range` that names the size. A malformed
- *   header, or one asking for several ranges, gets the whole file. An `If-Range` that does not
- *   match the current `ETag` (or `Last-Modified`) also gets the whole file.
+ *   header, or one asking for several ranges, gets the whole file. An `If-Range` other than the
+ *   current `Last-Modified` also gets the whole file: the `ETag` is weak, which `If-Range` never
+ *   matches.
  * - **Validators.** With a modification time from the `StaticFs`, the response carries a weak
  *   `ETag` (size and time) and `Last-Modified`; a matching `If-None-Match`, or without one an
  *   `If-Modified-Since` no older than the file, is answered `304` with no body.
@@ -702,8 +703,8 @@ export async function serveFile(
   }
 
   const ifRange = request.headers.get("If-Range")
-  const rangeAllowed = ifRange === null || ifRange === etag ||
-    (mtime !== null && ifRange === mtime.toUTCString())
+  // If-Range compares strongly (RFC 9110 13.1.5), so the weak ETag never matches it.
+  const rangeAllowed = ifRange === null || (mtime !== null && ifRange === mtime.toUTCString())
   const range = rangeAllowed ? parseRange(request.headers.get("Range"), size) : undefined
   const isHead = request.method === "HEAD"
 
