@@ -1392,13 +1392,28 @@ Counter	interface	@spy4x/platform/universal/metrics	A monotonically increasing c
 MetricLabels	type	@spy4x/platform/universal/metrics	The labels of one series, for example `{ event: "UserSignedOut", listener: "close" }`.
 createCounter	function	@spy4x/platform/universal/metrics	Creates a counter.
 renderPrometheus	function	@spy4x/platform/universal/metrics	The counters in the Prometheus text exposition format (version 0.0.4), ready to serve with `Content-Type: text/plain; version=0.0.4`.
+CURRENCIES_PUBLISHED	constant	@spy4x/platform/universal/money	The publication date of the ISO 4217 list this table was generated from.
+ConvertError	type	@spy4x/platform/universal/money	Why convertMoney gave no amount: no rate at all, a rate for another pair of currencies, or a result past `Number.MAX_SAFE_INTEGER`.
+CurrencyOption	interface	@spy4x/platform/universal/money	One row of a currency picker, from currencyOptions.
+CustomCurrency	interface	@spy4x/platform/universal/money	A currency ISO 4217 does not list, such as a crypto coin, that a person adds to a picker.
+ExchangeRate	interface	@spy4x/platform/universal/money	One `base` buys `rate` of `quote`, as published by `source` for `date`.
+Money	interface	@spy4x/platform/universal/money	An amount in `currency`'s smallest unit: `{ amount: 1250, currency: "EUR" }` is €12.50.
 MoneyOptions	interface	@spy4x/platform/universal/money	Optional, additive overrides for formatMoney, formatMoneyParts, parseMoney and currencyDecimals.
 ParseMoneyError	type	@spy4x/platform/universal/money	Why parseMoney could not turn the typed text into a smallest-unit amount.
+SumMoneyError	type	@spy4x/platform/universal/money	Why sumMoney gave no total: an item in another currency, or a total past `Number.MAX_SAFE_INTEGER` (either sign), which a `number` could no longer hold exactly.
+allocate	function	@spy4x/platform/universal/money	Split `amount` into parts proportional to `weights`, by largest remainder: each part is its share rounded down, then the units left over go one each to the parts with the largest remainders, ties to the earlier part.
+convertMoney	function	@spy4x/platform/universal/money	`amount` in `from`'s smallest unit, converted to `to`'s smallest unit with `rate`, which may be quoted either way round (`EUR`→`VND` also converts `VND` to `EUR`).
+crossRate	function	@spy4x/platform/universal/money	The rate between the two other currencies of two rates that share one: from `EUR`→`USD` and `EUR`→`VND` it derives `USD`→`VND`, `left`'s other currency as the base and `right`'s as the quote.
+currencies	constant	@spy4x/platform/universal/money	ISO 4217 code → decimals, 165 codes, from the list published on 2026-09-17.
+currencyCode	constant	@spy4x/platform/universal/money	A `string` that isCurrencyCode accepts, for an arktype schema.
 currencyDecimals	function	@spy4x/platform/universal/money	How many fraction digits `currency` uses, in `locale`'s own currency display rules.
+currencyOptions	function	@spy4x/platform/universal/money	Every ISO 4217 currency in currencies as a picker row, plus `extra`, sorted by name in `displayLocale`.
 formatMoney	function	@spy4x/platform/universal/money	Format an amount in `currency`'s smallest unit as display text — `formatMoney(12345, "EUR")` is `"€123.45"`, `formatMoney(12345, "JPY")` is `"¥12,345"`, `formatMoney(12345, "KWD")` is `"KWD 12.345"`.
 formatMoneyParts	function	@spy4x/platform/universal/money	formatMoney's output as `Intl.NumberFormatPart`s, for a caller that renders the currency symbol, the grouped digits and the sign as separate pieces instead of one string.
+isCurrencyCode	function	@spy4x/platform/universal/money	Whether `code` is an ISO 4217 currency code in currencies: `"RSD"` is, `"XYZ"`, `"usd"` and `"XAU"` (gold, which has no minor unit) are not.
 moneyDecimalString	function	@spy4x/platform/universal/money	`amount`, in `currency`'s smallest unit, as the exact base-ten string `Intl.NumberFormat` should format — `moneyDecimalString(12345, 2)` is `"123.45"`, `moneyDecimalString(-500, 0)` is `"-500"`, `moneyDecimalString(0, 2)` is `"0.00"`, `moneyDecimalString(0, 0)` is `"0"` — a zero amount gets `decimals` zero digits after the point, same as any other amount, never a bare `"0"` for a currency that has decimals.
 parseMoney	function	@spy4x/platform/universal/money	Parse text typed in `locale` into a whole number of `currency`'s smallest unit — `parseMoney("12,5", "EUR", "de")` is `ok(1250)`, `parseMoney("1.234,56", "EUR", "de")` is `ok(123456)`.
+sumMoney	function	@spy4x/platform/universal/money	The total of `items`, all in `currency`.
 QuickAddDue	interface	@spy4x/platform/universal/quick-add	Deprecated: Import from `@spy4x/tasks/quick-add`. When the task is due: a calendar date in the given time zone, and a wall-clock time if typed.
 QuickAddOptions	interface	@spy4x/platform/universal/quick-add	Deprecated: Import from `@spy4x/tasks/quick-add`. Options of parseQuickAdd.
 QuickAddPriority	enum	@spy4x/platform/universal/quick-add	Deprecated: Import from `@spy4x/tasks/quick-add`. Task priority.
@@ -2882,4 +2897,4 @@ firstIssueMessage	function	@spy4x/validation/validate	First issue message in a v
 isArkErrors	function	@spy4x/validation/validate	Whether a value is an arktype rejection, without relying on `instanceof`.
 toValidationError	function	@spy4x/validation/validate	Build a ValidationError from arktype's issues.
 validate	function	@spy4x/validation/validate	Parse `value` with an arktype schema exactly once.
-# export surface: sha256 38e96f1458aaad8a164b99484948d90377e9e7bd6c7049da08c6dd9274feb81b
+# export surface: sha256 39c7d46764129960e42626306779fc11ee78c9d5ab6f8b5fc862a860b6a0ea81
