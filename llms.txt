@@ -259,6 +259,10 @@ SmtpTransport	interface	@spy4x/email/smtp	The slice of a nodemailer transport th
 SmtpTransportFactory	interface	@spy4x/email/smtp	Builds a transport from a connection configuration.
 createSmtpSender	function	@spy4x/email/smtp	Create a sender for one SMTP configuration.
 BackoffFn	type	@spy4x/integrations	Computes a delay.
+ChatClient	interface	@spy4x/integrations	A configured client.
+ChatJsonRequest	interface	@spy4x/integrations	Options for chatJson.
+ChatJsonResult	type	@spy4x/integrations	Outcome of chatJson.
+ChatMessage	interface	@spy4x/integrations	One message of a conversation.
 Clock	type	@spy4x/integrations	Deprecated: The same type as `NowFn` from `@spy4x/platform/universal/time` (`#71`), which is now the home for this shape. Millisecond time source.
 CloudflarePurgeOptions	interface	@spy4x/integrations	Options for purgeUrls.
 CloudflarePurgeResult	interface	@spy4x/integrations	Outcome of a purge: `output` describes what happened on success, `error` on failure.
@@ -282,6 +286,12 @@ HealthchecksSuccess	interface	@spy4x/integrations	A ping that reached healthchec
 INDEXNOW_MAX_URLS	constant	@spy4x/integrations	The most addresses IndexNow accepts in one submission.
 IndexNowOptions	interface	@spy4x/integrations	Options for submitIndexNow.
 IndexNowResult	interface	@spy4x/integrations	Outcome of a submission: `output` describes what happened on success, `error` on failure.
+LLM_DEFAULT_TIMEOUT_MS	constant	@spy4x/integrations	How long one call may take by default: a model can think for a while before it answers.
+LLM_PRESETS	constant	@spy4x/integrations	The OpenAI-compatible endpoints of OpenAI, DeepSeek, Google Gemini and a local Ollama.
+LlmEndpoint	interface	@spy4x/integrations	Where a provider's OpenAI-compatible API lives and how it differs from OpenAI's.
+LlmError	interface	@spy4x/integrations	A failed call.
+LlmErrorCode	type	@spy4x/integrations	Why a call failed.
+LlmUsage	interface	@spy4x/integrations	Token counts of one reply, as the provider billed them.
 NotificationSeverity	enum	@spy4x/integrations	Severity gate.
 NtfyClient	class	@spy4x/integrations	ntfy client.
 NtfyErrorCode	type	@spy4x/integrations	Failure reasons `push` can report.
@@ -298,6 +308,8 @@ RetryPolicy	interface	@spy4x/integrations
 RetryRunOptions	interface	@spy4x/integrations	
 RetryRunResult	interface	@spy4x/integrations	
 Sleeper	type	@spy4x/integrations	Waits a duration.
+SpendGuard	interface	@spy4x/integrations	The port an app implements to cap what it spends, for example over `@spy4x/server/quota`'s `QuotaMeter`.
+SpendRequest	interface	@spy4x/integrations	What a SpendGuard is asked to allow before a request is sent.
 UMAMI_FILTER_NAMES	constant	@spy4x/integrations	The filters Umami's website reports take.
 UMAMI_LINK_NAME_MAX	constant	@spy4x/integrations	Umami's limits for a link: a name of 100 characters, a url of 500, a slug of 8 to 100.
 UMAMI_LINK_URL_MAX	constant	@spy4x/integrations	
@@ -325,8 +337,10 @@ UmamiWebsiteRead	interface	@spy4x/integrations	What every read of a website's nu
 WebhookRejectReason	type	@spy4x/integrations	Why a delivery was rejected.
 WebhookVerifierConfig	interface	@spy4x/integrations	Shared secret and header names verifyWebhookRequest needs to check a delivery.
 WebhookVerifyResult	type	@spy4x/integrations	Result of verifyWebhookRequest: the verified body, or why it was rejected.
+chatJson	function	@spy4x/integrations	Asks the model for JSON and checks it with `schema`.
 checkUmami	function	@spy4x/integrations	Asks Umami's `GET /api/heartbeat` whether the instance answers.
 checkUmamiWebsite	function	@spy4x/integrations	Checks that the token is accepted and can view the website, and says which of the two failed: `token` when Umami refuses the token, `website` when the token works but no website with that id is visible to it, `unreachable` for anything else.
+createChatClient	function	@spy4x/integrations	Builds a client.
 createDevtoArticle	function	@spy4x/integrations	Posts `article` to Dev.to and returns its id and address.
 createExponentialBackoff	function	@spy4x/integrations	Deprecated: Thin wrapper over `backoffDelay` from "@spy4x/platform/universal/async" (`#71`), kept for this module's existing 1-based-attempt, `Retry-After`-aware call shape. Exponential backoff, clamped and optionally jittered.
 createUmamiLink	function	@spy4x/integrations	Creates an Umami link and returns it.
@@ -375,6 +389,20 @@ INDEXNOW_MAX_URLS	constant	@spy4x/integrations/indexnow	The most addresses Index
 IndexNowOptions	interface	@spy4x/integrations/indexnow	Options for submitIndexNow.
 IndexNowResult	interface	@spy4x/integrations/indexnow	Outcome of a submission: `output` describes what happened on success, `error` on failure.
 submitIndexNow	function	@spy4x/integrations/indexnow	Submits `urls` to IndexNow and reports the outcome.
+ChatClient	interface	@spy4x/integrations/llm	A configured client.
+ChatJsonRequest	interface	@spy4x/integrations/llm	Options for chatJson.
+ChatJsonResult	type	@spy4x/integrations/llm	Outcome of chatJson.
+ChatMessage	interface	@spy4x/integrations/llm	One message of a conversation.
+LLM_DEFAULT_TIMEOUT_MS	constant	@spy4x/integrations/llm	How long one call may take by default: a model can think for a while before it answers.
+LLM_PRESETS	constant	@spy4x/integrations/llm	The OpenAI-compatible endpoints of OpenAI, DeepSeek, Google Gemini and a local Ollama.
+LlmEndpoint	interface	@spy4x/integrations/llm	Where a provider's OpenAI-compatible API lives and how it differs from OpenAI's.
+LlmError	interface	@spy4x/integrations/llm	A failed call.
+LlmErrorCode	type	@spy4x/integrations/llm	Why a call failed.
+LlmUsage	interface	@spy4x/integrations/llm	Token counts of one reply, as the provider billed them.
+SpendGuard	interface	@spy4x/integrations/llm	The port an app implements to cap what it spends, for example over `@spy4x/server/quota`'s `QuotaMeter`.
+SpendRequest	interface	@spy4x/integrations/llm	What a SpendGuard is asked to allow before a request is sent.
+chatJson	function	@spy4x/integrations/llm	Asks the model for JSON and checks it with `schema`.
+createChatClient	function	@spy4x/integrations/llm	Builds a client.
 NotificationSeverity	enum	@spy4x/integrations/ntfy	Severity gate.
 NtfyClient	class	@spy4x/integrations/ntfy	ntfy client.
 NtfyErrorCode	type	@spy4x/integrations/ntfy	Failure reasons `push` can report.
@@ -2882,4 +2910,4 @@ firstIssueMessage	function	@spy4x/validation/validate	First issue message in a v
 isArkErrors	function	@spy4x/validation/validate	Whether a value is an arktype rejection, without relying on `instanceof`.
 toValidationError	function	@spy4x/validation/validate	Build a ValidationError from arktype's issues.
 validate	function	@spy4x/validation/validate	Parse `value` with an arktype schema exactly once.
-# export surface: sha256 38e96f1458aaad8a164b99484948d90377e9e7bd6c7049da08c6dd9274feb81b
+# export surface: sha256 a6e87b8d57809621199fb82f1844315f6ff699af73e09ddc5b5a20171d9239d6

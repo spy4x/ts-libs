@@ -1497,6 +1497,7 @@ Runs on: server (Deno).
 | `./push-file-store` | `createFilePushSubscriptionStore` — push subscriptions in one JSON file           |
 | `./push-reminders`  | `createReminderNotify`, `reminderPushMessage`, `reminderDeliveryOutcome`          |
 | `./telegram`        | `TelegramClient`, `TelegramBot`, `createTelegramWebhookHandler`, polling          |
+| `./llm`             | `createChatClient`, `chatJson`, `LLM_PRESETS` — JSON from an OpenAI-style API     |
 
 ## Contracts
 
@@ -1804,6 +1805,93 @@ refused before any request, as are a `type`, `unit`, `limit` or time zone Umami 
 - **`checkUmamiWebsite({ baseUrl, token, websiteId })`** says why a website cannot be read:
   `problem` is `settings` (a base address or token that cannot work), `token` (Umami refuses it),
   `website` (an id that is no UUID, or one the working token does not see) or `unreachable`.
+
+### `createChatClient`, `chatJson` — JSON from an OpenAI-compatible model
+
+Sends a conversation to any server that speaks OpenAI's `POST /chat/completions` and returns the
+reply's JSON, checked with an arktype schema. A thin `fetch` wrapper, no SDK.
+
+```ts
+import { chatJson, createChatClient, LLM_PRESETS } from "@spy4x/integrations/llm"
+import { type } from "arktype"
+
+const client = createChatClient({ baseUrl: LLM_PRESETS.deepseek, apiKey, model: `deepseek-flash` })
+const result = await chatJson(client, {
+  messages: [{ role: `user`, content: `Reply in json, like {"amount": 450}: …` }],
+  schema: type({ amount: `number.integer` }),
+  maxTokens: 500,
+  guard, // optional SpendGuard, below
+})
+if (result.success) result.output.value.amount // result.output.usage holds the token counts
+else result.error.code // "truncated", "insufficient-balance", …
+```
+
+**Presets.** `LLM_PRESETS` is data: each entry is the API root `/chat/completions` is appended to,
+whether a key is needed, and which field caps the reply's tokens. `baseUrl` also takes any other
+URL (a key is then required), or a preset spread over another host, such as
+`{ ...LLM_PRESETS.ollama, baseUrl: "http://ollama:11434/v1" }`. Checked on 2026-11-04:
+
+| Preset     | `baseUrl`                                                 | Key | Token cap field         | Source                                                                      |
+| ---------- | --------------------------------------------------------- | --- | ----------------------- | --------------------------------------------------------------------------- |
+| `openai`   | `https://api.openai.com/v1`                               | yes | `max_completion_tokens` | [API reference](https://platform.openai.com/docs/api-reference/chat/create) |
+| `deepseek` | `https://api.deepseek.com`                                | yes | `max_tokens`            | [API docs](https://api-docs.deepseek.com/api/create-chat-completion)        |
+| `gemini`   | `https://generativelanguage.googleapis.com/v1beta/openai` | yes | `max_tokens`            | [OpenAI compatibility](https://aistudio.google.com/docs/openai)             |
+| `ollama`   | `http://localhost:11434/v1`                               | no  | `max_tokens`            | [OpenAI compatibility](https://docs.ollama.com/api/openai-compatibility)    |
+
+OpenAI marks `max_tokens` deprecated and its reasoning models refuse it; DeepSeek documents only
+`max_tokens`. No preset names a default model: names change every few months, so the app sets one.
+
+- **One request, never a retry.** A request that timed out may already be billed; only the caller
+  decides to send it again. `timeoutMs` (default 120 s) covers the request and the reply.
+- **The reply is checked.** Content that is blank (DeepSeek can send spaces with
+  `finish_reason: "stop"`) is `empty-reply`; a reply cut at `maxTokens` is `truncated`; content that
+  is not JSON or fails `schema` is `invalid-reply`, never data. `maxTokens` has no default, because
+  DeepSeek's own is 8K. JSON mode needs the word "json" in a message, so a request without it is
+  refused before it is sent.
+- **Errors.** `401` is `bad-key`, `402` `insufficient-balance`, `429` `rate-limited`, `500`, `502`,
+  `503` and `504` `unavailable`, `400` and `422` `invalid-request`, a redirect `redirected` (never
+  followed), and a timeout `timeout`. No message carries the key, the URL, the prompt or the reply:
+  HTTP failures give the status alone, because a provider's error text can echo the request.
+- **The key.** It is sent only in `Authorization: Bearer`, only over `https` or to `localhost`, and
+  the client object holds neither the key nor the URL, so logging it prints only the model.
+- **Spend guard.** `SpendGuard { reserve(request), record(usage) }` is a port the app implements.
+  `reserve({ model, maxTokens, promptCharacters })` runs before anything is sent; `false`, or a
+  throw, is `over-budget` and no request leaves the host. `record` receives every reply's
+  `{ promptTokens, completionTokens, cacheHitTokens, cacheMissTokens }`, a reply that then fails
+  the schema included, because it was billed. Over `@spy4x/server/quota`, counting tokens:
+
+```ts
+import { QuotaDecision, type QuotaMeter, type QuotaPrincipal } from "@spy4x/server/quota"
+import type { SpendGuard } from "@spy4x/integrations/llm"
+
+const tokenGuard = (meter: QuotaMeter, principal: QuotaPrincipal): SpendGuard => {
+  let reserved = 0
+  let reservedAt: number | undefined
+  return {
+    async reserve({ maxTokens, promptCharacters }) {
+      reserved = maxTokens + Math.ceil(promptCharacters / 2) // a generous token estimate
+      const state = await meter.reserve(principal, reserved)
+      reservedAt = state.reservedAt
+      return state.decision === QuotaDecision.Allowed
+    },
+    async record({ promptTokens, completionTokens }) {
+      const spent = promptTokens + completionTokens
+      if (spent < reserved) await meter.release(principal, reserved - spent, { reservedAt })
+      if (spent > reserved) await meter.record(principal, spent - reserved)
+    },
+  }
+}
+```
+
+**Where DeepSeek keeps the data.** Ask a person's consent before you send DeepSeek anything about
+them. Its [privacy policy](https://cdn.deepseek.com/policies/en-US/deepseek-privacy-policy.html)
+(updated 2026-02-10) says DeepSeek will "directly collect, process and store your Personal Data in
+People's Republic of China". It may use inputs to train its models, with an opt-out by request to
+`privacy@deepseek.com`, and keeps them as long as the account exists. Its
+[Open Platform terms](https://cdn.deepseek.com/policies/en-US/deepseek-open-platform-terms-of-service.html)
+(effective 2026-04-29) are governed by the law of mainland China. DeepSeek's balance is prepaid, so
+a `402` stops spending at zero; for OpenAI, set a project budget limit before use. A self-hosted
+Ollama keeps everything on your own machine.
 
 ### `verifyWebhookRequest`
 
