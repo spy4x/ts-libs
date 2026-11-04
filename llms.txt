@@ -1334,11 +1334,24 @@ contactKind	constant	@spy4x/platform/universal/contact	The arktype type of a Con
 contactValueProblem	function	@spy4x/platform/universal/contact	Why `value` is no ContactKind `kind`, as one sentence for the form field, or `null` when it is one.
 normalizeContactValue	function	@spy4x/platform/universal/contact	What an operator typed, in the form contactValueProblem checks and a store keeps: trimmed; a profile link such as `https://t.me/my_shop` reduced to `my_shop`; a leading `@` dropped; a phone number without spaces, dashes, dots and brackets (and, for Zalo and WhatsApp, without its `+`); an e-mail address lowercased.
 CSV_BYTE_ORDER_MARK	constant	@spy4x/platform/universal/csv	UTF-8 byte-order mark.
+CSV_DEFAULT_LIMITS	constant	@spy4x/platform/universal/csv	The default CsvLimits, applied when an option is left out.
+CSV_DELIMITERS	constant	@spy4x/platform/universal/csv	The delimiters sniffCsv considers, in the order it prefers them on a tie.
 CsvCellValue	type	@spy4x/platform/universal/csv	What a `format` function, or an unformatted field, may hand back for one cell.
 CsvColumn	interface	@spy4x/platform/universal/csv	One column of a CSV export: the row field to read, its header text, and how to render a value.
+CsvDelimiter	type	@spy4x/platform/universal/csv	A delimiter sniffCsv can find.
+CsvLimits	interface	@spy4x/platform/universal/csv	Size limits for parseCsv.
+CsvParseError	type	@spy4x/platform/universal/csv	Why parseCsv refused a file.
+CsvSniff	interface	@spy4x/platform/universal/csv	What sniffCsv guessed about a CSV sample.
+DecodedTextFile	interface	@spy4x/platform/universal/csv	What decodeTextFile read.
+SINGLE_BYTE_ENCODINGS	constant	@spy4x/platform/universal/csv	Every single-byte encoding decodeTextFile can fall back to.
+SingleByteEncoding	type	@spy4x/platform/universal/csv	A single-byte encoding a file without a byte-order mark and not valid UTF-8 may be in.
+TextFileEncoding	type	@spy4x/platform/universal/csv	An encoding decodeTextFile reads, as a `TextDecoder` label.
 csvField	function	@spy4x/platform/universal/csv	Render one value as an RFC 4180 CSV cell.
 csvHeaderRow	function	@spy4x/platform/universal/csv	The header row, escaped the same way a data row is.
 csvRow	function	@spy4x/platform/universal/csv	One data row, rendered and escaped, comma-joined.
+decodeTextFile	function	@spy4x/platform/universal/csv	Decode an uploaded text file.
+parseCsv	function	@spy4x/platform/universal/csv	Parse CSV text into rows of fields, within size limits.
+sniffCsv	function	@spy4x/platform/universal/csv	Guess the delimiter of a CSV sample and whether its first row is a header.
 toCsvBytes	function	@spy4x/platform/universal/csv	toCsvText, encoded as UTF-8 bytes with a leading CSV_BYTE_ORDER_MARK.
 toCsvText	function	@spy4x/platform/universal/csv	Render every row as RFC 4180 CSV text: a header row, one line per row of `rows`, each terminated by LINE_ENDING — including the last line, which the RFC leaves optional but which every row here carries for one uniform rule instead of a special case for the final row.
 ErrorEventTarget	interface	@spy4x/platform/universal/error-reporter	The target of `install`: `window`, or anything with `addEventListener`.
@@ -1428,6 +1441,10 @@ CustomCurrency	interface	@spy4x/platform/universal/money	A currency ISO 4217 doe
 ExchangeRate	interface	@spy4x/platform/universal/money	One `base` buys `rate` of `quote`, as published by `source` for `date`.
 Money	interface	@spy4x/platform/universal/money	An amount in `currency`'s smallest unit: `{ amount: 1250, currency: "EUR" }` is €12.50.
 MoneyOptions	interface	@spy4x/platform/universal/money	Optional, additive overrides for formatMoney, formatMoneyParts, parseMoney and currencyDecimals.
+NEGATIVE_STYLES	constant	@spy4x/platform/universal/money	Every way a negative amount can be written, in the order NegativeStyle lists them.
+NUMBER_FORMATS	constant	@spy4x/platform/universal/money	Every format detectNumberFormat tries, in the order it lists them.
+NegativeStyle	type	@spy4x/platform/universal/money	How a negative amount is written: `-12.50`, `(12.50)` or `12.50-`.
+NumberFormatGuess	interface	@spy4x/platform/universal/money	How a column writes its numbers: the decimal mark, and the grouping mark (`""` for none).
 ParseMoneyError	type	@spy4x/platform/universal/money	Why parseMoney could not turn the typed text into a smallest-unit amount.
 SumMoneyError	type	@spy4x/platform/universal/money	Why sumMoney gave no total: an item in another currency, or a total past `Number.MAX_SAFE_INTEGER` (either sign), which a `number` could no longer hold exactly.
 allocate	function	@spy4x/platform/universal/money	Split `amount` into parts proportional to `weights`, by largest remainder: each part is its share rounded down, then the units left over go one each to the parts with the largest remainders, ties to the earlier part.
@@ -1437,10 +1454,13 @@ currencies	constant	@spy4x/platform/universal/money	ISO 4217 code → decimals, 
 currencyCode	constant	@spy4x/platform/universal/money	A `string` that isCurrencyCode accepts, for an arktype schema.
 currencyDecimals	function	@spy4x/platform/universal/money	How many fraction digits `currency` uses, in `locale`'s own currency display rules.
 currencyOptions	function	@spy4x/platform/universal/money	Every ISO 4217 currency in currencies as a picker row, plus `extra`, sorted by name in `displayLocale`.
+detectNumberFormat	function	@spy4x/platform/universal/money	Every format in NUMBER_FORMATS that reads all `samples` as numbers, negatives in any NegativeStyle included.
 formatMoney	function	@spy4x/platform/universal/money	Format an amount in `currency`'s smallest unit as display text — `formatMoney(12345, "EUR")` is `"€123.45"`, `formatMoney(12345, "JPY")` is `"¥12,345"`, `formatMoney(12345, "KWD")` is `"KWD 12.345"`.
 formatMoneyParts	function	@spy4x/platform/universal/money	formatMoney's output as `Intl.NumberFormatPart`s, for a caller that renders the currency symbol, the grouped digits and the sign as separate pieces instead of one string.
 isCurrencyCode	function	@spy4x/platform/universal/money	Whether `code` is an ISO 4217 currency code in currencies: `"RSD"` is, `"XYZ"`, `"usd"` and `"XAU"` (gold, which has no minor unit) are not.
+isDebitCreditPair	function	@spy4x/platform/universal/money	Whether two columns are a debit and a credit column: on every row exactly one of them holds an amount, and the other is blank or zero (`0,00`).
 moneyDecimalString	function	@spy4x/platform/universal/money	`amount`, in `currency`'s smallest unit, as the exact base-ten string `Intl.NumberFormat` should format — `moneyDecimalString(12345, 2)` is `"123.45"`, `moneyDecimalString(-500, 0)` is `"-500"`, `moneyDecimalString(0, 2)` is `"0.00"`, `moneyDecimalString(0, 0)` is `"0"` — a zero amount gets `decimals` zero digits after the point, same as any other amount, never a bare `"0"` for a currency that has decimals.
+parseAmount	function	@spy4x/platform/universal/money	Read an amount from a file column written in `format` as a whole number of `currency`'s smallest unit, like parseMoney does for typed text: `parseAmount("(1.234,56)", "EUR", { decimal: ",", group: "." }, { negatives: ["parentheses"] })` is `ok(-123456)`.
 parseMoney	function	@spy4x/platform/universal/money	Parse text typed in `locale` into a whole number of `currency`'s smallest unit — `parseMoney("12,5", "EUR", "de")` is `ok(1250)`, `parseMoney("1.234,56", "EUR", "de")` is `ok(123456)`.
 sumMoney	function	@spy4x/platform/universal/money	The total of `items`, all in `currency`.
 QuickAddDue	interface	@spy4x/platform/universal/quick-add	Deprecated: Import from `@spy4x/tasks/quick-add`. When the task is due: a calendar date in the given time zone, and a wall-clock time if typed.
@@ -2672,9 +2692,12 @@ CronSchedule	interface	@spy4x/time/cron	A parsed cron expression: the values eac
 describeCron	function	@spy4x/time/cron	An English label for a cron expression, for an admin screen: `Every day at 03:00 UTC`, `Every Monday to Friday at 09:00 UTC`, `Every 15 minutes`, `On day 1 of the month at 00:00 UTC`.
 nextCronRun	function	@spy4x/time/cron	The first minute that matches `schedule`, strictly after `after`, in UTC.
 parseCron	function	@spy4x/time/cron	Parses a five-field cron expression or an alias.
+DATE_PATTERNS	constant	@spy4x/time/date	Every date layout detectDatePatterns and parseDateWithPattern know, in the order `detectDatePatterns` lists them: day-first before month-first, so a select's first option is the reading most of the world uses.
+DatePattern	type	@spy4x/time/date	How a column writes its dates, such as `"DD.MM.YYYY"`: one of DATE_PATTERNS.
 DateRange	interface	@spy4x/time/date	Inclusive calendar range; both ends are `YYYY-MM-DD`.
 dayInMonth	function	@spy4x/time/date	The same day number in the month `date` falls in, clipped to that month's length.
 daysInMonth	function	@spy4x/time/date	How many days the month `date` falls in has.
+detectDatePatterns	function	@spy4x/time/date	Every pattern under which all `samples` read as real dates, in DATE_PATTERNS order.
 endOfMonth	function	@spy4x/time/date	Last day of the month `date` falls in — 28, 29, 30 or 31, leap year included.
 endOfQuarter	function	@spy4x/time/date	Last day of the calendar quarter `date` falls in.
 endOfYear	function	@spy4x/time/date	Last day of the calendar year `date` falls in.
@@ -2682,6 +2705,7 @@ formatIsoDate	function	@spy4x/time/date	The `YYYY-MM-DD` calendar date of midnig
 isSameDay	function	@spy4x/time/date	Whether two values name the same calendar day.
 isValidDateRange	function	@spy4x/time/date	Whether a range is two real dates in order.
 monthFirstWeekday	function	@spy4x/time/date	Weekday of the first of `date`'s month, counted from the week's own first day.
+parseDateWithPattern	function	@spy4x/time/date	Read `text` written in `pattern` as a `YYYY-MM-DD` date, or `null` when it does not fit the pattern or names a day the calendar lacks: `parseDateWithPattern("31.02.2026", "DD.MM.YYYY")` is `null`, never 3 March.
 parseIsoDate	function	@spy4x/time/date	Midnight UTC of a calendar date, in milliseconds.
 recentIsoDates	function	@spy4x/time/date	The `count` UTC calendar days that end on `now`'s UTC day, oldest first: a chart's x-axis of the last week or month, with today last.
 shiftMonth	function	@spy4x/time/date	The first day of the month `months` away from `date`.
@@ -2936,4 +2960,4 @@ firstIssueMessage	function	@spy4x/validation/validate	First issue message in a v
 isArkErrors	function	@spy4x/validation/validate	Whether a value is an arktype rejection, without relying on `instanceof`.
 toValidationError	function	@spy4x/validation/validate	Build a ValidationError from arktype's issues.
 validate	function	@spy4x/validation/validate	Parse `value` with an arktype schema exactly once.
-# export surface: sha256 b8ec3a849f9dd9daec0e858f6614fbbb1f9a3f036b7263c2c28f89f89871b19a
+# export surface: sha256 5c7810b82f5ecfc1218f350ff1751f8c14d26c7b9b075768f9c7ee3f5fed9826
