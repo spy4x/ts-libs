@@ -402,6 +402,188 @@ function localeMarks(locale: string): { group: string; decimal: string; minus: s
 }
 
 /**
+ * How a column writes its numbers: the decimal mark, and the grouping mark (`""` for none). A `" "`
+ * group also accepts the other space-shaped marks (no-break space, narrow no-break space) and a
+ * `"'"` group the other apostrophes, as {@link parseMoney} does.
+ */
+export interface NumberFormatGuess {
+  /** The mark before the fraction: `"."` in `1,234.56`, `","` in `1.234,56`. */
+  decimal: `.` | `,`
+  /** The mark between thousands: `","` in `1,234.56`, `""` when the column has none. */
+  group: `` | `,` | `.` | ` ` | `'`
+}
+
+/** Every format {@link detectNumberFormat} tries, in the order it lists them. */
+export const NUMBER_FORMATS: readonly Readonly<NumberFormatGuess>[] = Object.freeze([
+  { decimal: `.`, group: `` },
+  { decimal: `.`, group: `,` },
+  { decimal: `.`, group: ` ` },
+  { decimal: `.`, group: `'` },
+  { decimal: `,`, group: `` },
+  { decimal: `,`, group: `.` },
+  { decimal: `,`, group: ` ` },
+].map((format) => Object.freeze(format as NumberFormatGuess)))
+
+/** Every way a negative amount can be written, in the order {@link NegativeStyle} lists them. */
+export const NEGATIVE_STYLES = Object.freeze([`minus`, `parentheses`, `trailing-minus`] as const)
+
+/** How a negative amount is written: `-12.50`, `(12.50)` or `12.50-`. */
+export type NegativeStyle = typeof NEGATIVE_STYLES[number]
+
+/** Optional settings for {@link parseAmount}. */
+export interface ParseAmountOptions {
+  /** Which ways of writing a negative amount to accept. Default `["minus"]`. */
+  negatives?: readonly NegativeStyle[]
+  /** The currency's decimals, for a code ISO 4217 lacks; as in {@link MoneyOptions}. */
+  decimals?: number
+}
+
+/** `-` and U+2212 MINUS SIGN, both read as a minus. */
+const MINUS_SIGNS = [`-`, `−`]
+
+/** A grouped integer part, groups shown as `,`: thousands (`1,234,567`) or lakhs (`12,34,567`). */
+const GROUPED_INTEGER = /^(?:\d{1,3}(?:,\d{3})+|\d{1,2}(?:,\d{2})*,\d{3})$/
+
+/** The parts of a number {@link readNumber} found, as digit strings. */
+interface NumberParts {
+  negative: boolean
+  integer: string
+  fraction: string
+}
+
+/**
+ * Split `text` into its sign, integer digits and fraction digits as written in `format`, or say why
+ * it is not a number written that way. A grouping mark must sit where thousands (or lakhs) put it.
+ */
+function readNumber(
+  text: string,
+  format: NumberFormatGuess,
+  negatives: readonly NegativeStyle[],
+): Result<NumberParts, ParseMoneyError> {
+  let rest = text.replace(DIRECTION_MARKS, ``).trim()
+  if (rest === ``) return err({ type: `empty` })
+  let negative = false
+  const sign = (style: NegativeStyle, stripped: string): boolean => {
+    if (!negatives.includes(style)) return false
+    negative = true
+    rest = stripped.trim()
+    return true
+  }
+  if (rest.startsWith(`(`) && rest.endsWith(`)`)) {
+    if (!sign(`parentheses`, rest.slice(1, -1))) return err({ type: `invalid-characters` })
+  } else if (MINUS_SIGNS.some((minus) => rest.startsWith(minus))) {
+    if (!sign(`minus`, rest.slice(1))) return err({ type: `invalid-characters` })
+  } else if (MINUS_SIGNS.some((minus) => rest.endsWith(minus))) {
+    if (!sign(`trailing-minus`, rest.slice(0, -1))) return err({ type: `invalid-characters` })
+  } else if (rest.startsWith(`+`)) {
+    rest = rest.slice(1).trim()
+  }
+
+  const parts = rest.split(format.decimal)
+  if (parts.length > 2) return err({ type: `invalid-characters` })
+  const [integerRaw, fraction = ``] = parts
+  if (integerRaw === `` && fraction === ``) return err({ type: `empty` })
+  if (!/^\d*$/.test(fraction)) return err({ type: `invalid-characters` })
+
+  const groupChars = groupEquivalents(format.group)
+  let integer = ``
+  let canonical = ``
+  for (const char of integerRaw) {
+    if (/\d/.test(char)) {
+      integer += char
+      canonical += char
+    } else if (groupChars.has(char)) {
+      canonical += `,`
+    } else {
+      return err({ type: `invalid-characters` })
+    }
+  }
+  if (canonical !== integer && !GROUPED_INTEGER.test(canonical)) {
+    return err({ type: `invalid-characters` })
+  }
+  return ok({ negative, integer, fraction })
+}
+
+/**
+ * Read an amount from a file column written in `format` as a whole number of `currency`'s smallest
+ * unit, like {@link parseMoney} does for typed text: `parseAmount("(1.234,56)", "EUR", { decimal:
+ * ",", group: "." }, { negatives: ["parentheses"] })` is `ok(-123456)`.
+ *
+ * The currency's decimals come from the ISO 4217 table ({@link currencyDecimals}). More fraction
+ * digits than it has are refused unless every extra digit is `0` (`12.5000` is €12.50 exactly);
+ * nothing is ever rounded. A negative written in a style `options.negatives` does not list is
+ * refused; the default accepts only a leading minus.
+ */
+export function parseAmount(
+  text: string,
+  currency: string,
+  format: NumberFormatGuess,
+  options: ParseAmountOptions = {},
+): Result<number, ParseMoneyError> {
+  checkedCurrency(currency)
+  const decimals = currencyDecimals(currency, `en`, { decimals: options.decimals })
+  const read = readNumber(text, format, options.negatives ?? [`minus`])
+  if (!read.ok) return read
+  const { negative, integer } = read.value
+  let { fraction } = read.value
+  if (fraction.length > decimals) {
+    if (/[^0]/.test(fraction.slice(decimals))) {
+      return err({ type: `too-many-decimals`, maxDecimals: decimals })
+    }
+    fraction = fraction.slice(0, decimals)
+  }
+  const magnitude = BigInt((integer || `0`) + fraction.padEnd(decimals, `0`))
+  if (magnitude > BigInt(Number.MAX_SAFE_INTEGER)) return err({ type: `too-large` })
+  if (magnitude === 0n) return ok(0)
+  return ok(Number(magnitude) * (negative ? -1 : 1))
+}
+
+/**
+ * Every format in {@link NUMBER_FORMATS} that reads all `samples` as numbers, negatives in any
+ * {@link NegativeStyle} included. More than one means the column is ambiguous and a person picks:
+ * `["1.234"]` reads as 1.234 with a `.` decimal and as 1234 with a `.` group. Blank samples are
+ * skipped; with none left the answer is empty, since nothing was seen.
+ */
+export function detectNumberFormat(samples: readonly string[]): NumberFormatGuess[] {
+  const filled = samples.filter((sample) => sample.trim() !== ``)
+  if (filled.length === 0) return []
+  return NUMBER_FORMATS
+    .filter((format) => filled.every((sample) => readNumber(sample, format, NEGATIVE_STYLES).ok))
+    .map((format) => ({ ...format }))
+}
+
+/**
+ * Whether two columns are a debit and a credit column: on every row exactly one of them holds an
+ * amount, and the other is blank or zero (`0,00`). Both columns must hold an amount on some row,
+ * since an amount column beside an empty one is not a pair, and a cell that is neither blank nor a
+ * number in some {@link NUMBER_FORMATS} format makes the answer `false`. Columns of different
+ * lengths, or no rows, are `false` too.
+ */
+export function isDebitCreditPair(left: readonly string[], right: readonly string[]): boolean {
+  if (left.length === 0 || left.length !== right.length) return false
+  let leftAmounts = 0
+  let rightAmounts = 0
+  for (let row = 0; row < left.length; row++) {
+    const leftCell = cellAmount(left[row])
+    const rightCell = cellAmount(right[row])
+    if (leftCell === null || rightCell === null || leftCell === rightCell) return false
+    if (leftCell) leftAmounts++
+    else rightAmounts++
+  }
+  return leftAmounts > 0 && rightAmounts > 0
+}
+
+/** `true` for a non-zero amount, `false` for a blank or zero cell, `null` for anything else. */
+function cellAmount(cell: string): boolean | null {
+  if (cell.trim() === ``) return false
+  for (const format of NUMBER_FORMATS) {
+    const read = readNumber(cell, format, NEGATIVE_STYLES)
+    if (read.ok) return /[1-9]/.test(read.value.integer + read.value.fraction)
+  }
+  return null
+}
+
+/**
  * Whether `code` is an ISO 4217 currency code in {@link currencies}: `"RSD"` is, `"XYZ"`, `"usd"`
  * and `"XAU"` (gold, which has no minor unit) are not. Asking whether `Intl.NumberFormat` throws is
  * no check, because it accepts any three letters.
