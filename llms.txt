@@ -2830,12 +2830,14 @@ joinContentLines	function	@spy4x/time/ics-core	Fold each logical line and termin
 stripControlCharacters	function	@spy4x/time/ics-core	Remove characters RFC 5545 does not allow in content lines: C0 controls except HTAB, LF and CR, plus DEL.
 unfoldLines	function	@spy4x/time/ics-core	Unfold every content line in an iCalendar document: a CRLF (or bare LF) followed by SPACE or HTAB continues the previous line (RFC 5545 §3.1).
 LocaleOption	interface	@spy4x/time/locale	One entry of a region format picker, from localeOptions.
+MonthLabel	interface	@spy4x/time/locale	One month's names in a locale.
 REGION_FORMAT_LOCALES	constant	@spy4x/time/locale	Region formats a picker offers: a language with a country, the way people choose how numbers and dates are written.
 WeekdayLabel	interface	@spy4x/time/locale	One weekday header: what its column shows, and what that abbreviation stands for.
 dayLabel	function	@spy4x/time/locale	Localised "23 August 2026", the date as a person reads it.
 localeFirstWeekday	function	@spy4x/time/locale	The day the locale's week starts on, `1` = Monday … `7` = Sunday.
 localeOptions	function	@spy4x/time/locale	Region formats as options for a searchable picker, sorted by their name in `displayLocale`.
 monthLabel	function	@spy4x/time/locale	Localised "August 2026" for the month `date` falls in.
+monthLabels	function	@spy4x/time/locale	Twelve localised month names, January first, as `Intl` writes a month on its own (without a day, so Russian gives the nominative `сентябрь`, not `сентября`).
 relativeDayLabel	function	@spy4x/time/locale	A day as a person says it: "Yesterday", "Today", "Tomorrow", otherwise shortDayLabel.
 shortDayLabel	function	@spy4x/time/locale	Localised "Thu 15 Oct": weekday, day and month, no year.
 weekdayLabels	function	@spy4x/time/locale	Seven localised weekday labels, starting on the locale's own first day.
@@ -2854,12 +2856,25 @@ RruleDay	interface	@spy4x/time/rrule	One `BYDAY` entry: a weekday, with an ordin
 RruleError	interface	@spy4x/time/rrule	The error half of RruleResult.
 RruleErrorCode	enum	@spy4x/time/rrule	Why an operation of this module failed.
 RruleFreq	enum	@spy4x/time/rrule	How often the rule repeats.
+RruleMonthEnd	enum	@spy4x/time/rrule	How a plain monthly rule treats a month shorter than its day.
 RruleResult	type	@spy4x/time/rrule	`{ success, output, error }`: the output, or why there is none.
 RruleWeekday	enum	@spy4x/time/rrule	A day of the week, numbered like ISO 8601: Monday is 1, Sunday is 7.
-describeRrule	function	@spy4x/time/rrule	An English label for the rule, such as `Every 2 weeks on Mon, Thu`, `Monthly on the last Friday` or `Daily, 5 times`.
+RruleWordKey	type	@spy4x/time/rrule	A key of the catalogs in `./rrule-words/`, which `describeRrule` asks its words for.
+RruleWords	interface	@spy4x/time/rrule	The words describeRrule writes in.
+describeRrule	function	@spy4x/time/rrule	A label for the rule, such as `Every 2 weeks on Mon, Thu`, `Monthly on the last Friday` or `Daily, 5 times`.
 formatRrule	function	@spy4x/time/rrule	Write `rule` as the value of an `RRULE` property (no `RRULE:` prefix), so that parseRrule reads it back to an equal rule.
 nextOccurrence	function	@spy4x/time/rrule	The first occurrence of `rule` strictly after `options.after`, as a value of the same kind (and zone) as `options.start`, with the start's time of day.
+occurrencesBetween	function	@spy4x/time/rrule	Every occurrence of `rule` from `options.from` to `options.to`, both included, in order, each a value of the same kind (and zone) as `options.start` with the start's time of day.
 parseRrule	function	@spy4x/time/rrule	Parse the value of an `RRULE` property (a leading `RRULE:` is accepted).
+default	constant	@spy4x/time/rrule-words/ar	The words of `describeRrule` in ar, translated from `./en.ts`, which explains every key.
+default	constant	@spy4x/time/rrule-words/de	The words of `describeRrule` in de, translated from `./en.ts`, which explains every key.
+default	constant	@spy4x/time/rrule-words/en	The words of `describeRrule` in English, the source every translation is checked against.
+default	constant	@spy4x/time/rrule-words/es	The words of `describeRrule` in es, translated from `./en.ts`, which explains every key.
+default	constant	@spy4x/time/rrule-words/fr	The words of `describeRrule` in fr, translated from `./en.ts`, which explains every key.
+default	constant	@spy4x/time/rrule-words/ja	The words of `describeRrule` in ja, translated from `./en.ts`, which explains every key.
+default	constant	@spy4x/time/rrule-words/pt-BR	The words of `describeRrule` in pt-BR, translated from `./en.ts`, which explains every key.
+default	constant	@spy4x/time/rrule-words/ru	The words of `describeRrule` in ru, translated from `./en.ts`, which explains every key.
+default	constant	@spy4x/time/rrule-words/zh-CN	The words of `describeRrule` in zh-CN, translated from `./en.ts`, which explains every key.
 TimeZoneOption	interface	@spy4x/time/tz	One entry of a time zone picker, from timeZoneOptions.
 WallClockKind	enum	@spy4x/time/tz	How often a wall clock occurs in a zone on its date.
 WallClockResolution	interface	@spy4x/time/tz	The answer of resolveWallClock.
@@ -2936,4 +2951,4 @@ firstIssueMessage	function	@spy4x/validation/validate	First issue message in a v
 isArkErrors	function	@spy4x/validation/validate	Whether a value is an arktype rejection, without relying on `instanceof`.
 toValidationError	function	@spy4x/validation/validate	Build a ValidationError from arktype's issues.
 validate	function	@spy4x/validation/validate	Parse `value` with an arktype schema exactly once.
-# export surface: sha256 b8ec3a849f9dd9daec0e858f6614fbbb1f9a3f036b7263c2c28f89f89871b19a
+# export surface: sha256 236312397c8104262e1d20564d187e0d724d124178ff18371492fc5d454ea11e

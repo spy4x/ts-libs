@@ -8471,7 +8471,7 @@ plus an RFC 5545 iCalendar writer and a lossless iCalendar editor. Zero runtime 
 | `time/ical-tasks-edit`      | Writing a `Task` back: `createTask`, `editTask`, `rebaseEdit`, `keepMine`, `keepMineText`, `completeTask`, `reopenTask`                                                                                                                                                     |
 | `time/ical-tasks-reminders` | Which reminders of a task fall in a time window: `dueReminders` (alarms relative to start or due, absolute ones, a Tasks.org snooze; nothing for a completed task)                                                                                                          |
 | `time/ical-duration`        | iCalendar durations (`P1DT2H`): `readDuration` (lenient, as other apps write them), `durationMs`, `Duration`                                                                                                                                                                |
-| `time/rrule`                | Repeat rules for the subset Tasks.org writes: `parseRrule`, `formatRrule`, `nextOccurrence`, `describeRrule`                                                                                                                                                                |
+| `time/rrule`                | Repeat rules for the subset Tasks.org writes: `parseRrule`, `formatRrule`, `nextOccurrence`, `occurrencesBetween`, `describeRrule` in nine languages                                                                                                                        |
 | `time/cron`                 | Cron schedules in UTC: `parseCron` (five fields, names, steps, `@daily` and the other aliases), `nextCronRun`, `describeCron` ("Every day at 03:00 UTC"), `CronSchedule`                                                                                                    |
 
 ```ts
@@ -8919,6 +8919,45 @@ const next = nextOccurrence(parsed.output, { start: due, after: new Date("2026-0
   there and no answer of ours could match.
 - **Clock changes.** Occurrences keep the start's wall clock. A time a zone skips (spring forward)
   keeps its date and wall clock; a time it repeats (fall back) occurs once, at its first reading.
+- **Month end as RFC 5545 says.** `monthEnd: RruleMonthEnd.Skip` (in `nextOccurrence` and
+  `occurrencesBetween`) turns the Tasks.org clipping off: monthly on day 31 then skips February,
+  April and June. The default is `RruleMonthEnd.Clip`.
+
+### Occurrences in a range
+
+`occurrencesBetween` lists every occurrence from `from` to `to`, both included, in order. It walks
+the same steps as `nextOccurrence`, so the two never disagree. A range with more than `limit`
+occurrences (default 1,000) is `RruleErrorCode.SearchLimit`, never a cut list.
+
+```ts
+import { occurrencesBetween, RruleMonthEnd } from "@spy4x/time/rrule"
+
+const month31 = parseRrule("FREQ=MONTHLY;BYMONTHDAY=31")
+if (!month31.success) throw new Error(month31.error.message)
+occurrencesBetween(month31.output, {
+  start: { kind: IcalDateKind.Date, date: "2026-01-31" },
+  from: new Date("2026-01-01T00:00:00Z"),
+  to: new Date("2026-06-30T23:59:59Z"),
+  monthEnd: RruleMonthEnd.Skip,
+}) // 31 January, 31 March, 31 May
+```
+
+### Labels in nine languages
+
+`describeRrule(rule)` writes English. `describeRrule(rule, words)` takes a translator of the
+`@spy4x/platform/universal/i18n` shape built from the catalogs in `@spy4x/time/rrule-words/<lang>`
+(`en`, `ru`, `es`, `de`, `pt-BR`, `ar`, `fr`, `ja`, `zh-CN`). Weekday, month and date names come
+from `Intl` in the translator's language, lists from `Intl.ListFormat`, and counts use the
+language's plural forms.
+
+```ts
+import { createTranslator } from "@spy4x/platform/universal/i18n"
+import en from "@spy4x/time/rrule-words/en"
+import ru from "@spy4x/time/rrule-words/ru"
+
+const words = createTranslator({ language: "ru", catalogs: [{ source: en, translation: ru }] })
+describeRrule(parseRrule("FREQ=MONTHLY;BYDAY=-1FR").output!, words) // "Ежемесячно: последняя пятница"
+```
 
 ### Editing the repeat rule and the reminders of a task
 
