@@ -17,18 +17,18 @@ hand. Exported names and signatures are frozen since 1.0: they change only addit
   Bun commands. `npm:` specifiers run through Deno where unavoidable. What a published package
   itself runs on at the consumer's end is the "Runs on" column of the
   [package table](README.md#packages).
-- **Source repos are read-only.** Bugs in the repos this code is extracted from are fixed _here_,
-  at extraction time. No module is published while it still carries a known bug.
+- **Port the behaviour, not the dependency.** A bug found in an app's copy is fixed here, and the
+  app moves to the released import.
 - **MIT.**
 
 ## Tests
 
 Two tiers. `deno task test` is the unit tier: fakes only, no network, no Docker, and it is part of
 `deno task check`. `deno task test:integration` is the integration tier: files named
-`*.integration.test.ts`, run against a real Postgres, a real S3-compatible store, a real mail
-server and a real Redis, all started by `deno task services:up`. An integration test whose service
-is missing fails with the address and the command that starts it — it never skips. `AGENTS.md` has
-the details.
+`*.integration.test.ts`, run against real Postgres, S3-compatible, mail, Redis and CalDAV servers,
+all started by `deno task services:up`. An integration test whose service is missing fails with the
+address and the command that starts it — it never skips. [docs/testing.md](docs/testing.md) has the
+details.
 
 ## Relationship to other repos
 

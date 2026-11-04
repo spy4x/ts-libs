@@ -49,19 +49,19 @@ Deno.serve(async (request) => {
 
 **server** means Deno on the back end, **browser** a front-end bundle, **shared** both.
 
-| Package                                                     | What it holds                                                                         | Runs on                |
-| ----------------------------------------------------------- | ------------------------------------------------------------------------------------- | ---------------------- |
-| [`@spy4x/validation`](https://jsr.io/@spy4x/validation)     | arktype `validate` with one result shape, and form-validation state                   | shared                 |
-| [`@spy4x/platform`](https://jsr.io/@spy4x/platform)         | helpers, command and event bus, cache, API result, tokens, rate limiting              | shared, split by entry |
-| [`@spy4x/server`](https://jsr.io/@spy4x/server)             | sign-in, accounts, Postgres, Redis, outbox, file storage, env encryption              | server                 |
-| [`@spy4x/net`](https://jsr.io/@spy4x/net)                   | SSRF guard, redirect-safe `fetch`, size-capped body readers, CIDR checks              | server                 |
-| [`@spy4x/integrations`](https://jsr.io/@spy4x/integrations) | ntfy and healthchecks.io clients, webhook signature check, retry backoff              | server                 |
-| [`@spy4x/time`](https://jsr.io/@spy4x/time)                 | IANA time-zone arithmetic on `Intl`, plain-date math, `.ics` writer                   | shared                 |
-| [`@spy4x/email`](https://jsr.io/@spy4x/email)               | SMTP sender, address parsing, HTML mail wrapper, DKIM checker                         | server                 |
-| [`@spy4x/realtime`](https://jsr.io/@spy4x/realtime)         | hint-only WebSocket transport: registry, heartbeat, reconnect, cursor sync            | both halves            |
-| [`@spy4x/billing`](https://jsr.io/@spy4x/billing)           | checkout, customer portal and verified webhook events; Stripe adapter                 | server                 |
-| [`@spy4x/caldav`](https://jsr.io/@spy4x/caldav)             | CalDAV client, sync engine and write transport, WebDAV multistatus reader, URL rules  | shared                 |
-| [`@spy4x/tasks`](https://jsr.io/@spy4x/tasks)               | the to-do model of the CalDAV task apps: task, list views, quick-add, reminder runner | shared                 |
+| Package                                                     | What it holds                                                                          | Runs on                |
+| ----------------------------------------------------------- | -------------------------------------------------------------------------------------- | ---------------------- |
+| [`@spy4x/validation`](https://jsr.io/@spy4x/validation)     | arktype `validate` with one result shape, and form-validation state                    | shared                 |
+| [`@spy4x/platform`](https://jsr.io/@spy4x/platform)         | helpers, command and event bus, cache, API result, tokens, rate limiting               | shared, split by entry |
+| [`@spy4x/server`](https://jsr.io/@spy4x/server)             | sign-in, passkeys, Postgres, SQLite, Redis, outbox, file storage, env encryption       | server                 |
+| [`@spy4x/net`](https://jsr.io/@spy4x/net)                   | SSRF guard, redirect-safe `fetch`, size-capped body readers, CIDR checks               | server                 |
+| [`@spy4x/integrations`](https://jsr.io/@spy4x/integrations) | ntfy, Telegram, Umami, Cloudflare and other clients, Web Push, webhook signature check | server                 |
+| [`@spy4x/time`](https://jsr.io/@spy4x/time)                 | IANA time zones on `Intl`, date math and formats, `.ics`, RRULE, cron                  | shared                 |
+| [`@spy4x/email`](https://jsr.io/@spy4x/email)               | SMTP sender, address parsing, HTML mail wrapper, DKIM checker                          | server                 |
+| [`@spy4x/realtime`](https://jsr.io/@spy4x/realtime)         | WebSocket transport: calls, offline outbox, collections, read cache, cursor sync       | both halves            |
+| [`@spy4x/billing`](https://jsr.io/@spy4x/billing)           | checkout, customer portal and verified webhook events; Stripe adapter                  | server                 |
+| [`@spy4x/caldav`](https://jsr.io/@spy4x/caldav)             | CalDAV client, sync engine and write transport, WebDAV multistatus reader, URL rules   | shared                 |
+| [`@spy4x/tasks`](https://jsr.io/@spy4x/tasks)               | the to-do model of the CalDAV task apps: task, list views, quick-add, reminder runner  | shared                 |
 
 Each package's README, shown on its JSR page, has the install line, entry points and examples.
 
@@ -76,8 +76,9 @@ more than one product, extracted from my own apps, with their bugs fixed on the 
 
 ## Why ts-libs
 
-- **Web standards first.** `fetch`, Web Crypto, `ReadableStream`, `Intl` and ES modules, with Deno
-  as the runtime.
+- **Web standards first.** `fetch`, Web Crypto, `ReadableStream`, `Intl` and ES modules. New code
+  is written to run unchanged on Deno, Node and Bun, with runtime calls behind adapters in
+  `@spy4x/platform`.
 - **Runs where the code allows.** Every package is tested on Deno. `@spy4x/time`,
   `@spy4x/validation` and `@spy4x/caldav` use no `Deno.*` API, so they also run in a browser, untested there.
 - **Expected failures are data.** `validate` returns `{ error, data }`, `send` resolves with
@@ -85,7 +86,7 @@ more than one product, extracted from my own apps, with their bugs fixed on the 
 - **Few dependencies.** `@spy4x/net` and `@spy4x/time` have none. Shared
   ones (arktype, Hono, Postgres) are pinned to exact versions.
 - **Tested against the real thing.** Unit tests use fakes; an integration tier runs against a real
-  Postgres, S3-compatible store, mail server and Redis, and fails instead of skipping. CI runs it
+  Postgres, S3-compatible stores, mail servers, Redis and CalDAV servers, and fails instead of skipping. CI runs it
   on Postgres 18 and 17; the local containers run 18.
 
 **Use it if** you build on Deno or ship a browser bundle and want small, typed primitives without a
@@ -116,7 +117,7 @@ How the repository is built, tested and released: [CONTRIBUTING.md](CONTRIBUTING
 
 I'm [Anton Shubin](https://antonshubin.com), a senior full-stack engineer and tech lead. These
 libraries are the building blocks of the products I build and run on my own servers: my meeting
-scheduler [mig](https://github.com/spy4x/mig) imports five of them. Need
+scheduler [mig](https://github.com/spy4x/mig) imports seven of them. Need
 something like it built for your product? [That's my day job →](https://antonshubin.com)
 
 Licensed under [MIT](LICENSE). Copyright (c) 2026 Anton Shubin.
