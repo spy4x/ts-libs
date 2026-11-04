@@ -33,6 +33,7 @@ Runs on: server (Deno).
 | `./push-reminders`  | `createReminderNotify`, `reminderPushMessage`, `reminderDeliveryOutcome`          |
 | `./telegram`        | `TelegramClient`, `TelegramBot`, `createTelegramWebhookHandler`, polling          |
 | `./llm`             | `createChatClient`, `chatJson`, `LLM_PRESETS` — JSON from an OpenAI-style API     |
+| `./exchange-rates`  | `withFallback`, `createFrankfurterRates` and two more — daily exchange rates      |
 
 ## Contracts
 
@@ -427,6 +428,54 @@ People's Republic of China". It may use inputs to train its models, with an opt-
 (effective 2026-04-29) are governed by the law of mainland China. DeepSeek's balance is prepaid, so
 a `402` stops spending at zero; for OpenAI, set a project budget limit before use. A self-hosted
 Ollama keeps everything on your own machine.
+
+### `createFrankfurterRates`, `createExchangeRateApiRates`, `createCoinGeckoRates`, `withFallback` — daily exchange rates
+
+Three sources of daily rates behind one interface, `ExchangeRateSource`, whose `daily(date, base,
+quotes)` returns the `ExchangeRate`s it found (from `@spy4x/platform/universal/money`) and the
+quotes it has none for. `withFallback` asks each source in turn for the quotes still missing.
+
+```ts
+import {
+  createExchangeRateApiRates,
+  createFrankfurterRates,
+  withFallback,
+} from "@spy4x/integrations/exchange-rates"
+
+const rates = withFallback(
+  createFrankfurterRates({ providers: [`ECB`] }), // or baseUrl: a self-hosted Frankfurter
+  createExchangeRateApiRates({ apiKey }),
+)
+const day = await rates.daily(`2026-10-31`, `EUR`, [`USD`, `VND`])
+if (day.success) {
+  day.output.rates // USD from ECB dated 2026-10-30 (a Saturday asks for Friday), VND from the other
+  day.output.missing // quotes no source had: never a rate of 0
+}
+```
+
+- **The date in a rate is the one it is for.** Asked for a weekend or a holiday, Frankfurter
+  answers with the last business day, and the rate carries that date, so a screen can say "rates
+  of 30 Oct, ECB".
+- **Rates are plain decimal strings.** A JSON number such as `5.0112e-10` becomes
+  `"0.00000000050112"`. A rate is kept when it is finite and above zero; there is no upper limit.
+- **A missing currency is missing, not an error.** A currency the source does not know, a base it
+  does not support, or a day it has no data for lists the quotes in `missing`. A bad key, a used-up
+  quota, a plan limit, a timeout or a server error is an error with the source's id and a `code`.
+- **No error holds a URL or a key.** exchangerate-api.com takes its key in the URL path, so
+  transport failures are reported by class name only. Replies are read under a 256 KiB cap, every
+  request has a timeout (10 s by default), and redirects are not followed.
+- **CoinGecko** needs a code-to-id map, because a coin's code is ambiguous there;
+  `COINGECKO_COINS` covers ten common coins. With a coin as the base, one call prices it in every
+  quote. With a currency as the base, each coin takes a call and its rate comes coin first (`BTC`
+  buys `rate` `USD`); `convertMoney` and `crossRate` take a rate either way round. `plan: "demo"`
+  uses `api.coingecko.com` with `x-cg-demo-api-key`, `plan: "pro"` uses `pro-api.coingecko.com`
+  with `x-cg-pro-api-key`.
+
+**Terms to keep.** exchangerate-api.com forbids using its rates in a product that offers
+programmatic access to exchange rate data: an app's own API or MCP server must never return them.
+CoinGecko's paid plans ask for "Data provided by CoinGecko" next to its data, stored prices
+refreshed within 24 hours, and deletion when access ends. ECB data, through Frankfurter, may be
+reused with the source named.
 
 ### `verifyWebhookRequest`
 
