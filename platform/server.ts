@@ -11,6 +11,30 @@
  *
  * This entry point imports `Deno` types transitively — keep it out of a browser bundle.
  *
+ * Deno-only helpers. Every filesystem module takes a port (`FileSystemPort`, `ClockPort`, `TimerPort`)
+ * instead of calling `Deno.*` directly, because the root `test` task grants `--allow-read --allow-env`
+ * and **no `--allow-write`**. The decision logic — what to write, when to flush, which entry to skip —
+ * is tested against an in-memory fake.
+ *
+ * Only these touch `Deno` anyway: `denoFileSystem` and `denoByteReader` (`server/deno-fs.ts`), and
+ * the `Deno.addSignalListener`/`Deno.removeSignalListener` defaults of `shutdownSignal`
+ * (`server/shutdown-signal.ts`), which its tests replace with fakes. `server/process` reads the
+ * environment, the process id, the arguments and the standard streams, and exits, on Deno, Node and
+ * Bun alike; `server/runtime-fs` picks `denoFileSystem` on Deno and `nodeFileSystem`
+ * (`node:fs/promises`) on Node and Bun. Of `denoFileSystem`'s **15 methods**,
+ * five are covered by `server/deno-fs.test.ts` under the read-only grant — `exists`, `readText`,
+ * `readDir`, `readBytes` and `readStream` (including the `isNotFound` mapping and the rethrow of any
+ * other error, reached via `ENOTDIR`). `denoByteReader` is covered separately (chunk-size
+ * independence and a missing-file rethrow). The write side — `writeText`, `appendText`, `writeBytes`,
+ * `writeStream`, `rename`, `mkdirp`, `makeTempDir`, `removeTree`, `lock` and the successful branch of
+ * `remove` — needs
+ * `--allow-write`, so it runs in the integration tier: `server/deno-fs.integration.test.ts` holds
+ * `denoFileSystem` on a real scratch folder to the shared contract in `server/fs-contract.test.ts`,
+ * and the unit tier runs the same contract on the in-memory fake; `server/runtime-fs.integration.test.ts`
+ * runs it on `nodeFileSystem` and `runtimeFileSystem`. Like the real disk, the fake refuses
+ * to write into a folder that does not exist, `mkdirp` creates the parents, and `lock` leaves an empty
+ * lock file behind.
+ *
  * @module
  */
 

@@ -17,6 +17,10 @@
  * }
  * ```
  *
+ * `processEnv.get(name)` reads one variable, with a blank value as `undefined`, the same shape as
+ * `EnvReader` in `@spy4x/server/config`. `readEnvRecord(names)` reads only the names given into a
+ * record, for a parser that takes one, so `--allow-env` can list exactly those names.
+ *
  * @module
  */
 

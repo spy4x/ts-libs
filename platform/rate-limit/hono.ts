@@ -18,6 +18,43 @@
  * placeholder address, and a config that can do that silently is exactly the kind this factory
  * refuses to build. See {@link RateLimitMiddlewareOptions.remoteAddr}.
  *
+ * ## Key resolution
+ *
+ * `keyResolver(req)` is a parameter, never a lookup into framework state. The source's only
+ * app-coupled line was `c.get?.("auth")`, and its optional chaining silently degraded every request
+ * to a shared `ip:unknown` bucket when the auth middleware had not run. `userThenIp(userId)` provides
+ * the `user:<id>` / `ip:<addr>` shape; anything else is the caller's own resolver.
+ *
+ * ## Headers
+ *
+ * Draft-6, matching `standardHeaders: "draft-6"` in the source:
+ *
+ * | Header                | Value                                                           |
+ * | --------------------- | --------------------------------------------------------------- |
+ * | `RateLimit-Limit`     | requests allowed per window                                     |
+ * | `RateLimit-Remaining` | requests left in the window, never negative                     |
+ * | `RateLimit-Reset`     | seconds until the window has room (or until the retry succeeds) |
+ * | `Retry-After`         | the same countdown, on a 429 only                               |
+ *
+ * Every value is a whole number of seconds rendered as a decimal string — no fractions, no negatives,
+ * rounded up, because rounding down advertises a retry that the limiter still rejects. Draft-7's
+ * combined `RateLimit` field is not emitted.
+ *
+ * ## Counting failures only
+ *
+ * `skipSuccessful: true` on `createRateLimitMiddleware` spends the budget on failed requests only
+ * (status 400 or above), for a one-time-code or password step where a correct answer must not lock
+ * its owner out. Pass a function `(response) => boolean` to decide what counts as success. The slot
+ * is reserved before the handler and given back after a successful response through the limiter's
+ * `refund`, so a burst of parallel wrong guesses still stops at `limit`. Both limiters in `memory.ts`
+ * implement `refund`; a custom limiter must too. A predicate must not read the response body unless
+ * it calls `response.clone()` first, because the same response is sent to the client afterwards.
+ *
+ * A refund that fails, for example because the shared store went down after the handler ran, never
+ * changes the response: the slot stays spent, which errs on the safe side, and a completed sign-in
+ * keeps its status and its `Set-Cookie`. Pass `onRefundError: (error, key) => …` to hear about it; an
+ * `onRefundError` that throws or rejects is ignored.
+ *
  * @module
  */
 

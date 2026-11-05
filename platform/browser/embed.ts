@@ -12,6 +12,13 @@
  * only when the caller passes none, so the module is safe to import in a server render and
  * testable with fakes.
  *
+ * `browser/embed` (from `mig`'s height-report and time-zone scripts) is for a page inside another
+ * site's frame. `reportHeight` posts `{ type, height }` for one element's own box to the parent, on
+ * load and on every resize, to a `targetOrigin` the caller must give (there is no `"*"` default);
+ * `captureTimeZone` and `fillEmptyTimeZoneField` read the visitor's zone from `Intl` and fill a form
+ * field only while it is still empty. They are functions, not inline `<script>` text: an app that
+ * needs pre-hydration script text wraps them itself.
+ *
  * @module
  */
 

@@ -1,741 +1,97 @@
 # `@spy4x/platform`
 
-Universal, server and browser helpers extracted from seven repositories into one cohesive package.
-No framework, no domain types, no validator.
-
-The to-do entry points that used to be listed here are published as
-[`@spy4x/tasks`](https://jsr.io/@spy4x/tasks); see "The to-do entry points are in `@spy4x/tasks`"
-below.
+Universal, server and browser helpers. No framework, no domain types, no validator.
 
 ```bash
 deno add jsr:@spy4x/platform
 ```
 
-```ts
-import { formatDecimal, ok } from "@spy4x/platform"
-import { apiFetch } from "@spy4x/platform/api"
-import { CommandBus } from "@spy4x/platform/cqrs"
-import { makeStorage } from "@spy4x/platform/browser"
-import { atomicWriteJson, denoFileSystem } from "@spy4x/platform/server"
-```
-
 Runs on: shared, with `./browser/*` for the browser and `./server/*` for Deno.
 
-## Module map
-
-Three subpaths, split by _where the code can run_ — the split the source repo lacked, where one
-762-LOC `helpers.ts` mixed `globalThis.atob`, `self.location` and PBKDF2 and was imported by both
-the browser and the API.
-
-### `.` → `universal.ts`
-
-Runs in Deno, a browser, a worker and an SSR pass. The only host APIs touched are `Date`, `Intl`,
-`Math`, `TextEncoder`, `URL`, `FormData`, `fetch`, `crypto.getRandomValues` (only `universal/uuid`, through `@std/uuid`), `crypto.subtle.digest` (only the catalog locks of `universal/i18n`), and the `setTimeout` / `clearTimeout` pair that `universal/async` uses (it
-`unref`s the handle where the runtime provides one). No other `crypto` calls and no DOM global: the
-browser- and server-only halves are the other two subpaths.
-
-| Module                      | Contents                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
-| --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `universal/async`           | `sleep`, `debounce` (cancelable, unref'd), `backoffDelay` (capped, jittered backoff delay)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
-| `universal/color`           | `isHexColor`, `relativeLuminance`, `contrastRatio`, `readableTextColor`, `hexColor` (arktype) — `#rrggbb` checks and WCAG 2.x contrast: black or white text that stays readable on any colour                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
-| `universal/color-core`      | Everything in `universal/color` except `hexColor`, with no arktype import: for browser code                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| `universal/concurrency`     | `AsyncMutex` (fair FIFO)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
-| `universal/bounded-integer` | `parseBoundedInteger`, `BoundedIntegerOptions` — a whole number from a query string within bounds: the default for a missing value, `null` for anything else                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
-| `universal/axis`            | `niceStep`, `ticks`, `stepAxis`, `StepAxis`, `MAX_TICKS` — the one home for chart tick maths                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
-| `universal/constants`       | `DEFAULT_DEBOUNCE_DELAY`, `DEFAULT_FLUSH_INTERVAL_MS`, `MIN_PASSWORD_LENGTH`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
-| `universal/contact`         | `CONTACT_KINDS`, `ContactKind`, `contactKind`, `CONTACT_KIND_NAMES`, `ContactLink`, `normalizeContactValue`, `contactValueProblem`, `contactHref`, `contactJsonLd` — a website's contact channels (Telegram, Zalo, WhatsApp, Instagram, Facebook, phone, e-mail, a web page): the value checked, the link built, and the `Organization` structured data, profiles in `sameAs` and numbers and addresses in `contactPoint`                                                                                                                                                                                                                                                                                   |
-| `universal/csv`             | `CsvCellValue`, `CsvColumn`, `csvField`, `csvRow`, `csvHeaderRow`, `toCsvText`, `CSV_BYTE_ORDER_MARK`, `toCsvBytes` — RFC 4180 writer with a formula-injection guard; `decodeTextFile`, `sniffCsv`, `parseCsv`, `CSV_DEFAULT_LIMITS` — reader of uploaded files: encoding, delimiter and header guesses, size limits on by default                                                                                                                                                                                                                                                                                                                                                                          |
-| `universal/error-reporter`  | `createErrorReporter`, `parseDsn`, `scrubUrl`, `scrubText`, `ErrorReporter`, `ErrorReporterOptions`, `ErrorEventTarget`, `ParsedDsn`, `ReportContext` — posts Sentry-format envelopes to GlitchTip or Sentry; no DSN means off and no request; masks secrets in URLs and text; sampling and a per-session (or per-window) cap; never throws; `install(window)` reports `error` and `unhandledrejection`                                                                                                                                                                                                                                                                                                     |
-| `universal/errors`          | `ErrType`, `Err`, `ValidationError`, `ConnectionError`, `ServerError`, `PayloadError`, `StoreError`, `RequestError`, `ResponseError`, `connectionError`, `responseError`, `isSilentError`, `OperationState`, `OperationResult`                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
-| `universal/format-number`   | `round`, `formatDecimal`, `formatPct`, `formatBytes`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| `universal/honeypot`        | `HONEYPOT_FIELD_NAME`, `honeypotFilled` — the server half of a honeypot form field                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
-| `universal/i18n`            | `createTranslator`, `negotiateLanguage`, `parseAcceptLanguage`, `textDirection`, `pseudoLocalize`, `checkCatalogs`, `findUnusedKeys`, `stampLocks` — translations from flat JSON catalogs with `Intl` plurals, language choice, text direction and the catalog checks; see below                                                                                                                                                                                                                                                                                                                                                                                                                            |
-| `universal/is-record`       | `isRecord` — type guard for a parsed JSON object (not `null`, not an array)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| `universal/key-value-store` | `KeyValueStore` — a dependency-free port, the one home for it and for `browser/storage`'s deprecated `StorageLike` and `@spy4x/realtime`'s deprecated `KeyValueStore` alias (#71)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
-| `universal/markdown`        | `renderMarkdown`, `RenderedMarkdown`, `MarkdownHeading`, `renderMarkdownSegments` and its types — Markdown to HTML that is safe on a public page: raw HTML escaped, link and image addresses only `http`, `https`, `mailto` or relative, `rel="noopener noreferrer"` on external links, lazy images, and every heading with a stable `id`, returned for a table of contents. Built on `marked`; import it from `@spy4x/platform/universal/markdown`, the root export does not load it                                                                                                                                                                                                                       |
-| `universal/metrics`         | `Counter`, `MetricLabels`, `createCounter`, `renderPrometheus` — a labelled counter and its Prometheus text exposition; no registry, no histograms                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
-| `universal/money`           | `currencyDecimals`, `formatMoney`, `formatMoneyParts`, `moneyDecimalString`, `parseMoney`, `MoneyOptions`, `currencies`, `CURRENCIES_PUBLISHED`, `isCurrencyCode`, `currencyCode`, `currencyOptions`, `sumMoney`, `allocate`, `convertMoney`, `crossRate`, `Money`, `ExchangeRate`, `parseAmount`, `detectNumberFormat`, `isDebitCreditPair` — smallest-unit integers with no float step; ISO 4217 decimals, or `{ decimals }` for `BTC`; sums that refuse mixed currencies, splits that lose no unit, exact conversion with a dated rate; amounts from a file column in a guessed format                                                                                                                   |
-| `universal/money-core`      | Everything in `universal/money` except `currencyCode`, with no arktype import: for browser code                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
-| `universal/result`          | `Result`, `ok`, `err`, `unwrap`, `unwrapOr`, `CommandEnvelope`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
-| `universal/schema`          | `InferSchema` — the only arktype type helper this package needs                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
-| `universal/seo`             | `canonicalUrl`, `normalizeCanonical`, `breadcrumbItems`, `breadcrumbListJsonLd`, `faqPageJsonLd`, `blogPostingJsonLd`, `productJsonLd`, `itemListJsonLd`, `jsonLdText`, `sitemapXml`, `rssXml`, `llmsTxt`, `Crumb`, `BreadcrumbListItem`, `BreadcrumbListJsonLd`, `SitemapEntry`, `SitemapAlternate`, `RssChannel`, `RssItem`, `BlogPost`, `BlogPostingJsonLd`, `ProductPage`, `ProductVariant`, `ProductJsonLd`, `ProductGroupJsonLd`, `ItemListJsonLd`, `LlmsTxtDocument` — the canonical address, JSON-LD (articles, FAQs, products and catalog lists), `sitemap.xml` with images and language versions, RSS feed and `llms.txt` a server-rendered site publishes                                        |
-| `universal/settings`        | `defineSettings`, `saveSettings`, `SettingsStore`, `VersionedSettings` — typed, versioned settings: an arktype schema per app, a save based on an older version refused with the current record, undeclared keys dropped and a size cap; storage stays with the app through a compare-and-set port                                                                                                                                                                                                                                                                                                                                                                                                          |
-| `universal/shell`           | `shellQuote` — one POSIX shell word: single-quoted, nothing expanded; refuses NUL                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
-| `universal/sort`            | `SortDirection`, `SortRule`, `toggleSort`, `removeSortRule`, `sortRows`, `parseSort`, `serializeSort` — multi-column sort rules and the `?sort=` parameter a page writes and an API reads                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
-| `universal/srcset`          | `responsiveImage`, `ResponsiveImage`, `ResponsiveImageVariant`, `ResponsiveImageSource` — the `srcset`, `sizes`, `width` and `height` of a `<picture>` and its `<img>`, from the widths an image is stored at                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
-| `universal/statistics`      | `median`, `mean`, `quantileSorted`, `seededRandom`, `bootstrap`, `bootstrapDifference`, `crossesZero`, `Interval`, `BootstrapOptions` — small statistics and a seeded percentile bootstrap                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
-| `universal/text`            | `searchWords`, `search`, `filterRows`, `pluralize`, `convertToKebabCase`, `slugify` (URL- and `id`-safe, any script), `readingMinutes`, `levenshtein`, `similarity`, `utf8ByteLength`, `initials`, `maskEmail` (`jane.doe@example.com` → `j***@example.com`; with `{ domain: true }`, `j***@e***.com`), `MaskEmailOptions`, `hasUnsafeTextCharacters`, `UnsafeTextOptions`, `hasUnstorableTextCharacters`, `searchEntries`, `matchEntry`, `SearchEntry`, `SearchMatch`, `EntryMatch`, `SearchMatchKind` — a ranked search over labels and aliases that forgives word order, a typo, the wrong keyboard layout and Cyrillic or Latin spelling (`"ещфые"` finds `"Toast"`, `"GosUslugi"` finds `"ГосУслуги"`) |
-| `universal/time`            | `TimeFormatter`, `formatTime`, `timeAgo`, `getDaysOfWeek`, `isValidDate`, `normalizeCalendarDate`, `nextUtcHour`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
-| `universal/time-constants`  | `ONE_MONTH_IN_MILLISECONDS` and friends                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
-| `universal/uuid`            | `uuidV7`, `isUuid`, `UUID_PATTERN`, `UUID_V7_PATTERN`, `UuidVersion` — time-ordered ids for stored records and UUID validators; see below                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
-
-The old one-line CSV splitter and `mapConcurrent` (formerly in `universal/concurrency`) were
-removed in 1.0: `@std/csv` and `@std/async`'s `pooledMap` already cover them. `universal/csv` is now
-a different module: a writer (1.3.0), because `@std/csv` has no formula-injection guard, and a
-reader (#818) that parses with `@std/csv` and adds the encoding, the delimiter guess and the limits.
-
-**`universal/axis` is the single home for the chart tick maths**, ported from and matched against
-`preact-components/charts/scales.ts`. `preact-components` does not import it yet — that is a
-pending PR in that repository, `spy4x/preact-components#123` — so today the two copies still exist
-side by side; this module is written so that import can be a straight substitution once it lands.
-`niceStep`/`ticks` deliberately match the reference on every case tested against it, including three
-that used to differ from it here: reversed bounds are swapped rather than returned as given
-(`ticks(10, 0)` equals `ticks(0, 10)`), a non-finite bound returns an empty axis instead of
-throwing, and a tick target that is `0`, negative or `NaN` falls back to the default of `5` instead
-of throwing. All three are deliberate: a chart's tick target and domain both come from data or
-layout math that can transiently be bad, and a chart needs an empty or default-shaped axis to keep
-rendering, not an exception that takes the rest of the component down. `niceStep`/`ticks` in
-`axis.test.ts` pin all three against values taken from running the reference.
-
-One case has no reference to copy: `ticksForStep`'s loop used to run `steps + 1` times while
-`MAX_TICKS` capped only the output array, so `ticks(1_000_000, 2_000_000, 1e25)` never returned — an
-absurd tick target makes the step many orders of magnitude smaller than the float precision at that
-range's magnitude, so the output stops growing almost immediately while the loop still has `1e25`
-iterations ahead of it. `preact-components/charts/scales.ts` has the exact same defect and does not
-return either, so this is not a case of matching the reference. The fix bounds the loop itself at
-`Math.min(steps + 1, MAX_TICKS)`, not just the output, and the decision for what an absurd target
-should produce is a chart's, not the reference's: return whichever ticks distinguish themselves
-within `MAX_TICKS` iterations — as few as one — rather than freeze the page. `MAX_TICKS` is exported
-so `axis.test.ts` can assert against it, and a regression tripwire inside the loop throws fast if the
-bound is ever weakened back to plain `steps + 1`, so a future revert of the fix fails a test instead
-of hanging the suite.
-
-**Which function draws an axis that covers the data.** `ticks(min, max)` keeps only the step
-multiples within half a step of the bounds, so its ticks need not reach them: `ticks(1.1, 10)` is
-`[2, 4, 6, 8, 10]`, and nothing marks 1.1. When the first and last tick must cover the data, use
-`stepAxis(min, max, niceStep(Math.abs(max - min), target))`, which rounds the bounds outward:
-`stepAxis(1.1, 10, niceStep(8.9))` is `{ min: 0, max: 10, ticks: [0, 2, 4, 6, 8, 10] }`.
-
-`stepAxis(min, max, step)` (1.4.0) is for a caller that has already chosen its step: it rounds the
-bounds outward to multiples of the step and returns them with the ticks between them, rounded by the
-same rule, so the first and last tick are exactly the bounds. It exists so `preact-components`'
-`niceScale` can drop its own copy of the tick loop (#201). The same release fixed tick rounding for
-a step with more than one significant digit: `ticks(0, 10, 4)` returned `[0, 3, 5, 8, 10]` and now
-returns `[0, 2.5, 5, 7.5, 10]`.
-
-#### `universal/money-core` and `universal/color-core` — no arktype in a browser bundle
-
-Importing arktype adds about 150 KB to a minified browser bundle, even when no schema is used,
-because arktype's own module code runs when it loads. So the two schemas live apart from the
-functions: `universal/money` is `universal/money-core` plus `currencyCode`, and `universal/color`
-is `universal/color-core` plus `hexColor`. Browser code that only formats, parses or checks imports
-the core subpath; a server that builds an arktype schema imports the full one. A bundle of
-`formatMoney` and `isCurrencyCode` from `money-core` is about 2.5 KB; from `money` it was 156 KB
-(#863). `universal/core-bundle.test.ts` keeps arktype out of both core subpaths.
-
-#### `universal/i18n` — translations from JSON catalogs
-
-One JSON file per language, English as the source. `{name}` inserts a value, a plural message is an
-object keyed by CLDR category (`zero`, `one`, `two`, `few`, `many`, `other`), and `<tag>…</tag>`
-marks a span the caller renders; `parts()` returns those spans, and nothing becomes HTML. A missing
-key falls back to English and calls `onMissing`. `negotiateLanguage` only ever returns a member of
-the supported list, so its result is safe as an import key. The loop, from catalog to lock:
-
-```ts
-// i18n/app/en.json: { "notes.count": { "one": "{count} note", "other": "{count} notes" } }
-import en from "./i18n/app/en.json" with { type: "json" }
-import de from "./i18n/app/de.json" with { type: "json" }
-const language = negotiateLanguage(parseAcceptLanguage(header), ["en", "de"], "en")
-const { t, dir } = createTranslator<keyof typeof en>({
-  language,
-  catalogs: [{ source: en, translation: de }],
-})
-t("notes.count", { count: 3 }) // "3 Notizen"; dir is "ltr"
-
-// i18n.test.ts: every problem names the command that fixes it.
-const locks = { de: await Deno.readTextFile("i18n/app/de.lock") }
-expect(await checkCatalogs({ source: en, languages: { de }, locks })).toEqual([])
-// The `i18n:stamp` task, once the translations match the English:
-for (const [lang, text] of Object.entries(await stampLocks(en, { de }))) {
-  await Deno.writeTextFile(`i18n/app/${lang}.lock`, text)
-}
-```
-
-`checkCatalogs` reports a missing, extra or empty message, a stale one (its English changed after
-the lock was stamped), placeholders or tags that differ from English, and plural forms that differ
-from what `Intl.PluralRules` lists for the language. `findUnusedKeys` lists keys no source file
-names, and `pseudoLocalize` makes the `en-XA` pseudo-language that finds text which skipped the
-catalog. Problems name `deno task i18n:stamp` as the fix, so an app names its stamp task that.
-
-Whether a `.json` export of a published JSR package builds in Vite through `@deno/vite-plugin` is
-proven in two halves only (#364): a linked package's `.json` export resolved and built with one
-chunk per language, and a `.json` file served by jsr.io loaded through the plugin. It holds end to
-end once the first consumer ships one.
-
-#### `universal/uuid` — version 7 ids and UUID validators
-
-`uuidV7()` returns a lower-case UUID version 7 for the id of a stored record. The id starts with the
-millisecond it was made in, so new rows land next to each other in a database index and ids sort by
-age. `@std/uuid` builds the id; this module adds the order inside one millisecond: ids made by one
-process always sort in the order they were made, because the 12 bits after the version digit hold a
-counter. When more than the counter holds are made in one millisecond, or the clock steps back, the
-id's time runs slightly ahead of the clock instead of breaking the order. Two processes or two
-browser tabs do not share the counter, so their ids sort by millisecond only.
-
-Two kinds of value are never a UUID: one that works as a secret (a session id, a CSRF or lock
-token, a reset or invitation token), and an id that other people see and that must not show
-when it was made (a share link, a public profile or order number). Both are `randomBase64Url()`
-from `./tokens`.
-
-`isUuid(value)` is a type guard for a lower-case UUID of any version, and `isUuid(value, 7)` for one
-version in the standard variant. `UUID_PATTERN` (any version) and `UUID_V7_PATTERN` are the regular
-expressions behind them; arktype takes either as a schema, so no app writes its own:
-
-```ts
-import { type } from "arktype"
-import { UUID_V7_PATTERN, uuidV7 } from "@spy4x/platform/universal/uuid"
-
-const noteSchema = type({ id: UUID_V7_PATTERN, text: "string" })
-const note = noteSchema.assert({ id: uuidV7(), text: "milk" })
-```
-
-Upper-case input is refused. `./keyset-cursor` checks its page key's id with `UUID_PATTERN`.
-
-#### `universal/seo` — language versions in `sitemap.xml`
-
-A page published in several languages lists every version in `alternates`, its own included, and
-each version's entry repeats the same list. `sitemapXml` writes one
-`<xhtml:link rel="alternate" hreflang="…" href="…"/>` per version and declares the `xhtml`
-namespace only when some entry has one, so a sitemap without alternates is unchanged. `lang` is a
-BCP 47 tag, written in its canonical form (`en-us` becomes `en-US`, and a deprecated code such as
-`iw` becomes `he`), or `x-default` for the version shown to everyone else; any other value throws.
-
-```ts
-import { sitemapXml } from "@spy4x/platform/universal/seo"
-
-const alternates = [
-  { lang: "vi", url: "https://shop.example/" },
-  { lang: "en", url: "https://shop.example/en/" },
-  { lang: "x-default", url: "https://shop.example/" },
-]
-const xml = sitemapXml([
-  { url: "https://shop.example/", alternates },
-  { url: "https://shop.example/en/", alternates },
-])
-```
-
-#### `universal/markdown` — interactive components in a post
-
-`renderMarkdownSegments` renders like `renderMarkdown` and splits the HTML around component tags: a
-self-closing tag alone on a top-level line, its name starting with a capital, its props JSON in
-braces or text in double quotes. The library has no list of components and checks no props; the
-page maps each tag to its component and validates the props with that component's schema. A tag in
-a code block stays code. A line that starts like a tag but does not read as one, or a tag in a list
-or a quote, renders as nothing and comes back in `problems` with its line, its tag, an English
-`message` and a `code` an editor can translate: `nested` for a tag in a list or a quote, `syntax`
-for a line that does not read:
-
-```ts
-import { renderMarkdownSegments } from "@spy4x/platform/universal/markdown"
-
-const { segments, problems } = renderMarkdownSegments(post.body)
-if (problems.length) throw new Error(problems.map((p) => `line ${p.line}: ${p.message}`).join("\n"))
-// "<RunsCalculator saving={15} />" on its own line becomes
-// { kind: "component", tag: "RunsCalculator", props: { saving: 15 }, line: 7 }
-const body = segments.map((s) =>
-  s.kind === "html"
-    ? <div dangerouslySetInnerHTML={{ __html: s.html }} />
-    : <Figure tag={s.tag} props={s.props} /> // looks the tag up and validates the props
-)
-```
-
-Props are data, never HTML: a string prop comes back as written, so render it as text or an
-attribute, which Preact escapes.
-
-### `./browser` → `browser.ts`
-
-Needs a DOM-ish runtime. **Nothing here reads a global at import time** — `getCookie`, `makeStorage`,
-`downloadResponseAsFile`, `downloadCsv`, `copyToClipboard` and `requestGeolocation` all take their DOM surface (`document`, `Storage`, the object-URL
-factory, a timer, a clipboard, a `Geolocation`) as a parameter, defaulting to the real global only
-when the caller passes none.
-
-| Module                       | Contents                                                                                                                                                                                                                                                                                                                         |
-| ---------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `browser/clipboard`          | `copyToClipboard`, `CopyToClipboardOptions`, `ClipboardWriter`, `ClipboardDocument`                                                                                                                                                                                                                                              |
-| `browser/cookie`             | `getCookie`                                                                                                                                                                                                                                                                                                                      |
-| `browser/data-cache`         | `createDataCache`, `DataCache`, `DataCacheOp`, `DataCacheOptions`                                                                                                                                                                                                                                                                |
-| `browser/build-env`          | `readBuildEnvVar`, `MissingBuildEnvError`, `BuildEnv` — required or optional values of a bundler's build-time env object, passed in                                                                                                                                                                                              |
-| `browser/download`           | `downloadResponseAsFile`, `downloadCsv`, `DownloadOptions`, `DownloadDocument`, `ObjectUrlAdapter`, `TimerAdapter`                                                                                                                                                                                                               |
-| `browser/embed`              | `reportHeight`, `captureTimeZone`, `fillEmptyTimeZoneField`, `EMBED_HEIGHT_MESSAGE_TYPE`, `EmbedWindow`                                                                                                                                                                                                                          |
-| `browser/geolocation`        | `requestGeolocation`, `GeoCoordinates`, `GEOLOCATION_UNSUPPORTED`, `GEOLOCATION_FAILED`                                                                                                                                                                                                                                          |
-| `browser/hotkeys`            | `parseHotkey`, `matchesHotkey`, `createHotkeyMatcher`, `isApplePlatform`, `isTypingTarget`, `Hotkey`, `HotkeyBinding`, `HotkeyEvent`, `HotkeyMatcherOptions`, `HotkeySequenceEvent`, `PlatformNavigator`, `TypingTarget`                                                                                                         |
-| `browser/indexeddb`          | `createDatabaseOpener`, `idbRequest`, `idbTransactionDone`, `DatabaseSpec`                                                                                                                                                                                                                                                       |
-| `browser/persistent-storage` | `requestPersistentStorage` (optional ask-once note), `AskOnce`, `PersistentStorageManager`                                                                                                                                                                                                                                       |
-| `browser/push-notifications` | `installPushNotifications`, `sameOriginUrl` — the `push` and `notificationclick` handlers of a service worker                                                                                                                                                                                                                    |
-| `browser/runtime-config`     | `loadRuntimeConfig`, `LoadRuntimeConfigOptions`, `DEFAULT_RUNTIME_CONFIG_URL` — fetches `/config.json` without the HTTP cache, validates it with any arktype schema, and falls back to the caller's defaults with one warning on any failure                                                                                     |
-| `browser/storage`            | `makeStorage`, `memoryStorage`, `browserStorage` (`localStorage` that never throws: a value the browser refuses is kept in memory until the page closes), `StorageLike` (deprecated alias of `universal/key-value-store`'s `KeyValueStore`), `TypedStorage`                                                                      |
-| `browser/testing`            | `installLocalStorage` — a test helper: puts an in-memory `localStorage` in place of the global one and gives the way back. Import it from tests only; it is not in the `@spy4x/platform/browser` barrel                                                                                                                          |
-| `browser/signed-in-hint`     | `createSignedInHint`, `SignedInHint`, `SignedInHintOptions` — a non-secret "signed in on this device" hint in `localStorage`; safe when storage throws                                                                                                                                                                           |
-| `browser/last-sign-in`       | `createLastSignIn`, `LastSignInStore`, `LastSignIn`, `LastSignInOptions`, `MAX_LAST_SIGN_IN_METHOD_LENGTH` — how a person last signed in on this browser: the method name and the address masked by `maskEmail`, never the full address; `read()`, `remember(method, email)`, `forget()`; safe when storage is missing or throws |
-| `browser/passkey`            | `supportsPasskeys`, `supportsPasskeyAutofill`, `createPasskey`, `getPasskey`, `signalUnknownPasskey` — passkeys through `navigator.credentials`, with the browser's own JSON conversion; `null` when the person cancels; `autofill: true` for conditional mediation                                                              |
-
-`browser/data-cache` keeps the last data the server sent, in IndexedDB, so a page opens with it and
-shows it with no network. Items live in scopes (a user, a calendar); a full server answer replaces a
-whole scope in one transaction, so an item the server dropped goes too, and a single item can be
-put or deleted when one pushed change arrives. It holds server state only: writes made offline
-wait in the outbox (`@spy4x/realtime/outbox-indexeddb`). Name the database for the signed-in user
-and `clear` the scopes at sign-out. `browser/indexeddb` is the small plumbing under it (a lazily
-opened database, promises for a request and a transaction), exported so a store of your own does
-not repeat it. `requestPersistentStorage` asks for `navigator.storage.persist()` and answers
-whether it was granted. Ask once the first offline write is queued: Safari clears the storage of a
-site that is not installed as an app after seven days unused, which would lose writes that were
-never sent.
-
-```ts
-import { createDataCache } from "@spy4x/platform/browser/data-cache"
-import { requestPersistentStorage } from "@spy4x/platform/browser/persistent-storage"
-
-const cache = createDataCache<Task>({ name: `data:${userId}`, getId: (t) => t.id })
-const shown = await cache.read(calendarId) // render this first, then ask the server
-await cache.replace(calendarId, await fetchTasks(calendarId)) // a full answer
-await cache.put(calendarId, changedTask) // one pushed change
-const persistent = await requestPersistentStorage() // false: tell the person to install the app
-```
-
-Items read back in the order `replace` wrote them, so the server's order survives without the app
-wrapping each item with a position. A single item `put` later follows the others; one put again
-keeps its place. `batch(ops)` applies puts, deletes, replaces and clears across items and scopes in
-one transaction, all or none: a sync answer ("these calendars, these changed objects, these
-removed") lands without a reader seeing it half applied, and an item whose id cannot be read leaves
-the cache as it was. A CalDAV sync store, for instance, keeps the calendar list in one scope and each
-calendar's objects in a scope of their own; `replaceCalendars` is one `batch` that replaces the list
-and `clear`s the scope of every calendar `scopes()` shows that the list no longer has. `clearAll()`
-empties every scope and leaves the cache usable. At sign-out call `finish()`: it empties every
-scope too, and from then on this instance stores nothing, so a server answer that was still on its
-way cannot put the signed-out person's data back. A write on a finished cache does not open the
-database either; a read still does. The next user gets a new cache. After
-`indexedDB.deleteDatabase(name)` at sign-out, stop whatever still holds the cache or an outbox
-store: the next call on a store that is still referenced creates an empty database again.
-
-`browser/embed` (from `mig`'s height-report and time-zone scripts) is for a page inside another
-site's frame. `reportHeight` posts `{ type, height }` for one element's own box to the parent, on
-load and on every resize, to a `targetOrigin` the caller must give (there is no `"*"` default);
-`captureTimeZone` and `fillEmptyTimeZoneField` read the visitor's zone from `Intl` and fill a form
-field only while it is still empty. They are functions, not inline `<script>` text: an app that
-needs pre-hydration script text wraps them itself.
-
-`browser/cookie` fixes two bugs in the `getCookie` copies apps carried before it had a home here: it
-splits `document.cookie` instead of building a `RegExp` from the cookie name (a name containing `.`
-or `[` no longer over-matches or crashes), and it returns `null` when there is no `document` instead
-of throwing.
-
-`browser/download` moved here from `@spy4x/server/export-client`: it is a browser download
-helper (`document`, an object URL) that has nothing to do with a server, and it pairs with the
-download response `@spy4x/server/export` builds without either package importing the other.
-
-`browser/base64` (`@std/encoding`'s `decodeBase64Url` covers it, and already used by
-`platform/tokens.ts`) and `browser/dropdown` (an 11-line rule that is the dropdown component's own
-business, in `preact-components`) were removed.
-
-### `./server` → `server.ts` (11 modules)
-
-Deno-only helpers. Every filesystem module takes a port (`FileSystemPort`, `ClockPort`, `TimerPort`)
-instead of calling `Deno.*` directly, because the root `test` task grants `--allow-read --allow-env`
-and **no `--allow-write`**. The decision logic — what to write, when to flush, which entry to skip —
-is tested against an in-memory fake.
-
-Only these touch `Deno` anyway: `denoFileSystem` and `denoByteReader` (`server/deno-fs.ts`), and
-the `Deno.addSignalListener`/`Deno.removeSignalListener` defaults of `shutdownSignal`
-(`server/shutdown-signal.ts`), which its tests replace with fakes. `server/process` reads the
-environment, the process id, the arguments and the standard streams, and exits, on Deno, Node and
-Bun alike; `server/runtime-fs` picks `denoFileSystem` on Deno and `nodeFileSystem`
-(`node:fs/promises`) on Node and Bun. Of `denoFileSystem`'s **15 methods**,
-five are covered by `server/deno-fs.test.ts` under the read-only grant — `exists`, `readText`,
-`readDir`, `readBytes` and `readStream` (including the `isNotFound` mapping and the rethrow of any
-other error, reached via `ENOTDIR`). `denoByteReader` is covered separately (chunk-size
-independence and a missing-file rethrow). The write side — `writeText`, `appendText`, `writeBytes`,
-`writeStream`, `rename`, `mkdirp`, `makeTempDir`, `removeTree`, `lock` and the successful branch of
-`remove` — needs
-`--allow-write`, so it runs in the integration tier: `server/deno-fs.integration.test.ts` holds
-`denoFileSystem` on a real scratch folder to the shared contract in `server/fs-contract.test.ts`,
-and the unit tier runs the same contract on the in-memory fake; `server/runtime-fs.integration.test.ts`
-runs it on `nodeFileSystem` and `runtimeFileSystem`. Like the real disk, the fake refuses
-to write into a folder that does not exist, `mkdirp` creates the parents, and `lock` leaves an empty
-lock file behind.
-
-| Module                   | Contents                                                                                                                                                                                                                                                                                                  |
-| ------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `server/atomic-json`     | `readJsonFile`, `tempPathFor`, `atomicWriteJson`                                                                                                                                                                                                                                                          |
-| `server/deno-fs`         | `denoFileSystem`, `denoByteReader` (the Deno adapters)                                                                                                                                                                                                                                                    |
-| `server/file-lock`       | `FileLock`, `LockState`, `LockUnavailableError`, `FileLockWaitError`, `DEFAULT_FILE_LOCK_WAIT_MS`                                                                                                                                                                                                         |
-| `server/interval-runner` | `startIntervalRunner`, `IntervalRunnerOptions` — runs a task every interval through a `TimerPort`; a failed tick is reported and never stops the next; ticks never overlap; `runFirstTickNow` runs the first tick at once; `tickTimeoutMs` gives up on a tick that never settles; returns a stop function |
-| `server/jsonl-logger`    | `JsonlLogger`, `formatLogLine`, `parseLogLines`                                                                                                                                                                                                                                                           |
-| `server/ports`           | the port interfaces, `systemClockPort`                                                                                                                                                                                                                                                                    |
-| `server/process`         | `processEnv`, `readEnvRecord`, `processId`, `EnvReader`, `processArgs`, `exitProcess`, `writeStderr`, `processStdin`, `StandardInput` — the environment, process id, arguments, exit and standard streams on Deno, Node and Bun                                                                           |
-| `server/run-command`     | `runCommand`, `RunCommandResult`, `RunCommandOptions`, `RunCommandStdin`, `CommandSpawner`                                                                                                                                                                                                                |
-| `server/runtime-fs`      | `runtimeFileSystem`, `nodeFileSystem` — the `FileSystemPort` of the running runtime; `lock` works on Deno only, since Node and Bun have no file lock                                                                                                                                                      |
-| `server/tcp`             | `connectTcp`, `nodeTcpConnect`, `TcpConnection`, `TcpConnectOptions` — an outgoing TCP connection as web streams on Deno, Node and Bun                                                                                                                                                                    |
-| `server/shutdown-signal` | `shutdownSignal`, `ShutdownSignalError`                                                                                                                                                                                                                                                                   |
-| `server/throttled-saver` | `ThrottledJsonSaver`, `TimerPort`, `systemTimerPort`                                                                                                                                                                                                                                                      |
-
-`FileSystemPort` also has four optional methods for binary files: `readBytes` and `writeBytes` for
-a whole file, `readStream` and `writeStream` for one too large to hold in memory; and two for
-scratch folders: `makeTempDir` and `removeTree`. They are optional so a port written before them
-still compiles; `denoFileSystem`, `nodeFileSystem` and the in-memory fake have all six.
-
-`processEnv.get(name)` reads one variable, with a blank value as `undefined`, the same shape as
-`EnvReader` in `@spy4x/server/config`. `readEnvRecord(names)` reads only the names given into a
-record, for a parser that takes one, so `--allow-env` can list exactly those names.
-
-`writeText` and `atomicWriteJson` take an optional `mode` (such as `0o600`): the permission bits a
-file is created with, for one that holds keys. An existing file keeps its bits.
-
-`browser/push-notifications` is the receiving end of a Web Push: in a service worker, `installPushNotifications(self)`
-shows the pushed message and, on a click, focuses or opens the app at the message's URL, which must
-be of the worker's own origin. The worker ignores keys of a message it does not know, so a field
-added later does not silence a worker cached from an older build.
-
-`server/shutdown-signal` turns `SIGINT` and `SIGTERM` into one `AbortSignal` for a worker loop
-(#187). It aborts once, on the first signal, with a `ShutdownSignalError` whose `signal` names it,
-and removes every listener it added, so a second Ctrl+C ends the process the default way. A parent
-`signal` option lets a caller that stops for another reason remove the listeners too. The listener
-pair is injectable, so the tests fire fake signals. A listener whose removal throws does not stop
-the others from being removed or the signal from aborting; the error goes to an `onError` option
-(default `console.error`), because a throw from inside a signal callback would end the process
-before the worker's cleanup finishes. The default list works on Windows with Deno 2.7.6 or later,
-where `SIGTERM` fires on logoff and system shutdown.
-
-`server/run-command` runs a child process and never throws: `runCommand(["git", "status"])` resolves
-with `{ success, code, stdout, stderr }`, and a missing binary or bad `cwd` gives `success: false`,
-`code: -1` and the reason in `stderr` and `error` (set only when the process never started). It
-keeps the process's own shape rather than the house `{ success, output, error }` because a command
-has two streams and an exit code callers branch on. An optional `signal` bounds a command:
-`runCommand(cmd, { signal: AbortSignal.timeout(30_000) })` kills the child with `SIGTERM` on abort
-and resolves with `success: false` and `signal: "SIGTERM"`, and an already-aborted signal never
-starts it. `stdin` defaults to `"null"`, so a child that reads input gets end-of-file at once, which
-is what it already got before the option existed; `"inherit"` hands it the caller's own standard
-input. The spawner is injectable, because
-the unit tier has no `--allow-run`; there is no real-process test for the same reason (the
-integration tier has none either).
-
-`server/walk` (`@std/fs`'s `walk` covers it) and `server/hash-file` (`@std/crypto` already hashes a
-stream, and nothing in this workspace called `sha256OfStream`) were removed, along with the
-`platform/scripts/memory-probe.ts` script that measured `hash-file`'s buffering — a script is not a
-module and would have shipped with the package.
-
-Not in this package, deliberately: `types`, `config`, `uuid`, `rate-limit` (owned by `@spy4x/*`
-template modules or issue #4), money/currency helpers (their own issue), and anything Preact- or
-DOM-component-shaped.
-
-### `./cqrs` → `cqrs/mod.ts` (5 modules)
-
-An in-process command bus, query bus and event bus, ported from `template/libs/platform/cqrs`
-(cross-checked against `financy/libs/shared/cqrs`, which differs only in comments — the two are the
-same code).
-
-| Module             | Contents                                                           |
-| ------------------ | ------------------------------------------------------------------ |
-| `cqrs/command-bus` | `CommandBus` — one handler per command class                       |
-| `cqrs/query-bus`   | `QueryBus` — same shape, kept a distinct type from the command bus |
-| `cqrs/event-bus`   | `EventBus` — publish/subscribe, delivered on a microtask           |
-| `cqrs/types`       | `Command`, `Query`, `Event` and their constructor/handler types    |
-| `cqrs/middleware`  | internal: the runner behind `CommandBus.use` and `QueryBus.use`    |
-
-`EventBus.emit` isolates listeners from each other: the source's `for` loop let the first listener
-that threw abort every listener after it, and the throw surfaced as an uncaught exception inside
-the microtask `emit` schedules it on. Here a listener failure — a synchronous throw or a rejected
-returned promise — is reported through a constructor-supplied `onListenerError` (`console.error` by
-default) instead. `once` also used to leak a subscription when its listener threw, because the
-source unsubscribed _after_ calling the listener; here the unsubscribe runs first.
-
-#### Middleware
-
-`CommandBus.use(middleware)` and `QueryBus.use(middleware)` add a `CqrsMiddleware`: a step that runs
-around every `execute`, whatever transport produced the message. Put checks there that are neither
-transport mechanics nor business rules, such as session strength, auditing or tracing; one
-registration covers every handler on that bus.
-
-```ts
-import { CommandBus, type CqrsMiddleware, QueryBus } from "@spy4x/platform/cqrs"
-
-const anonymous = new Set<unknown>([SignInCommand])
-const requireActor: CqrsMiddleware = (message, next) => {
-  if (anonymous.has(message.constructor)) return next()
-  const data = message.data as { actor?: unknown }
-  if (!data.actor) throw new Error(`${message.constructor.name} carries no actor`)
-  return next()
-}
-commandBus.use(requireActor)
-queryBus.use(requireActor)
-```
-
-- Middlewares run in registration order, the first registered outermost; the handler runs last.
-  With none registered, `execute` calls the handler directly.
-- A middleware receives the message instance itself, so `message.constructor` tells it the class
-  and `message.data` the payload.
-- It stops the dispatch by throwing, or by returning its own value without calling `next()`. A
-  synchronous throw reaches the middleware around it as a rejected `next()`.
-- Calling `next()` twice rejects with "called next() more than once" instead of running the rest of
-  the chain and the handler again.
-- A missing handler still throws before any middleware runs, and a middleware added during a
-  dispatch applies from the next `execute`.
-
-`EventBus` has no `use`. `emit` returns nothing, delivers on a microtask to any number of listeners,
-and isolates their failures, so a middleware there could not stop anything from the caller's point
-of view and has no single result to wrap. A cross-cutting check on events belongs in the listener,
-or before the `emit`.
-
-### `./cache` → `cache/mod.ts` (1 module)
-
-A JSON cache in front of a pluggable `ICacheStorage`, ported from `template/libs/platform/cache`
-(cross-checked against `financy/libs/shared/cache`, which differs from the template only in using a
-hardcoded `number` id instead of `string | number`, and lacking the date-reviving `JSON.parse`
-reviver — template's is kept, made opt-in). `ICacheStorage`'s method names and meaning are unchanged
-from the source: `server/kv`, a later unit of the same wave, implements it over Redis.
-
-Four behaviour changes, all because this package ships to consumers it does not control, unlike an
-app's own `libs/`:
-
-- The date-reviving reviver (a property named `...At` holding an ISO string becomes a `Date`) is
-  opt-in (`reviveIsoDatesEndingInAt`, passed via `CacheServiceOptions.reviver`), not applied to
-  every cached value unconditionally. The unconditional version also fires on any field that merely
-  ends in "At" without meaning a date.
-- `set`/`wrap`'s TTL is named and typed as seconds throughout. The source's `ICacheService`
-  interface named the parameter `ttlMs` while every implementation and caller treated it as seconds
-  with no conversion — a caller trusting the interface's name and passing milliseconds would get a
-  cache entry roughly 1000x longer-lived than intended.
-- A TTL is validated and rounded up to a whole second before it reaches storage. Redis refuses a
-  fractional or zero expiry — `SET … EX 0.2` and `SET … EX 0` are both errors, and `EXPIRE key 0`
-  deletes the key immediately — so this is done here, once, rather than in every `ICacheStorage`.
-- `wrap` coalesces an in-flight `fn()` call for a key: a caller that reads the cache while another
-  caller's `fn()` for the same key is still running awaits that same call instead of starting its
-  own. Two different keys never share a call.
-
-`failOpen(storage, onError, retryMs?, now?)` wraps any `ICacheStorage` so an outage of the cache
-server never fails a request. Reads are misses and writes are skipped while the cache server is
-down. The wrapper starts untrusted, and the first failed operation makes it untrusted again,
-because a skipped write or delete would otherwise let a restarted server serve a stale row. Trust
-returns only after `reset()` of the real storage succeeds, tried at most once per `retryMs` (5 s),
-on the next operation, with no timer. `CacheService.wrap` has no such mode.
-
-No in-memory `ICacheStorage` ships from this package, matching the source: its own fake
-(`MemoryCacheStorage`) lived in its test file, not as a library export, and stays that way here too.
-
-### `./signed-payload` → `signed-payload.ts` (1 module)
-
-`createSignedPayloadCodec` signs and verifies a purpose-bound, versioned JSON payload with
-HMAC-SHA-256: a pagination cursor, an unsubscribe link. The purpose, the version and an optional
-expiry are signed with the payload, and an optional bound context (a user id, an email address) is
-covered by the signature without being carried in the token. `verify` checks the signature before it
-parses anything, validates the payload with an arktype schema, and returns a `Result` whose error is
-a `SignedPayloadErrorCode`; it never throws for any token string. `sign` refuses what `verify` would
-refuse. A separate subpath from `./tokens` because it needs arktype at runtime (#202).
-
-### `./keyset-cursor` → `keyset-cursor.ts` (1 module)
-
-`createKeysetCursorCodec` builds a list endpoint's pagination cursor on `./signed-payload`: an
-opaque, signed page key that decodes only under the purpose (`notes.list`) and the scope
-(`["userId", "groupId"]`) it was issued for. The scope values are covered by the signature but not
-carried in the cursor. The default page key, `updatedAtIdPageKey`, is `{ updatedAt, id }`: an
-instant exactly as `toISOString` prints it, decoded to a `Date`, and a lower-case UUID of any
-version; no other key is accepted. A `Date` holds milliseconds only, so the `updated_at` column
-must be `TIMESTAMPTZ(3)`, or the query must compare against and order by
-`date_trunc('milliseconds', updated_at)`; with a microsecond column, rows that share a millisecond
-are skipped or repeated. Pass another arktype schema as `pageKey` for another ordering.
-Every refused cursor throws `KeysetCursorError`, whose `KeysetCursorErrorCode` the caller maps to
-its own error; a missing scope value is a `TypeError`, a bug in the caller rather than a bad cursor.
-The codec takes the master secret (usually the session-cookie secret) and signs with
-`deriveCursorSecret(secret, purpose)`, which is `deriveSecret` from `./tokens` under the label
-`spy4x.keyset-cursor.v1:<purpose>`, so each list has its own key and none is the raw master. Ported
-from spy4x/seed's group-list and note-list cursors (#314).
-
-### `./model`, `./api`, `./request-info` — the shared API, model and push types
-
-Moved from `template/libs/platform/types/+index.ts` and its two request helpers, part of the
-template's shared surface the 2026-09-23 decision in issue #77 moved into this package instead of
-recopying it into every product. Three directories, split the same way `./browser` and `./server`
-already are — by where the code can run:
-
-| Directory       | Contents                                                                                                                                                                                                                                                                                                                                              |
-| --------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `model/`        | `dateSchema`/`DateNullableSchema`, the `ImmutableBaseModelSchema`/`UndeletableBaseModelSchema`/`BaseModelSchema` tiers, and the Web Push wire schemas — universal, arktype only                                                                                                                                                                       |
-| `api/`          | `ApiError` (`status`, `message`, optional `code`, `reason`, `fields`), `ApiResult<T>`, `apiFetch`, `createOfflineFetch` (reports `offline: true` when nothing answered, checks a reply against a schema, keeps a "last request failed" flag with `subscribe`), `OfflineFetch`, `OfflineApiResult`, `INVALID_REPLY_CODE` — browser-only, needs `fetch` |
-| `request-info/` | `RequestInfo`, `requestInfoFromContext` — server-only, needs Hono                                                                                                                                                                                                                                                                                     |
-
-`apiFetch` reads an error body in three shapes: `{ error }` (a string), `{ code, message }`, or
-`{ error: { code, message } }`. The message is the string `error`, else the string `message` of an
-`error` object, else the body's string `message`, else `"Request failed"`. `error.code` is the string
-`code` of an `error` object, else the body's string `code`, when there is one, so a client can branch
-on `caldav_unreachable` instead of on wording. `error.reason` and `error.fields` are the `reason`
-string and the `fields` record (`fieldErrorsSchema` of `@spy4x/validation`) of an `error` object,
-each left out when absent or of another shape. Non-string fields are ignored, and so is any extra
-field in the nested object (such as `requestId`). Only HTTP answers resolve: a network failure still rejects, so wrap the call in
-`try`/`catch` where a throw is not acceptable.
-
-**Six bugs fixed at extraction time**, three in the request helpers and three in `model/`:
-
-- `apiFetch` (`api/api.ts`) built its request as `{ headers: { "content-type": ..., ...init.headers },
-  ...init }`. Spreading `init` last meant a caller's own `headers` replaced the whole merged object
-  instead of adding to it — passing `headers: { authorization }` silently dropped `content-type`.
-  Fixed by merging into one `Headers` instance first, so the caller's headers add to the default, the
-  caller's own `content-type` wins, and every other `init` field still reaches `fetch` unchanged.
-- `apiFetch` also always sent `content-type: application/json`, even when `body` was a `FormData`
-  (#132): the request reached the server without a multipart boundary and the caller had no way to
-  remove the header. Fixed by applying the default only when `body` is a string or absent; a
-  `FormData`, `URLSearchParams`, `Blob`, `ArrayBuffer`/typed array, stream, or explicit `null` body is
-  left without a default so `fetch` sets its own.
-- `requestInfoFromContext` (`request-info/request-info.ts`) read `X-Forwarded-For` off the request
-  unconditionally, so any client could set its own value and have it logged as its IP. Fixed by
-  routing it through `rate-limit/client-ip.ts`'s `clientIp`, which already carries this exact trust
-  boundary for the rate limiter — untrusted by default, and a `trustedProxy` option the caller opts
-  into behind a proxy that actually rewrites the header. `trustedProxy` also accepts a single
-  `TrustedProxyHeader` name (`"cf-connecting-ip" | "x-forwarded-for" | "x-real-ip"`, re-exported from
-  this module) instead of `true`, for a proxy that rewrites only one of the three — see
-  `rate-limit/README.md`'s trust-boundary section for which header Traefik, Cloudflare and nginx
-  each write. The helper also no longer imports the
-  template's `APIContext`; it takes a plain, `Env`-generic Hono `Context` and reads `requestId` off
-  the context variables defensively, matching how `rate-limit/hono.ts` stays app-agnostic. `ip`
-  (and `userAgent`) stay unset when nothing identifies the client, exactly as the source left them
-  — `clientIp`'s placeholder address is a made-up value, not a real one, and the source itself
-  wrote `request.ip || null` into an audit row, so surfacing that placeholder here would have
-  logged it as though it were real.
-- `dateSchema` (`model/date.ts`) accepted an ISO date string whose calendar day did not exist —
-  `"2026-02-30"` parsed to 2 March 2026 instead of being refused, because `new Date(...)` silently
-  rolls an out-of-range day or month into the next one (#131). Fixed by refusing a string `new Date`
-  cannot read, then rebuilding the date from the string's own `YYYY-MM-DD` digits and comparing it
-  back against them; a year, or a year and month, parses as the source parsed it. A date written
-  without dashes is refused, because V8 reads its digits as a year.
-- `dateSchema` also accepted two ISO 8601 shapes that `new Date` reads as a different date, with no
-  error (#136): an ordinal date (`"2024-005"`, 5 January, became 1 May) and a year with a sign
-  (`"-0001-01-01"` became 2001, `"+0099-12-31"` became 1999). Both shapes are now refused, even
-  where V8 happens to read them right (`"2024-001"`, `"+2024-01-01"`). `JSON.stringify` never
-  writes an ordinal date, and writes a signed year only with six digits, which was already refused.
-- `dateSchema` also read a date-time string with a time but no offset and no `Z`, such as
-  `"2024-02-29T10:00:00"`, in the host's own time zone (#135): the same wire string parsed to a
-  different instant on a laptop and on a UTC server. Fixed by refusing that shape, with its own
-  message ("must name a time zone: …") rather than the calendar-date one. A date-only, year, or
-  year-month string is unaffected — ECMA-262 already reads those as UTC regardless of host `TZ`.
-
-**Every exported schema declares its type.** JSR refuses an exported constant whose type is only
-inferred, so each schema in `model/` carries an explicit arktype `Type<…>` annotation (#141). The
-annotation spells out what arktype infers: `dateSchema` is `Type<Date | ((In: string) => Out<Date>)>`,
-a pipe from a string to a `Date`, and a field with a default is `Default<T, V>`, imported from
-`arktype/internal/attributes.ts` because arktype's main entry point does not export it.
-`model/types.test.ts` fails to compile if `DateType`, `BaseModel`, a push type, or the input a
-schema accepts changes.
-
-**The `"+": "reject"` decision splits by whether a schema is composed.** `model/base-model.ts`'s
-three schemas declare it on none of them: an app is meant to `.and()` its own fields onto
-`BaseModelSchema`, and arktype resolves `"+": "reject"` at intersection time by making every key
-the left side does not already declare resolve to `never` on that side — declaring it there breaks
-composition immediately, even inside `base-model.ts` itself (confirmed by constructing that
-composition directly: `ParseError: Intersection at updatedAt of never and Date results in an
-unsatisfiable type`). `model/push.ts`'s five wire schemas all declare it, at every object level
-including the nested `keys`: none of them is ever composed further, they are the whole shape a
-server receives from a browser it does not control, and nesting a `"+": "reject"` schema as another
-object's _property_ (as `keys` sits inside `pushSubscriptionSchema`) does not carry the same hazard
-as intersecting one in with `.and()` — confirmed the same way, by constructing it and reading the
-result.
-
-The push subscription schemas refuse a field a database cannot store or a push service cannot use:
-an empty device id, endpoint or key, a NUL or a lone surrogate in any of them, and an endpoint that
-is not an absolute `https:` URL. Their length limits are exported as `PUSH_SUBSCRIPTION_LIMITS`
-(`deviceId` 256, `endpoint` 2048, `auth` 256, `p256dh` 256 characters), so an app sizes its columns
-from it instead of keeping its own copy.
-
-## The error vocabulary and the result convention
-
-Three shapes, three jobs. They are not interchangeable, and picking the wrong one is the most common
-source of "why is this error a string" regret.
-
-| Shape                         | Where it belongs                                             | Error type                |
-| ----------------------------- | ------------------------------------------------------------ | ------------------------- |
-| `Result<T, E>` / `ok` / `err` | inside a function body, failure expected and not exceptional | whatever the caller names |
-| `OperationResult<T, E>`       | an operation whose failure the UI renders                    | a typed `AnyError`        |
-| `CommandEnvelope<T>`          | a CLI command or job crossing a process boundary             | `string`                  |
-
-```ts
-const parsed = JSON.parse(raw) // throws: malformed input is a programming error
-const result: Result<number> = tryParse(text) // returns: malformed input is expected
-```
-
-`ErrType` is the discriminant. `ValidationError` is **re-exported** from `@spy4x/validation`, not
-redeclared: this package does not own a validation model.
-
-## `KeyValueStore` has one home, in `universal/`
-
-`browser/storage.ts`'s `StorageLike` and `@spy4x/realtime`'s `KeyValueStore` were identical
-three-method duplicates (#71). The home is the new `universal/key-value-store.ts`, not either of
-the two packages that used to carry a copy: it has no import of its own, so nothing that only needs
-this shape (a browser store, a realtime cursor, a server-side fallback) pulls in anything else.
-
-The first attempt at this made `@spy4x/platform` depend on `@spy4x/realtime` — a `import type`
-only, but JSR still records a type-only import as a package dependency, and a second, unrelated #71
-PR (`realtime/backoff.ts` importing `@spy4x/platform/universal/async`) turned that into a
-publish-time circular dependency between the two packages. `platform/deno.json` exports the new
-file as `./universal/key-value-store` precisely so `@spy4x/realtime` (and any other consumer) can
-import it without going through the bare `@spy4x/platform` specifier, which would otherwise also
-pull in `@spy4x/validation` through `universal/errors.ts`.
-
-## Dependency on `@spy4x/validation`
-
-`@spy4x/platform` depends on `@spy4x/validation` for exactly two things: the `ValidationError`
-type (`universal/errors`) and the `validate(schema, value)` call behind
-`makeStorage(..., { schema })`. There is **one** `validate` and **one** validation error envelope
-(`type`, `message`, per-field `errors`, `description` and `details`) in the ecosystem, and it lives
-there. `ErrType` is declared there too and re-exported from `universal/errors`, because
-`@spy4x/validation` cannot import this package without a package cycle.
-
-Consequences a consumer should know:
-
-- **Peer dependency.** Both packages are workspace members, so `deno check` resolves
-  `@spy4x/validation` with no `imports` entry here. Consuming from JSR or from a repo where
-  `validation/` is absent means adding that member first — the import is not optional, and until it
-  resolves `deno check` reports `TS2307: Import "@spy4x/validation" not a dependency` at
-  `platform/universal/errors.ts` and `platform/browser/storage.ts`.
-- This package ships **no** schema-parser adapter (no object exposing both a throwing parse and a
-  non-throwing variant), no schema library of its own, and no second envelope. The source's
-  `validate()` ran the parse twice; the bug is retired by not
-  porting the function at all — `@spy4x/validation` parses once.
-- Validation is applied on **write** as well as read in `makeStorage`. A value that fails its own
-  schema on read is evicted, because a stored value that no longer matches is stale, not missing.
-- **Strictness is the caller's schema's decision, never this package's.** `@spy4x/validation`
-  deliberately does not call `configure({ onUndeclaredKey: ... })`, so nothing here reads or writes
-  global arktype config either. A schema without that setting keeps an undeclared key, exactly as
-  arktype defaults; a caller that wants unknown keys rejected writes
-  `schema.onUndeclaredKey("reject")` on its own schema. Both halves are pinned by tests in
-  `browser/storage.test.ts`.
-
-## `./validation/predicates`
-
-Arktype predicates for untrusted text: `headerSafeString`, `textSafeString`, `honeypotField`,
-`timeZoneName`, and `emailAddress` with its plain check `isEmailAddress`. The email check is
-`isAddress` from `@spy4x/email/address` plus that module's exported 254-character limit,
-`MAX_ADDR_SPEC_LENGTH`, not a second pattern or a second number, so a form and the sender agree on
-what an address is; `platform` imports `email` and never the other way round.
-
-## Servers, clocks and timers are injected
-
-Nothing here reads `Date.now()` outside `systemClock` (and `systemClockPort` on the server side),
-and nothing writes a file outside a `FileSystemPort`. That is what makes the suite deterministic and
-what makes it runnable under the root test task's permission grant. Two consequences:
-
-- `formatTime` and `timeAgo` need an explicit `timeZone` and `clock` to be reproducible. Use
-  `new TimeFormatter({ timeZone, clock })` in tests; the one-off `formatTime(date, options)` accepts
-  the same fields.
-- `ThrottledJsonSaver.flush()` is the deterministic exit point. `markDirty()` may start a detached
-  write, and `flush()` waits for it before deciding whether another write is needed.
-
-## The to-do entry points are in `@spy4x/tasks`
-
-A to-do app's list views, its quick-add syntax and its reminder runner are one product's domain,
-not a general helper, so they are published by [`@spy4x/tasks`](https://jsr.io/@spy4x/tasks) and documented
-there. Import them from the new paths:
-
-| Old path, kept until 2.0                    | Import from                    |
-| ------------------------------------------- | ------------------------------ |
-| `@spy4x/platform/universal/ical-tasks-view` | `@spy4x/tasks/view`            |
-| `@spy4x/platform/universal/quick-add`       | `@spy4x/tasks/quick-add`       |
-| `@spy4x/platform/server/reminder-runner`    | `@spy4x/tasks/reminder-runner` |
-
-The old paths, and the same names on `@spy4x/platform` and `@spy4x/platform/server`, keep working
-until 2.0 and hand out the very same values. Their three files still sit in this directory until
-then: two of them use `universal/sort`, `universal/text`, `universal/time` and
-`server/throttled-saver`, and two packages that import each other cannot be published. Nothing
-else here knows about tasks.
-
-## Out of scope
-
-- `types`, `config`, `uuid` — still template modules; not re-extracted here.
-- `rate-limit` — issue #4.
-- Preact components and anything that renders markup.
+## Modules
+
+Each module's usage is in its module doc, shown by `deno doc` and on JSR.
+
+- [`@spy4x/platform`](universal.ts): Universal helpers only.
+- [`@spy4x/platform/api`](api/mod.ts): The browser side of the API result convention.
+- [`@spy4x/platform/browser`](browser.ts): Helpers that need a browser.
+- [`@spy4x/platform/browser/build-env`](browser/build-env.ts): Reading build-time environment values in browser code.
+- [`@spy4x/platform/browser/clipboard`](browser/clipboard.ts): Put text on the clipboard, with the legacy fallback an insecure origin still needs.
+- [`@spy4x/platform/browser/cookie`](browser/cookie.ts): Read one cookie's value out of `document.cookie`.
+- [`@spy4x/platform/browser/download`](browser/download.ts): Turn a `Response` body into a file the browser saves.
+- [`@spy4x/platform/browser/embed`](browser/embed.ts): Helpers for a page that is framed by another site.
+- [`@spy4x/platform/browser/geolocation`](browser/geolocation.ts): Ask the browser for the current position once, and route the answer to two callbacks.
+- [`@spy4x/platform/browser/hotkeys`](browser/hotkeys.ts): Keyboard shortcuts.
+- [`@spy4x/platform/browser/data-cache`](browser/data-cache.ts): A durable copy of the last data the server sent, so a page opens with it and shows it with no network.
+- [`@spy4x/platform/browser/indexeddb`](browser/indexeddb.ts): The few IndexedDB plumbing pieces every durable browser store needs.
+- [`@spy4x/platform/browser/last-sign-in`](browser/last-sign-in.ts): Remembers, in this browser, how a person last signed in.
+- [`@spy4x/platform/browser/offline-shell`](browser/offline-shell.ts): App-shell cache for a service worker.
+- [`@spy4x/platform/browser/passkey`](browser/passkey.ts): The browser half of passkeys.
+- [`@spy4x/platform/browser/persistent-storage`](browser/persistent-storage.ts): Asks the browser not to evict this site's storage (IndexedDB, caches) when space runs low.
+- [`@spy4x/platform/browser/push-notifications`](browser/push-notifications.ts): Web Push in a service worker.
+- [`@spy4x/platform/browser/runtime-config`](browser/runtime-config.ts): Runtime configuration for a single-page app that is built once and configured at deploy time.
+- [`@spy4x/platform/browser/signed-in-hint`](browser/signed-in-hint.ts): A small "this device was signed in" hint kept in `localStorage`, so an installed app can open offline to its last view instead of showing the sign-in page.
+- [`@spy4x/platform/browser/storage`](browser/storage.ts): Typed `localStorage` / `sessionStorage` wrapper.
+- [`@spy4x/platform/browser/testing`](browser/testing.ts): Test helpers for browser code.
+- [`@spy4x/platform/cache`](cache/mod.ts): A JSON cache in front of a pluggable `ICacheStorage`.
+- [`@spy4x/platform/cqrs`](cqrs/mod.ts): An in-process command bus, query bus and event bus.
+- [`@spy4x/platform/keyset-cursor`](keyset-cursor.ts): Keyset pagination cursor.
+- [`@spy4x/platform/model`](model/mod.ts): Arktype schemas for the shapes shared across products.
+- [`@spy4x/platform/rate-limit`](rate-limit/mod.ts): Sliding-window rate limiting with a pluggable store.
+- [`@spy4x/platform/rate-limit/client-ip`](rate-limit/client-ip.ts): Client IP extraction from the transport peer address and optional proxy headers.
+- [`@spy4x/platform/rate-limit/hono`](rate-limit/hono.ts): Hono middleware factory over any limiter from `memory.ts`.
+- [`@spy4x/platform/rate-limit/kv`](rate-limit/kv.ts): Shared-store limiter backend.
+- [`@spy4x/platform/rate-limit/memory`](rate-limit/memory.ts): Sliding-window rate limiter with an injected clock and bounded memory.
+- [`@spy4x/platform/request-info`](request-info/mod.ts): Request metadata for a log line or an error report, built from a Hono context.
+- [`@spy4x/platform/server`](server.ts): Server helpers.
+- [`@spy4x/platform/server/atomic-json`](server/atomic-json.ts): Atomic JSON persistence.
+- [`@spy4x/platform/server/deno-fs`](server/deno-fs.ts): `denoFileSystem`, the `Deno`-backed implementation of `FileSystemPort`.
+- [`@spy4x/platform/server/file-lock`](server/file-lock.ts): Exclusive file lock built on the port's lock primitive.
+- [`@spy4x/platform/server/interval-runner`](server/interval-runner.ts): Runs a task again and again, and survives its failures.
+- [`@spy4x/platform/server/jsonl-logger`](server/jsonl-logger.ts): Append-only JSONL event log.
+- [`@spy4x/platform/server/ports`](server/ports.ts): The I/O ports every server helper in this package talks through.
+- [`@spy4x/platform/server/process`](server/process.ts): The running process, on Deno, Node and Bun.
+- [`@spy4x/platform/server/reminder-runner`](server/reminder-runner.ts): A reminder runner.
+- [`@spy4x/platform/server/run-command`](server/run-command.ts): Run a child process and get its outcome back as a value, never as a throw.
+- [`@spy4x/platform/server/serve`](server/serve.ts): Serve a fetch handler, such as a Hono app's `app.fetch`, and upgrade its requests to WebSockets, on Deno, Node and Bun.
+- [`@spy4x/platform/server/runtime-fs`](server/runtime-fs.ts): `runtimeFileSystem`, a `FileSystemPort` for whichever runtime runs it, `nodeFileSystem`, the one for Node and Bun, and `fsError` and `isFsError`, which make and recognise a file-system error the same way on all three.
+- [`@spy4x/platform/server/shutdown-signal`](server/shutdown-signal.ts): Turn operating-system signals (`SIGINT`, `SIGTERM`) into one `AbortSignal`, so a worker loop that already takes a signal stops cleanly on Ctrl+C or a container stop.
+- [`@spy4x/platform/server/tcp`](server/tcp.ts): An outgoing TCP connection as a pair of web streams, on Deno, Node and Bun.
+- [`@spy4x/platform/server/throttled-saver`](server/throttled-saver.ts): Throttled atomic JSON saver.
+- [`@spy4x/platform/signed-payload`](signed-payload.ts): Signed payload codec.
+- [`@spy4x/platform/tokens`](tokens.ts): Token primitives.
+- [`@spy4x/platform/universal/async`](universal/async.ts): `sleep`, `debounce` (cancelable, unref'd) and `backoffDelay` (a capped, jittered backoff delay).
+- [`@spy4x/platform/universal/axis`](universal/axis.ts): "Nice" axis scales for charts.
+- [`@spy4x/platform/universal/bounded-integer`](universal/bounded-integer.ts): Reading a whole number from a query string or another text, within bounds.
+- [`@spy4x/platform/universal/color`](universal/color.ts): Everything in `@spy4x/platform/universal/color-core`, plus `hexColor`, an arktype schema for a `#rrggbb` colour.
+- [`@spy4x/platform/universal/color-core`](universal/color-core.ts): Hex colours and their WCAG 2.x contrast.
+- [`@spy4x/platform/universal/concurrency`](universal/concurrency.ts): `AsyncMutex` — a fair async mutex for serialising async critical sections.
+- [`@spy4x/platform/universal/constants`](universal/constants.ts): Shared numeric defaults used across this package.
+- [`@spy4x/platform/universal/contact`](universal/contact.ts): The contact channels a website names.
+- [`@spy4x/platform/universal/csv`](universal/csv.ts): RFC 4180 CSV writer and reader.
+- [`@spy4x/platform/universal/error-reporter`](universal/error-reporter.ts): A small error reporter that posts Sentry's envelope format, which GlitchTip and Sentry accept.
+- [`@spy4x/platform/universal/errors`](universal/errors.ts): The error vocabulary a store or a form reports with, the helpers that build it, and the `Result` used to return one.
+- [`@spy4x/platform/universal/format-number`](universal/format-number.ts): Number formatting for display.
+- [`@spy4x/platform/universal/honeypot`](universal/honeypot.ts): The server half of a honeypot form field.
+- [`@spy4x/platform/universal/i18n`](universal/i18n.ts): Translations from flat JSON catalogs, with `Intl` doing the language work.
+- [`@spy4x/platform/universal/ical-tasks-view`](universal/ical-tasks-view.ts): What a task list shows.
+- [`@spy4x/platform/universal/is-record`](universal/is-record.ts): A type guard for a value of unknown shape read from JSON, such as an API answer.
+- [`@spy4x/platform/universal/key-value-store`](universal/key-value-store.ts): The `KeyValueStore` port, on a subpath of its own so a consumer can import it without the bare `@spy4x/platform` specifier, which also pulls in `@spy4x/validation`.
+- [`@spy4x/platform/universal/markdown`](universal/markdown.ts): Markdown to HTML that is safe to put on a public page, even when the Markdown came from someone the page's visitors should not have to trust (an operator in an admin panel, a user's note).
+- [`@spy4x/platform/universal/metrics`](universal/metrics.ts): A labelled counter and its Prometheus text exposition.
+- [`@spy4x/platform/universal/money`](universal/money.ts): Everything in `@spy4x/platform/universal/money-core`, plus `currencyCode`, an arktype schema for an ISO 4217 code.
+- [`@spy4x/platform/universal/money-core`](universal/money-core.ts): Money as a whole number in its currency's smallest unit — `1250` means `€12.50`, `12345` means `¥12,345` because the yen has no minor unit, and `12345` means `12.345 KWD` because the Kuwaiti dinar has three.
+- [`@spy4x/platform/universal/quick-add`](universal/quick-add.ts): Parse one quick-add line such as `Call Anna @phone #work tomorrow 3pm !high` into a title, tags, contexts, a due date and a priority, plus the position of every recognised token so a field can highlight them as the person types.
+- [`@spy4x/platform/universal/result`](universal/result.ts): `Result` — the narrow success/failure sum used inside a function body, and the `{ success, output, error }` envelope used at a command boundary.
+- [`@spy4x/platform/universal/schema`](universal/schema.ts): The one arktype type-level helper this package needs, plus the validation types it re-exports.
+- [`@spy4x/platform/universal/seo`](universal/seo.ts): The canonical address, the structured data, the `sitemap.xml`, the RSS feed and the `llms.txt` a server-rendered site publishes.
+- [`@spy4x/platform/universal/settings`](universal/settings.ts): Typed, versioned settings.
+- [`@spy4x/platform/universal/shell`](universal/shell.ts): Quoting for a POSIX shell (`sh`, `bash`, `dash`, `zsh` in `sh` mode), for the one place a value must pass through a shell.
+- [`@spy4x/platform/universal/sort`](universal/sort.ts): Multi-column sort rules for a table.
+- [`@spy4x/platform/universal/srcset`](universal/srcset.ts): The attributes of a responsive `<img>` or `<picture>`, from the widths an image is stored at, such as the AVIF and WebP variants `processImage` of `@spy4x/server/images` makes.
+- [`@spy4x/platform/universal/statistics`](universal/statistics.ts): Small statistics helpers.
+- [`@spy4x/platform/universal/text`](universal/text.ts): Small, dependency-free text helpers.
+- [`@spy4x/platform/universal/time`](universal/time.ts): Calendar-date helpers.
+- [`@spy4x/platform/universal/time-constants`](universal/time-constants.ts): Time unit constants, derived so that one unit is always an exact multiple of the one below it.
+- [`@spy4x/platform/universal/uuid`](universal/uuid.ts): UUID version 7 ids and UUID validators.
+- [`@spy4x/platform/validation/predicates`](validation/predicates.ts): Reusable arktype predicates for untrusted text, ported from `mig/routes/api/_validators.ts`.

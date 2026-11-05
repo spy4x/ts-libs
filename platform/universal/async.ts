@@ -1,3 +1,9 @@
+/**
+ * `sleep`, `debounce` (cancelable, unref'd) and `backoffDelay` (a capped, jittered backoff delay).
+ *
+ * @module
+ */
+
 import { DEFAULT_DEBOUNCE_DELAY } from "./constants.ts"
 
 /** Wait `ms` milliseconds. */

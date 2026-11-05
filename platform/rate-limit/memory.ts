@@ -23,6 +23,90 @@
  * triggered by time rather than by insertion, so a request from a brand-new key can never free a
  * slot by pushing out an active bucket. A brute-forcer cannot reset its own counter by rotating
  * keys; the counter only decays by waiting.
+ *
+ * ## Sliding window, not fixed
+ *
+ * A bucket holds one timestamp per _accepted_ request; only timestamps newer than `now - windowMs`
+ * count, so an event expires exactly `windowMs` after it happened. A fixed window would let a caller
+ * spend the whole budget in the last millisecond of one window and the whole budget again in the next
+ * — `2 * limit` in a hair over one window, which is precisely the burst this module exists to absorb.
+ * The boundary is half-open: an event exactly `windowMs` old no longer counts, so a 1000 ms / 1-per
+ * limiter allows again at exactly `t0 + 1000`, denies at `t0 + 999`, and allows at `t0 + 1001`.
+ *
+ * ## Eviction policy: idle sweep, never LRU-on-insert
+ *
+ * A bucket is dropped only when **both** hold:
+ *
+ * - nothing has been checked against the key for `idleMs` (`seenAt <= now - idleMs`), and
+ * - its newest recorded event is older than `now - windowMs - idleMs`.
+ *
+ * So a bucket that ever recorded an event is retained for `windowMs + idleMs`, and the idle grace
+ * alone only retires a bucket that has no events left (every recorded event already outside its
+ * window). The sweep runs when `windowMs` has elapsed since the last one, or every
+ * `SWEEP_EVERY_CHECKS` (512) checks, whichever comes first — so a client that sends one request per key
+ * cannot outrun it.
+ *
+ * **Memory envelope.** At the defaults (`windowMs` 60 s, `idleMs` 600 s) a bucket lives 660 s, so
+ * steady-state retention is `request_rate × (windowMs + idleMs)` keys — about 660k keys at 1,000 req/s.
+ * **Measurement**: `MemoryRateLimiter`, one accepted event per rotated key, fixed injected clock, GC
+ * forced then `Deno.memoryUsage().heapUsed` read against an empty-limiter baseline, two runs.
+ *
+ * | keys    | heap delta | per bucket |
+ * | ------- | ---------- | ---------- |
+ * | 200,000 | 59.86 MB   | 299.3 B    |
+ * | 660,000 | 143.2 MB   | 217.0 B    |
+ *
+ * So budget **roughly 140 MiB (147 MB) at 1,000 req/s**; per-bucket cost falls as the map grows (299 B
+ * at 200k keys, 217 B at 660k) because the `Map`'s own overhead is amortised. One caveat the bound does
+ * not capture: the key is caller-supplied and unbounded, so a resolver returning a long header-derived
+ * string retains it for 660 s per distinct value.
+ *
+ * **Compared with `mig`,** which this replaces: `mig` prunes every `pruneIntervalMs` (600 s, its line 29)
+ * and deletes only buckets left _empty_ at that prune, so its bound is `request_rate × (windowMs +
+ * pruneInterval)` — the same 660 s shape as here, not `request_rate × windowMs`. Measured at 1,000 req/s
+ * that is 1.24M buckets there against 601k here: **≈1.3× overall**, not the 11× an earlier revision of
+ * this README claimed (that figure divided 660 s by 60 s and ignored `pruneIntervalMs`). `idleMs` is the
+ * knob either way: lowering it towards `windowMs` trades memory for extra sweep churn.
+ *
+ * Two consequences worth stating, because both are security properties:
+ *
+ * - **No insertion-time eviction.** Eviction is time-driven, so a request from a brand-new key can
+ *   never free space by pushing out an active bucket. Rotating keys does not reset an attacker's own
+ *   counter; only waiting does.
+ * - **A busy bucket is never swept.** `seenAt` alone would be wrong: a bucket whose most recent check
+ *   was a _rejection_ stores no event and would look idle. Both conditions are therefore required.
+ * - **No wall clock, and no per-event shifting.** Every timing decision goes through the injected
+ *   `Clock`, including the seed for the automatic sweep, and a prune costs one binary search plus one
+ *   `slice` rather than a `shift()` per stale event. Both regressions are now caught: seeding
+ *   `lastSweepAt` from `Date.now()` fails `schedules its automatic sweep from the injected clock, never
+ *   the wall clock`, and restoring the loop fails the array-operation guard.
+ *
+ * **A hard cap: `maxBuckets`.** The sweep bounds memory by time, which is not enough when a client can
+ * send keys faster than they expire. Set `maxBuckets` to bound the count as well (#220):
+ *
+ * ```ts
+ * const limiter = createMemoryRateLimiter({ windowMs: 60_000, limit: 10, maxBuckets: 100_000 })
+ * ```
+ *
+ * When a request arrives for a **new** key and the limiter is full, it first drops every bucket with no
+ * accepted request inside the window. Such a bucket counts nothing, so dropping it early resets no one's
+ * limit. If the limiter is still full, the new key is **refused**: the decision is `allowed: false`,
+ * `remaining: 0`, and `retryAfterMs` is the time until the first held bucket falls idle; no bucket is
+ * created for it. A key the limiter already holds is served as usual. A bucket with a request inside its
+ * window is never evicted to make room, so the promise above holds with the cap too: a flood of new keys
+ * cannot push out the bucket of a client that is being limited, and so cannot reset it. The price is
+ * that during such a flood, first-time clients are turned away until a bucket falls idle. The drop pass
+ * walks every bucket, so it runs at most once until the earliest held bucket can fall idle; refusals in
+ * between cost no walk.
+ *
+ * Per-bucket memory is bounded by `limit` — nothing is stored for a rejected request — so a client
+ * hammering one key grows nothing. Across keys, the sweep is the bound. `caldav-mcp`'s map had none,
+ * which is a memory-exhaustion vector rather than untidiness.
+ *
+ * Rejected requests are not recorded, which is what stops a blocked client from extending its own
+ * window by retrying.
+ *
+ * @module
  */
 
 import { type NowFn, systemNow } from "../universal/time.ts"

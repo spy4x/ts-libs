@@ -6,6 +6,16 @@
  * else its `message`, else `"Request failed"`) and the body's string `code` when present. A network
  * failure still rejects. See `api.ts` for the header-merge bug fixed at extraction time.
  *
+ * `apiFetch` reads an error body in three shapes: `{ error }` (a string), `{ code, message }`, or
+ * `{ error: { code, message } }`. The message is the string `error`, else the string `message` of an
+ * `error` object, else the body's string `message`, else `"Request failed"`. `error.code` is the string
+ * `code` of an `error` object, else the body's string `code`, when there is one, so a client can branch
+ * on `caldav_unreachable` instead of on wording. `error.reason` and `error.fields` are the `reason`
+ * string and the `fields` record (`fieldErrorsSchema` of `@spy4x/validation`) of an `error` object,
+ * each left out when absent or of another shape. Non-string fields are ignored, and so is any extra
+ * field in the nested object (such as `requestId`). Only HTTP answers resolve: a network failure still rejects, so wrap the call in
+ * `try`/`catch` where a throw is not acceptable.
+ *
  * @module
  */
 

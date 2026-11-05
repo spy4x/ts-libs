@@ -24,6 +24,19 @@
  * shaped like `Deno.Command`. The default spawner is `new Deno.Command(...)` on Deno and
  * {@link nodeSpawner} (`node:child_process`) on Node and Bun.
  *
+ * `server/run-command` runs a child process and never throws: `runCommand(["git", "status"])` resolves
+ * with `{ success, code, stdout, stderr }`, and a missing binary or bad `cwd` gives `success: false`,
+ * `code: -1` and the reason in `stderr` and `error` (set only when the process never started). It
+ * keeps the process's own shape rather than the house `{ success, output, error }` because a command
+ * has two streams and an exit code callers branch on. An optional `signal` bounds a command:
+ * `runCommand(cmd, { signal: AbortSignal.timeout(30_000) })` kills the child with `SIGTERM` on abort
+ * and resolves with `success: false` and `signal: "SIGTERM"`, and an already-aborted signal never
+ * starts it. `stdin` defaults to `"null"`, so a child that reads input gets end-of-file at once, which
+ * is what it already got before the option existed; `"inherit"` hands it the caller's own standard
+ * input. The spawner is injectable, because
+ * the unit tier has no `--allow-run`; there is no real-process test for the same reason (the
+ * integration tier has none either).
+ *
  * @module
  */
 

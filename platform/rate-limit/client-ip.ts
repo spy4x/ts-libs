@@ -18,7 +18,7 @@
  * `forwardedHeaders.trustedIPs` (the Cloudflare → Traefik layout) makes Traefik keep that upstream's
  * `X-Real-IP` instead of overwriting it, so a client-forged value passes through just as
  * `CF-Connecting-IP` does with no `trustedIPs` set; trust `"cf-connecting-ip"` in that layout
- * instead. See `rate-limit/README.md`'s trust-boundary section for the full `trustedIPs` caveat.
+ * instead. The trust-boundary section below has the full `trustedIPs` caveat.
  * Behind Cloudflare directly, which sets `CF-Connecting-IP` itself, `trustedProxy:
  * "cf-connecting-ip"` is the narrow equivalent of `true`. With no proxy in front and any header
  * trusted, a caller rotating that header produces a new bucket per request and the limiter is
@@ -29,6 +29,116 @@
  * canonical spelling, and an IPv4-mapped IPv6 address comes back as IPv4, so two spellings of one
  * client share a bucket. {@link ClientIpOptions.trustedProxies} narrows the trust further: the
  * header is read only when the connection came from one of the listed ranges.
+ *
+ * **Only an address is accepted.** A trusted header's first hop counts only when it is exactly one IPv4
+ * or IPv6 address; anything else (a port, brackets, a zone id, a hostname, a 64 KB string) is treated as
+ * if the header were absent, so the next source is used and in the end the peer address. Every address
+ * `clientIp` returns is in one canonical spelling from `normalizeIp` in `@spy4x/net/ip`: `2001:DB8::1`
+ * and `2001:db8::1` are one client, and an IPv4-mapped `::ffff:192.0.2.1` is returned as `192.0.2.1`
+ * (#220). Earlier versions returned a forged header verbatim, so every distinct string became its own
+ * bucket.
+ *
+ * **Trusting a header only from known proxies.** The fourth parameter's `trustedProxies` lists CIDR
+ * ranges (#221). The header is then read only when the peer address lies inside one of them; any other
+ * peer, and a request with no peer address, is keyed on its own address. An empty list trusts no one,
+ * and a malformed range throws a `RangeError` on every call, so a typo shows up on the first request.
+ * This is what makes `CF-Connecting-IP` safe on a server that is also reachable around Cloudflare:
+ *
+ * ```ts
+ * import { clientIp } from "@spy4x/platform/rate-limit"
+ *
+ * const CLOUDFLARE = ["173.245.48.0/20", "104.16.0.0/13", "2400:cb00::/32" /* … the full list *\/]
+ *
+ * // Traefik writes X-Real-IP (the address that connected to it); believe CF-Connecting-IP only when
+ * // that address is a Cloudflare edge.
+ * const peer = clientIp(req, socketAddress, "x-real-ip")
+ * const ip = clientIp(req, peer, "cf-connecting-ip", { trustedProxies: CLOUDFLARE })
+ * ```
+ *
+ * No provider's range list ships with this package: those lists change, so the caller keeps its own.
+ * `userThenIp` takes the same `trustedProxies` option.
+ *
+ * **IPv6 clients are keyed on their /64.** One ordinary IPv6 allocation is a whole /64, 2^64 addresses
+ * its holder can pick from, so a per-address key never limits it (#219). `userThenIp` therefore keys an
+ * IPv6 client as `ip:2001:db8:1:2::/64`; IPv4 keys are unchanged. `ipv6PerAddress: true` restores one
+ * key per IPv6 address. Outside the middleware, `clientIpBucket(ip)` does the same reduction:
+ *
+ * ```ts
+ * import { clientIp, clientIpBucket, rateLimitKey, RateLimitKind } from "@spy4x/platform/rate-limit"
+ *
+ * const key = rateLimitKey(RateLimitKind.Ip, clientIpBucket(clientIp(req, socketAddress)))
+ * ```
+ *
+ * A budget a stranger must not multiply, such as sign-up codes sent to one address, can count a wider
+ * network: a free tunnel broker hands out a /48, which holds 65,536 /64s.
+ * `clientIpBucket(ip, { ipv6Prefix: 48 })` answers `2001:db8:1::/48` for every address in it. The
+ * prefix is an integer from 0 to 128; any other value throws a `RangeError`.
+ *
+ * With `trustedProxy: false` (the default) only the transport peer address is used. With
+ * `trustedProxy: true` the order is `CF-Connecting-IP` > first `X-Forwarded-For` hop > `X-Real-IP` >
+ * peer address. `X-Forwarded-For` is read hop by hop, never as a whole string, because a client
+ * controls the leading part of that list. Passing one `TrustedProxyHeader` string
+ * (`"cf-connecting-ip" | "x-forwarded-for" | "x-real-ip"`) instead of `true` reads only that header,
+ * first hop, then falls back to the peer address — the other two headers are never consulted.
+ *
+ * **Every one of those headers is client-controlled unless a proxy strips and rewrites it, and which
+ * headers a given proxy rewrites differs by proxy** — `trustedProxy: true` trusts all three, which is
+ * wrong for a proxy that only rewrites some of them:
+ *
+ * - **Traefik**, with default settings (an empty `forwardedHeaders.trustedIPs`), overwrites
+ *   `X-Forwarded-For` and `X-Real-IP` for every client, but passes `CF-Connecting-IP` through
+ *   untouched. A client behind Traefik can set `CF-Connecting-IP` to anything it likes, so
+ *   `trustedProxy: true` behind Traefik reads a forged value first. Pass `trustedProxy: "x-real-ip"`
+ *   (or `"x-forwarded-for"`) instead, so `CF-Connecting-IP` is never read — **but only when
+ *   `trustedIPs` is empty.** Set `forwardedHeaders.trustedIPs` to trust an upstream proxy in front of
+ *   Traefik (the Cloudflare → Traefik layout, listing Cloudflare's ranges) and Traefik stops rewriting
+ *   from scratch: it keeps that upstream's `X-Real-IP` as it arrived and appends its own hop to
+ *   `X-Forwarded-For` instead of replacing it. `X-Real-IP` and every hop but the last of
+ *   `X-Forwarded-For` are then only as trustworthy as the upstream was — a client can still forge
+ *   `X-Real-IP` and have Cloudflare (or whatever sits in `trustedIPs`) pass it straight through, and a
+ *   test against Traefik 3.5.6 confirmed it: with `trustedIPs: ["127.0.0.1/32"]`, a
+ *   client-forged `X-Real-IP: 192.0.2.1` reached the backend unchanged. Behind Cloudflare → Traefik
+ *   with Cloudflare's ranges in `trustedIPs`, trust `"cf-connecting-ip"` instead — Cloudflare sets that
+ *   header itself and Traefik never rewrites it either way, so `trustedIPs` does not weaken it.
+ *   `"x-real-ip"` is the right choice only when nothing reachable by a client is listed in
+ *   `trustedIPs`.
+ * - **Cloudflare** sets `CF-Connecting-IP` itself. `trustedProxy: "cf-connecting-ip"` is the narrow
+ *   equivalent of `true` behind Cloudflare alone.
+ * - **nginx** writes only the headers its own config sets with `proxy_set_header` — there is no
+ *   built-in default to name here; check the site config for which header (typically
+ *   `X-Real-IP` and/or `X-Forwarded-For`) it actually rewrites before trusting either.
+ *
+ * A client that reaches the origin directly, with no proxy at all, can forge any of the three, so the
+ * trusted-proxy boundary is always the caller's responsibility. The middleware supports every point on
+ * that spectrum:
+ *
+ * - **Behind a proxy that rewrites every header you might read:** pass `trustedProxy: true` to
+ *   `userThenIp`. Nothing else is needed.
+ * - **Behind a proxy that rewrites only one header** (Traefik's default, most nginx configs): pass
+ *   that header's name, e.g. `trustedProxy: "x-real-ip"`.
+ * - **No such proxy:** leave `trustedProxy` at its default (`false`) and wire `remoteAddr`, which
+ *   `keyResolver` receives as `context.remoteAddr` (see Usage). Keys then follow the connection's own
+ *   peer address, which a client cannot set.
+ *
+ * Without a `remoteAddr` accessor the resolver has no peer address at all and falls back to the
+ * placeholder `clientIp` returns, `0.0.0.0` — and **every** header-less client then shares one bucket,
+ * so one caller exhausting it denies the rest. This used to happen silently; `createRateLimitMiddleware`
+ * now **requires** a `remoteAddr` resolver and throws at construction time without one, so the shared
+ * bucket can only happen because a caller wrote `remoteAddr: () => undefined` and meant it, not because
+ * the option was left out. If you cannot obtain a peer address, pass that no-op explicitly, treat the
+ * shared bucket as a backstop, and front the service with a proxy.
+ *
+ * **Where the trust decision lives.** Exactly three places can consult a forwarding header, and all
+ * three default to not trusting one: `clientIp`'s `trustedProxy` parameter, `userThenIp`'s
+ * `trustedProxy` option, and the `keyResolver` you write — which sees a header only if you read one.
+ * There is deliberately no fourth. This package used to export a `resolveIdentityKey` helper that built
+ * a key from a `Request` plus a peer address passed as a plain string; its `trustedProxy` default was
+ * `true`, it duplicated `userThenIp`, and it made the peer-address mitigation unreachable, because a
+ * `Request` carries no peer address, so that option could only ever be fed by a side channel. A caller
+ * wiring the two obvious arguments got a limiter that 200 rotating `X-Forwarded-For` values at
+ * `limit: 3` walked straight through. It is removed rather than kept as a second public entry point with
+ * a security-relevant default; compose `clientIp` with `rateLimitKey` yourself if you need a key
+ * outside the middleware, stating explicitly which of the two you want.
  *
  * @module
  */

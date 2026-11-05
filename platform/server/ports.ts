@@ -10,6 +10,16 @@
  *
  * This is also what keeps the module usable from an in-memory harness or a test double without
  * monkey-patching a global.
+ *
+ * `FileSystemPort` also has four optional methods for binary files: `readBytes` and `writeBytes` for
+ * a whole file, `readStream` and `writeStream` for one too large to hold in memory; and two for
+ * scratch folders: `makeTempDir` and `removeTree`. They are optional so a port written before them
+ * still compiles; `denoFileSystem`, `nodeFileSystem` and the in-memory fake have all six.
+ *
+ * `writeText` and `atomicWriteJson` take an optional `mode` (such as `0o600`): the permission bits a
+ * file is created with, for one that holds keys. An existing file keeps its bits.
+ *
+ * @module
  */
 
 import { type Clock, systemClock } from "../universal/time.ts"

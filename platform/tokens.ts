@@ -1,20 +1,13 @@
-// Token primitives: monotonic ULIDs, opaque tokens, constant-time compare.
-//
-// Ported from `mig/lib/tokens.ts` (62 LOC). Two behaviour changes at extraction time, plus a third
-// once `@std/ulid` joined the root import map:
-//
-// 1. The secret is validated. The source hashed `raw + secret` with no check
-//    (`tokens.ts:42`), so a missing secret silently hashed against the string
-//    `"undefined"` — a fail-open. See `newOpaqueToken`.
-// 2. Callers must never compare signatures with `!==`. The source's compare was
-//    constant-time already (`tokens.ts:55-62`), but the equivalent in an earlier
-//    internal project is a plain `sigB64 !== expectedSig`.
-//    `verifyOpaqueToken` therefore routes through `constantTimeEquals`, and
-//    `tokens.test.ts` asserts that call site so the mistake cannot come back.
-// 3. ULID generation is `@std/ulid`'s `monotonicUlid`, not a hand-written encoder. The encoder
-//    existed only because `@std/ulid` was missing from the root import map; issue #70 added the
-//    pin, and "own the small, keep the huge" means a hand-rolled ULID stops being the right call
-//    once the stdlib package is pinned.
+/**
+ * Token primitives: monotonic ULIDs, opaque tokens, constant-time compare.
+ *
+ * `newOpaqueToken` refuses a missing or unusable secret, so a token is never hashed against an
+ * empty or `"undefined"` secret. `verifyOpaqueToken` compares through `constantTimeEquals`, never
+ * `!==`, because a byte-by-byte compare is a timing oracle. ULIDs come from `@std/ulid`'s
+ * `monotonicUlid`.
+ *
+ * @module
+ */
 
 import { encodeBase64Url } from "@std/encoding/base64url"
 import { encodeHex } from "@std/encoding/hex"

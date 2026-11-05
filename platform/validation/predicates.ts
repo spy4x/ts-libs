@@ -23,6 +23,14 @@
  * means an arktype message must **never** be surfaced for a value holding secret material — the
  * recipient would read the secret straight out of the error. A secret needs a constant message
  * instead.
+ *
+ * Arktype predicates for untrusted text: `headerSafeString`, `textSafeString`, `honeypotField`,
+ * `timeZoneName`, and `emailAddress` with its plain check `isEmailAddress`. The email check is
+ * `isAddress` from `@spy4x/email/address` plus that module's exported 254-character limit,
+ * `MAX_ADDR_SPEC_LENGTH`, not a second pattern or a second number, so a form and the sender agree on
+ * what an address is; `platform` imports `email` and never the other way round.
+ *
+ * @module
  */
 
 import { Type, type } from "arktype"

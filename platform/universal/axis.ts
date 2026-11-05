@@ -4,6 +4,45 @@
  *
  * Pure arithmetic, no DOM and no SVG — the caller decides how to draw the result.
  *
+ * **`universal/axis` is the single home for the chart tick maths**, ported from and matched against
+ * `preact-components/charts/scales.ts`. `preact-components` does not import it yet — that is a
+ * pending PR in that repository, `spy4x/preact-components#123` — so today the two copies still exist
+ * side by side; this module is written so that import can be a straight substitution once it lands.
+ * `niceStep`/`ticks` deliberately match the reference on every case tested against it, including three
+ * that used to differ from it here: reversed bounds are swapped rather than returned as given
+ * (`ticks(10, 0)` equals `ticks(0, 10)`), a non-finite bound returns an empty axis instead of
+ * throwing, and a tick target that is `0`, negative or `NaN` falls back to the default of `5` instead
+ * of throwing. All three are deliberate: a chart's tick target and domain both come from data or
+ * layout math that can transiently be bad, and a chart needs an empty or default-shaped axis to keep
+ * rendering, not an exception that takes the rest of the component down. `niceStep`/`ticks` in
+ * `axis.test.ts` pin all three against values taken from running the reference.
+ *
+ * One case has no reference to copy: `ticksForStep`'s loop used to run `steps + 1` times while
+ * `MAX_TICKS` capped only the output array, so `ticks(1_000_000, 2_000_000, 1e25)` never returned — an
+ * absurd tick target makes the step many orders of magnitude smaller than the float precision at that
+ * range's magnitude, so the output stops growing almost immediately while the loop still has `1e25`
+ * iterations ahead of it. `preact-components/charts/scales.ts` has the exact same defect and does not
+ * return either, so this is not a case of matching the reference. The fix bounds the loop itself at
+ * `Math.min(steps + 1, MAX_TICKS)`, not just the output, and the decision for what an absurd target
+ * should produce is a chart's, not the reference's: return whichever ticks distinguish themselves
+ * within `MAX_TICKS` iterations — as few as one — rather than freeze the page. `MAX_TICKS` is exported
+ * so `axis.test.ts` can assert against it, and a regression tripwire inside the loop throws fast if the
+ * bound is ever weakened back to plain `steps + 1`, so a future revert of the fix fails a test instead
+ * of hanging the suite.
+ *
+ * **Which function draws an axis that covers the data.** `ticks(min, max)` keeps only the step
+ * multiples within half a step of the bounds, so its ticks need not reach them: `ticks(1.1, 10)` is
+ * `[2, 4, 6, 8, 10]`, and nothing marks 1.1. When the first and last tick must cover the data, use
+ * `stepAxis(min, max, niceStep(Math.abs(max - min), target))`, which rounds the bounds outward:
+ * `stepAxis(1.1, 10, niceStep(8.9))` is `{ min: 0, max: 10, ticks: [0, 2, 4, 6, 8, 10] }`.
+ *
+ * `stepAxis(min, max, step)` (1.4.0) is for a caller that has already chosen its step: it rounds the
+ * bounds outward to multiples of the step and returns them with the ticks between them, rounded by the
+ * same rule, so the first and last tick are exactly the bounds. It exists so `preact-components`'
+ * `niceScale` can drop its own copy of the tick loop (#201). The same release fixed tick rounding for
+ * a step with more than one significant digit: `ticks(0, 10, 4)` returned `[0, 3, 5, 8, 10]` and now
+ * returns `[0, 2.5, 5, 7.5, 10]`.
+ *
  * @module
  */
 
