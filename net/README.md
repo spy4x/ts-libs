@@ -9,17 +9,15 @@ Zero runtime dependencies. Platform APIs only — `URL`, `Deno.resolveDns` (`nod
 `AbortController`, `ReadableStream`, `TextDecoder`. Nothing here imports `@std/*`
 or any npm package, and nothing here ever will without a stated reason.
 
-````
 ## Install
 
 ```bash
 deno add jsr:@spy4x/net
-````
+```
 
 Runs on: server (Deno), with `./redirect-path`, `./url-shape` and `./user-agent` also in a browser
 bundle.
 
-```ts
 ## Modules
 
 Each module's usage is in its module doc, shown by `deno doc` and on JSR.

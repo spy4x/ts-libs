@@ -29,6 +29,7 @@
  * that uses it needs `--allow-net`. Injecting a resolver removes that
  * need; every test in this package does exactly that.
  *
+ * ```ts
  * import { validatePublicUrl } from "@spy4x/net/url-policy"
  *
  * async function fetchUserSuppliedUrl(userInput: string) {
