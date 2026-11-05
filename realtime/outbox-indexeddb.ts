@@ -10,6 +10,12 @@
  * visit (Safari does). Ask for persistent storage with `requestPersistentStorage` from
  * `@spy4x/platform/browser/persistent-storage` once the first write is queued.
  *
+ * `createIndexedDbOutboxStore({ name })` keeps the queue in plain IndexedDB, so a write made offline
+ * survives a closed tab and a restart. `createMemoryOutboxStore` is still the store for tests and
+ * servers; one contract suite runs against both, so they behave alike. Name the database for the
+ * user (`outbox:${userId}`), as the lock is named. Ask the browser not to evict it with
+ * `requestPersistentStorage` from `@spy4x/platform/browser/persistent-storage`.
+ *
  * @module
  */
 

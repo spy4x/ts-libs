@@ -37,6 +37,64 @@
  *   outlives `requestTimeoutMs`. What a request name means — a command bus, a query bus,
  *   authorization — is the host's.
  *
+ * ## Server wiring
+ *
+ * ```ts
+ * import { AggregateNotifier, ConnectionRegistry, createSystemClock } from "@spy4x/realtime"
+ *
+ * const clock = createSystemClock()
+ * const registry = new ConnectionRegistry({
+ *   clock,
+ *   // Defaults shown; override per deployment. See "Fixed after ship" below (issue #65, finding 5).
+ *   maxConnectionsPerUser: 20,
+ *   maxMessageBytes: 64 * 1024,
+ *   maxBufferedBytes: 1_000_000,
+ * })
+ * const notifier = new AggregateNotifier({
+ *   fanout: registry,
+ *   resolvers: new Map([
+ *     // Authorization lives in the resolver: it is the membership lookup, not a route middleware.
+ *     ["invoice", (change) => membership.readGroupMemberIds(change.groupId)],
+ *   ]),
+ *   onUnknownAggregate: (change) => logger.warn("unhandled aggregate", change),
+ * })
+ *
+ * // From the upgrade handler: authenticate once at the upgrade, then attach. `attach` returns `null`
+ * // — and has already closed the socket — once the user is at `maxConnectionsPerUser`.
+ * const handle = registry.attach(userId, adaptSocket(await upgrade(request)))
+ * if (!handle) logger.warn("refused a socket: user already at the connection cap", { userId })
+ *
+ * // From the worker that drains outbox_events, after the commit that stamped the sequence.
+ * await notifier.notify({
+ *   groupId,
+ *   aggregate: "invoice",
+ *   sequence: nextChangeSequence,
+ * })
+ * ```
+ *
+ * `registry.attach` owns heartbeats, liveness deadlines, orphan cleanup and
+ * fan-out; the host never tracks sockets itself. `registry.onFrame` is where a
+ * `client.sync` handshake is answered (the sync protocol is not part of this
+ * package, see below).
+ *
+ * ### Requests
+ *
+ * ```ts
+ * import { RealtimeRequestError } from "@spy4x/realtime"
+ *
+ * // One dispatcher per registry. The library does not know what a name means.
+ * registry.onRequest(async ({ userId, kind, name, payload, idempotencyKey, signal }) => {
+ *   const bus = kind === "command" ? commandBus : queryBus
+ *   const handler = handlers.get(name)
+ *   if (!handler) throw new RealtimeRequestError("not_found", `unknown ${kind}: ${name}`)
+ *   // Authorize inside the handler with `userId`; validate `payload` with the handler's own schema.
+ *   return await handler({ userId, payload, idempotencyKey, signal })
+ * })
+ * ```
+ *
+ * The registry options `maxInFlightRequests`, `requestTimeoutMs` and
+ * `onRequestError` are described in _Divergence_ above.
+ *
  * @module
  */
 

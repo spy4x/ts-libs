@@ -28,6 +28,86 @@
  * Not the server's job outbox: that is `@spy4x/server/outbox`, which drains an outbox table and
  * publishes its events.
  *
+ * A client queue for commands written while the connection was down, sent in order when it is back.
+ * It knows nothing about what an entity is: the payload is a type parameter, the entity id a string
+ * the caller picks, and everything else is a port.
+ *
+ * ```ts
+ * import { createMemoryOutboxStore, createOutbox, createWebLock } from "@spy4x/realtime/outbox"
+ *
+ * const outbox = createOutbox<NotePayload, Note>({
+ *   store: createMemoryOutboxStore(), // tests; browsers use createIndexedDbOutboxStore, one per user
+ *   lock: createWebLock(navigator.locks, `outbox:${userId}`),
+ *   canSend: () => socketIsOpen() && pageUserIs(userId),
+ *   send: (command, key) => callOverSocket(command, key), // resolves the server's entity
+ *   fetchServer: (id) => readEntity(id), // null when it is gone
+ *   classify: (error) => ({ kind: "unreachable" }), // map your errors to a SendFailure
+ *   cache: { put: saveToLocalCache, remove: removeFromLocalCache },
+ * })
+ * await outbox.submit({ kind: "update", entityId: id, payload, version: 3 })
+ * await outbox.flush() // after a reconnect and after a pushed hint
+ * ```
+ *
+ * The rules it keeps, each one a lost edit found in a product that wrote the queue by hand:
+ *
+ * - **One entry per entity.** A later edit replaces the waiting one; create then delete before any
+ *   send sends nothing. Once a send of the create was started, even before a later edit, the delete
+ *   is sent.
+ * - **A fresh key after an unknown outcome.** An entry whose send may have reached the server gets a
+ *   new idempotency key when it is edited again, so the server does not answer the old key and drop
+ *   the new text. An edit of such a create is sent as an update on version 1, so the server does not
+ *   refuse a second create of the id; if the server has no such entity, the edit goes out as the
+ *   create.
+ * - **Clear only while the key matches.** After a send, an entry is removed, or marked a conflict,
+ *   only if the queue still holds it under the key that was sent. An edit another tab made in the
+ *   meantime stays queued.
+ * - **One writer at a time.** Every step runs under the lock: `createPromiseLock()` for one tab,
+ *   `createWebLock(navigator.locks, name)` for every tab of one browser. Name the lock for the user.
+ * - **Never as someone else.** `canSend()` is checked before every entry; a queue is not sent while
+ *   the page is signed in as another user.
+ * - **Conflicts wait for a person.** A stale, gone or refused write is marked, never applied over
+ *   the other side; `keepMine(entry)` sends it again on the server's version (only for a stale
+ *   write: a gone or refused one has no server version), `useTheirs(entry)` drops it. Both take the
+ *   entry the person saw and do nothing once the queue holds a different one, so a stale screen in
+ *   another tab cannot delete a newer edit. `keepMine(entry, payload)` sends `payload` instead of the
+ *   entry's own: pass the person's change merged into `entry.conflict.server`, so what the other
+ *   side changed elsewhere in the entity is kept. The payload is stored in the same locked step that
+ *   checks the entry, so a stale screen stores and sends nothing; never `submit` the merged payload
+ *   first, because `submit` queues a new write when the entry is gone. Deleting an entity whose
+ *   create the server refused (its id is taken, or the server refused it for another reason) drops
+ *   the create, as `useTheirs` does, and sends nothing: the entity that holds the id is never deleted.
+ *
+ * A created entity starts at version one: after an attempted create, a delete is sent against that
+ * version. The server never confirmed that create, so the delete's command also carries
+ * `ownCreates`: the payload of every send of the create that was started, oldest first. A transport
+ * that has no version to delete against (CalDAV has only the etag the server never gave) compares
+ * the server's copy with them, and so tells this device's own create from a write made elsewhere. No
+ * other command has the field. `send` runs under the lock, so it must settle or time out.
+ *
+ * `submit` answers how the change ended: `sent` (with the server's entity), `queued` (it goes out
+ * later), `dropped` (created and deleted before any send, or deleted after the server refused the
+ * create), `failed` or `conflict`. A refusal of a
+ * change that stands alone answers `failed` and queues nothing, because the person is looking at the
+ * screen and the app shows the refusal itself. A change that joined a write still queued from earlier
+ * (an edit made offline, then another made right after the connection came back) is never dropped
+ * with it: the refused entry stays queued as a conflict, exactly as a refusal found by `flush` would,
+ * and `submit` answers `{ kind: "conflict", reason }`. Show the conflict from `entries()` and let the
+ * person settle it with `keepMine` or `useTheirs`.
+ *
+ * `withdraw(entityId)` takes back the latest change to an entity, for example the "Undo" of a delete
+ * made offline. When that change was merged into an earlier waiting write (an edit, then a delete),
+ * only the delete is taken back: the edit stays queued, with its key and its `attempted` flag as they
+ * were, so a send that may already have happened is repeated idempotently. Each withdraw takes back
+ * one more change (edit, edit, delete, then two withdraws leave the first edit queued), and a write
+ * whose send was started is never taken back. Only the last 20 changes can be taken back: an entity
+ * edited offline more often keeps a bounded entry, and a withdraw past the 20th answers `false` (a
+ * forgotten step whose send was started still counts as possibly on the server). Otherwise the entry
+ * is removed and never sent. It answers `false`, changing nothing, when there is nothing to take back or
+ * it cannot be: the entry's send was already started (the server may have it, so only an online
+ * restore is safe) or it is a conflict (use `keepMine` or `useTheirs`). A withdraw asked during a send
+ * waits for it. A create that was deleted before any send leaves nothing queued, so there is nothing
+ * to withdraw: submit the create again.
+ *
  * @module
  */
 

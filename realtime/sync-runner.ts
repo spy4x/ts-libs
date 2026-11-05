@@ -27,6 +27,56 @@
  *
  * Time, the event targets and the random source are ports, so a test needs no real timers.
  *
+ * Sends the outbox at the moments a browser gives a page: on start, when the browser goes online,
+ * when the tab becomes visible, when the window gains focus, when a page returns from the
+ * back-forward cache, and on `kick()`. It does not use Background Sync (Safari has none): a write
+ * queued while the app is closed is sent the next time the app opens.
+ *
+ * - One run at a time. A kick during a run schedules exactly one more run, however many arrive.
+ * - A flush that throws, or answers `"unreachable"`, is retried after `backoffDelay` (1 s doubling to
+ *   60 s, jittered). Any wake-up above cancels the wait and runs at once.
+ * - Optional `pollIntervalMs` (off by default): while the page is visible and online, a run that
+ *   completed is followed by another that long after it ended, so a tab left open sees remote
+ *   changes. A hidden or offline page does not poll; the wake-up that returns the person runs at
+ *   once and restarts the interval. A failing run keeps its backoff, and polling resumes after the
+ *   next success. `isOnline` defaults to `navigator.onLine`. A value that is not a positive, finite
+ *   number of at most 2 147 483 647 ms (the longest timer delay) throws a `RangeError`.
+ * - `stop()` removes every listener and timer.
+ * - `getState()` and `subscribe()` give `{ running, lastError, failures, nextRetryAt }` for a UI. No
+ *   Preact in this package: bind it to a signal in the app.
+ *
+ * `Outbox.flush` stops silently at the first write it cannot send; `flushOutbox(outbox)` turns "a
+ * write is still pending after the flush" into the `"unreachable"` that asks for a retry.
+ *
+ * ## Wiring an offline-first PWA
+ *
+ * ```ts
+ * import { createDataCache } from "@spy4x/platform/browser/data-cache"
+ * import { requestPersistentStorage } from "@spy4x/platform/browser/persistent-storage"
+ * import { installOfflineShell } from "@spy4x/platform/browser/offline-shell" // in the service worker
+ * import { createIndexedDbOutboxStore } from "@spy4x/realtime/outbox-indexeddb"
+ * import { createOutbox, createWebLock } from "@spy4x/realtime/outbox"
+ * import { createSyncRunner, flushOutbox } from "@spy4x/realtime/sync-runner"
+ *
+ * const outbox = createOutbox<NotePayload, Note>({
+ *   store: createIndexedDbOutboxStore({ name: `outbox:${userId}` }),
+ *   lock: createWebLock(navigator.locks, `outbox:${userId}`),
+ *   // canSend, send, fetchServer, classify, cache: as in the outbox example above
+ * })
+ * const cache = createDataCache<Note>({ name: `data:${userId}`, getId: (n) => n.id })
+ *
+ * await outbox.reload() // the queue left by the last visit
+ * const runner = createSyncRunner({ flush: flushOutbox(outbox) })
+ * runner.start()
+ * void requestPersistentStorage()
+ * ```
+ *
+ * The UI side lives in `spy4x/preact-components`: `createOnlineStatus` (`@spy4x/preact-signals`)
+ * for an offline badge, `SWUpdater` and `startUpdates` (`@spy4x/preact-system`) for the "new version"
+ * prompt, and the `serviceWorker()` Vite plugin (`@spy4x/preact-theme/vite`) to build the worker that
+ * calls `installOfflineShell`. Bind `runner.subscribe` to a signal for a "syncing" or "retrying at"
+ * indicator.
+ *
  * @module
  */
 

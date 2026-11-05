@@ -25,6 +25,119 @@
  *   {@link REALTIME_ERROR_CODES}, the same code the socket uses, and `reason` and `fields` are the
  *   finer detail of `RealtimeRequestErrorOptions`.
  *
+ * A store should not know whether its calls travel over the socket or over HTTP. It takes a
+ * `CallPort`: `command(name, payload, { idempotencyKey, signal? })` and
+ * `query(name, payload, { signal? })`. Every module throws the same two errors:
+ * `RealtimeRequestError` (the server answered; `code` is one of the closed set, `details`, `reason`
+ * and `fields` are what the server sent) and `ConnectionLostError` (the server could not be reached, so a command may or
+ * may not have run).
+ *
+ * | Piece                                                         | Does                                                                                             |
+ * | ------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
+ * | `createHttpCallPort({ baseUrl, userId, ... })`                | `POST <baseUrl>/<name>` with `fetch`. Always works.                                              |
+ * | `createSocketCallPort(transport)`                             | Adapts a `ClientTransport`; `isAvailable()` is true while the socket is open.                    |
+ * | `createComposedCallPort({ socket, http })`                    | Socket while it is open, HTTP otherwise and after a lost socket (see below).                     |
+ * | `withUnauthorizedHook(port, hook)`                            | Calls `hook` once when a call is answered `unauthorized`. The HTTP port takes it as an option.   |
+ * | `sendCommand`, `sendQuery`, `isRetryable`, `isUnknownOutcome` | Send a call again when the outcome is unknown: one idempotency key per command, waits that grow. |
+ * | `isForeignAnswer(status, code)`                               | Whether a proxy, not the API, wrote an answer that is not `ok` (see below).                      |
+ *
+ * ## HTTP wire contract
+ *
+ * - Request: `POST <baseUrl>/<name>`, `Content-Type: application/json`, body = the payload as JSON
+ *   (no body at all when there is none; the handler passes `undefined` to the operation, as the
+ *   socket does), header `Idempotency-Key` on commands, header `X-Realtime-User` with the id of the
+ *   user the page was started for. The name is one path segment (URL-encoded). The HTTP handler
+ *   refuses a command without `Idempotency-Key` with `bad_request`, so a keyless command only works
+ *   over the socket.
+ * - Success: every 2xx carries `{ "result": <value> }`; `null` for an operation that returns nothing.
+ * - Failure: a non-2xx with `{ "error": { "code", "message", "details"?, "reason"?, "fields"? } }`;
+ *   `code` is the same string the socket uses. A `reason` or `fields` of the wrong shape is dropped,
+ *   and the code and message still arrive.
+ * - `ConnectionLostError`: `fetch` failed, no answer within `timeoutMs` (default 15 s), a 5xx with no
+ *   readable error body, a bare 404 or 429 (a proxy answers them while a container is replaced; a
+ *   real not-found or rate limit of ours carries the error body), or a 2xx that is not `{ result }`.
+ * - Any other 4xx with no readable error body gets the code of its status: 401 `unauthorized`, 403
+ *   `forbidden`, 408 `timeout`, 409 `conflict`, else `bad_request`.
+ *
+ * ## An app with HTTP only
+ *
+ * ```ts
+ * import { createHttpCallPort, sendCommand, sendQuery } from "@spy4x/realtime/calls"
+ *
+ * const calls = createHttpCallPort({
+ *   baseUrl: "/api/call",
+ *   userId: session.userId, // the user this page was started for
+ *   onUnauthorized: () => signOut(),
+ * })
+ *
+ * const group = await sendCommand<{ id: string }>(calls, "group.create", { name: "Home" })
+ * const list = await sendQuery<{ groups: unknown[] }>(calls, "group.list")
+ * ```
+ *
+ * ## An app with both
+ *
+ * ```ts
+ * import {
+ *   createComposedCallPort,
+ *   createHttpCallPort,
+ *   createSocketCallPort,
+ *   withUnauthorizedHook,
+ * } from "@spy4x/realtime/calls"
+ *
+ * const http = createHttpCallPort({ baseUrl: "/api/call", userId: session.userId })
+ * const calls = withUnauthorizedHook(
+ *   createComposedCallPort({ socket: createSocketCallPort(transport), http }),
+ *   () => signOut(), // one hook for both modules
+ * )
+ * ```
+ *
+ * A socket call that fails with `ConnectionLostError` is sent again over HTTP with the same
+ * idempotency key. A command without a key is not: the socket may have delivered it before it
+ * dropped. A server answer (`unauthorized`, `conflict`, a socket `RequestTimeoutError`) is never
+ * asked again over the other module; `sendCommand` decides whether to try again.
+ *
+ * `isForeignAnswer(status, code)` is the rule the HTTP module uses to tell a proxy's answer from the
+ * API's: a status of 500 or more, a 404 or a 429 with no error code of the API's in the body (a
+ * status below 400 is not covered and answers `false`). A page that reads
+ * with plain `fetch` asks it before it treats a 404 as "this is gone", so a deploy does not delete a
+ * saved copy.
+ *
+ * ### Waiting for the first open
+ *
+ * When a page starts, the socket is still opening, so its first calls would go over HTTP although the
+ * socket is about to be there. The option `firstOpenWait` makes them wait for it:
+ *
+ * ```ts
+ * createComposedCallPort({
+ *   socket,
+ *   http,
+ *   firstOpenWait: {
+ *     // The promise of the first open, or null when it has ended (opened, closed or failed).
+ *     pending: () => firstOpen,
+ *     maxMs: 3_000, // optional; the default
+ *     clock, // optional; a FakeClock in a test
+ *   },
+ * })
+ * ```
+ *
+ * A call made while `pending()` returns a promise waits for it, then goes over the socket if it
+ * opened and over HTTP if not. The bound is shared: it starts at the first call that waits, and all
+ * calls made during the wait end together. Only the first open waits. Once the socket has been open,
+ * has closed or failed, or the bound has passed, a call never waits again: a reconnecting socket
+ * means HTTP at once. A call whose `signal` aborts stops waiting and rejects with the reason.
+ * Without the option nothing changes.
+ *
+ * Three things to know. Once `pending()` has returned `null`, the port never waits again, so create
+ * the port after the socket has started connecting, or return a promise from the start. A promise
+ * that rejects counts as the end of the first open, but a `pending()` that throws rejects the call
+ * that asked. The bound counts from the first call that waits, not from the port's creation.
+ *
+ * `sendCommand` makes one key per command and sends every try with it. Tries: `attempts` (default 4);
+ * the wait before repeat `n` is `delayMs * 2 ** (n - 1)` (default 1 s), capped at `maxDelayMs` and
+ * jittered by `backoffDelay`. Tried again: a lost connection, an answer that did not arrive in time,
+ * and the server's `timeout`, `rate_limited` (it refused the call before running it) and `conflict`
+ * with `details.code` `IN_PROGRESS`. Every other answer is final; `unauthorized` is never retried.
+ *
  * @module
  */
 

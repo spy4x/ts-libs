@@ -41,6 +41,130 @@
  *   (default: the base backoff delay) — because a single inbound frame is not proof by itself: a
  *   peer that sends one byte and drops satisfies "a message arrived" for free, on every attempt.
  *
+ * ## Client wiring
+ *
+ * ```ts
+ * import {
+ *   ClientTransport,
+ *   createWebSocketFactory,
+ *   PersistentCursorStore,
+ *   TransportStatus,
+ * } from "@spy4x/realtime"
+ *
+ * const cursors = new PersistentCursorStore({
+ *   storage: localStorage,
+ *   clock: createSystemClock(),
+ * })
+ * const transport = new ClientTransport({
+ *   url: `wss://${location.host}/api/ws`,
+ *   socketFactory: createWebSocketFactory(),
+ *   clock: createSystemClock(),
+ *   cursors,
+ *   pull: (gap) => api.get(`/api/groups/${gap.groupId}/changes?since=${gap.since}`),
+ *   gate: async () => ({ allowed: (await fetch("/api/auth/me")).ok }),
+ * })
+ *
+ * transport.onChange((hint) => store.applyHint(hint))
+ * transport.onError((error) => logger.warn(error))
+ * transport.connect()
+ * ```
+ *
+ * Every hint that is not a duplicate — a genuine gap and a merely-contiguous one
+ * alike — is pulled before anything moves, and `onChange` fires only once that
+ * pull has actually succeeded (issue #65, finding 1: a hint carries no payload,
+ * so its arrival alone was never proof the client held the data). `pull` is
+ * therefore the one path a failure can be seen on, and it is also the one a host
+ * keeps running on an interval when `onSyncDegraded` fires.
+ *
+ * Properties a caller should know, each pinned by a test:
+ *
+ * - **The durable position moves only once a fetch has succeeded.** A hint that
+ *   triggers a failing `pull` leaves the stored cursor untouched, so the next
+ *   delivery of the same hint (or the next reconnect) tries again.
+ * - **A reconnect always pulls every group the client already holds a cursor
+ *   for**, once, unconditionally — not only when a later hint happens to reveal
+ *   a gap, which in a quiet group might never happen. The first open pulls
+ *   them too, as soon as the handshake has been acknowledged or has failed
+ *   (a lost acknowledgement does not mean the server did not adopt the socket, and
+ *   such a socket still receives hints): the server sends hints only to a socket it
+ *   has adopted, so a change made between the app's start-up read and that moment
+ *   would otherwise reach the page by no hint. A cold client (no cursor yet) has
+ *   nothing to pull here. It subscribes to `onHandshakeAcknowledged`, which fires
+ *   after the first acknowledgement (`{ reconnect: false }`) and after each
+ *   reconnect's (`{ reconnect: true }`), never for a failed handshake or a stopped
+ *   transport, and runs its own full read there. The transport does not
+ *   de-duplicate, so an app that also pulls on its own first open pulls twice,
+ *   which is harmless.
+ * - **The reconnect backoff resets only once the connection has proven itself —
+ *   a message _and_ a minimum amount of time open, not either alone.** A single
+ *   inbound frame is not proof of health: a server that sends one byte and drops
+ *   satisfies "a message arrived" for free, on every attempt, which is exactly
+ *   what let a reconnect storm through until issue #65's follow-up review caught
+ *   it. The counter resets only once a message has arrived _and_ the socket has
+ *   stayed open for at least `minHealthyMs` (default: `backoff.baseMs`) — a
+ *   server that accepts a connection and drops it, with or without sending
+ *   anything first, produces a growing delay between attempts instead of a
+ *   reconnect every few hundred milliseconds forever.
+ * - **A hint is decided as soon as it arrives, even while the handshake is
+ *   unacknowledged.** The handshake is not serialised behind the cursor chain, so a
+ *   hint is not held for up to `handshakeAttempts × handshakeAckTimeout`. Its cursor
+ *   snapshot is simply taken later, which can only make it fresher.
+ * - **`clear()` and `keys()` read durable state first.** A fresh instance that calls
+ *   `clear()` before anything else still removes every cursor and the sync time
+ *   that the stored group index lists. It does not scan for a cursor key that
+ *   predates or bypasses that index — `KeyValueStore` has no way to enumerate its
+ *   own keys — so a genuinely orphaned `realtime:cursor:*` entry can survive
+ *   `clear()`. This is a real, pre-existing limitation, not a hypothetical one:
+ *   reproduced by seeding `realtime:cursor:g2` without listing `g2` in
+ *   `realtime:groups`.
+ * - **`advanceTo(groupId, 0)` records a cursor of `0` for a group the client has not
+ *   seen**, so a pull that reports an empty group stays distinguishable from a cold
+ *   start. For a group that already has a cursor, `advanceTo` is monotonic and a
+ *   lower — or negative — value is refused.
+ *
+ * ### When the app returns
+ *
+ * A phone that backgrounds the app freezes its timers and may kill its socket, so the transport can be
+ * waiting out a long backoff, or hold a socket that is already dead. `transport.resume()` fixes both:
+ * while reconnecting it drops the wait and reconnects at once (the reconnect pulls every group from its
+ * cursor, and the attempt count is kept so the open still counts as a reconnect); a connect attempt
+ * still under way is abandoned and repeated; while open it pings, so a dead socket is found after one
+ * pong deadline. Calling it several times in one tick is safe. A transport that was never started or has stopped stays so. `watchPageResume` from
+ * `@spy4x/realtime/page-lifecycle` calls a function when the page becomes visible, the browser goes
+ * online, or a page is restored from the back-forward cache:
+ *
+ * ```ts
+ * import { watchPageResume } from "@spy4x/realtime/page-lifecycle"
+ *
+ * const stop = watchPageResume(() => transport.resume())
+ * ```
+ *
+ * ### Commands and queries
+ *
+ * ```ts
+ * import { uuidV7 } from "@spy4x/platform/universal/uuid"
+ *
+ * try {
+ *   const group = await transport.command("group.rename", { groupId, title }, {
+ *     idempotencyKey: uuidV7(), // resend with the same key after a drop
+ *   })
+ *   const list = await transport.query("group.list", undefined, { timeoutMs: 5_000 })
+ * } catch (error) {
+ *   if (error instanceof RealtimeRequestError) {
+ *     switch (error.code) { // closed set: bad_request, unauthorized, forbidden, not_found,
+ *       case "conflict": // conflict, rate_limited, internal, timeout
+ *         break
+ *     }
+ *   } else if (error instanceof RequestTimeoutError || error instanceof ConnectionLostError) {
+ *     // No answer, or the socket dropped or was never open: the command may have run.
+ *   }
+ * }
+ * ```
+ *
+ * `transport.pendingCalls` counts calls still waiting. `requestTimeoutMs` (default
+ * 15 s) sets the default timeout; `send` and `request` remain liveness and
+ * handshake only.
+ *
  * @module
  */
 
