@@ -6,6 +6,27 @@
  * Hrefs are kept exactly as the server sent them (`%40`, `%2F` survive): addresses are built with
  * `new URL(href, base)`, never by joining strings, and compared segment by segment after decoding.
  *
+ * ```ts
+ * import { childUrl, isSameOrigin, resolveHref, sameResource } from "@spy4x/caldav/url"
+ * import { uuidV7 } from "@spy4x/platform/universal/uuid"
+ *
+ * const server = "https://dav.example.com/dav/"
+ * sameResource(
+ *   "https://dav.example.com/cal/user%40example.com/",
+ *   "https://dav.example.com/cal/user@example.com",
+ * ) // true: segments are compared decoded, a trailing slash is ignored
+ * sameResource("https://dav.example.com/a%2Fb", "https://dav.example.com/a/b") // false
+ *
+ * const newTask = childUrl("https://dav.example.com/cal/inbox/", `${uuidV7()}.ics`)
+ *
+ * // Attach credentials only to the configured origin, and check every redirect target too.
+ * const target = resolveHref("https://elsewhere.example.org/cal/", server)
+ * isSameOrigin(target!, server) // false: another host, port or scheme never gets the login
+ * ```
+ *
+ * Never derive an address from a display name or from an event's iCalendar `URL` property: pass a
+ * generated name to `childUrl` and resolve only hrefs the server sent.
+ *
  * @module
  */
 

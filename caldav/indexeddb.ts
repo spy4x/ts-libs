@@ -15,6 +15,32 @@
  * stores (an older schema) is upgraded by dropping those stores and creating this layout, without
  * throwing.
  *
+ * `createIndexedDbCalDavCache(options?)` from `@spy4x/caldav/indexeddb` is a `CalDavSyncStore` over
+ * `@spy4x/platform/browser/indexeddb`: calendars keyed by `href`, objects keyed by `href` with an index
+ * on `calendarHref`. Besides the store methods it has `listObjects()` (all) and
+ * `listObjects(calendarHref)`, `putObject`, `deleteObject` and `close`. `replaceCalendars` and
+ * `applyChanges` each run in one transaction.
+ *
+ * ```ts
+ * import { createCalDavSync } from "@spy4x/caldav/sync"
+ * import { createIndexedDbCalDavCache } from "@spy4x/caldav/indexeddb"
+ *
+ * const cache = createIndexedDbCalDavCache({ name: `caldav:${userId}` })
+ * const sync = createCalDavSync(transport, cache)
+ * ```
+ *
+ * - The cached object type is generic (`T extends CachedObject`: `href`, `calendarHref`, `etag`). To
+ *   keep parsed fields, pass `fromSyncObject(object, calendarHref)`, which builds `T` from each
+ *   object a sync run delivers; it is required whenever you give your own `T`.
+ * - The default database name is `caldav-cache`. Dexie opens its database at ten times the version
+ *   you give it, so an old `caldav-tasks` database cannot be opened at version 1; a fresh name avoids
+ *   that. Delete the old one with `indexedDB.deleteDatabase("caldav-tasks")` if you care about the
+ *   space. Raising `version` drops every
+ *   store, this cache's own data included, and creates this layout: the cache is only a copy of the
+ *   server, so the next sync refills it.
+ * - When storage cannot be opened (no `indexedDB`, a private window, blocked site data) every call
+ *   rejects with `IndexedDbUnavailableError`, with the cause attached. The next call tries again.
+ *
  * @module
  */
 

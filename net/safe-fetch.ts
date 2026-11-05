@@ -36,6 +36,133 @@
  * `DataView`, `FormData` or `URLSearchParams` — a stream or an (async) iterable
  * is read once. A redirect that turns the request into a `GET` drops the body,
  * as the platform `fetch` does.
+ *
+ * ## The second lookup, and how to close it
+ *
+ * The guard resolves the hostname, decides the address is public, and then hands
+ * the **name** to `fetch` — which resolves it again. Whoever runs the DNS server
+ * for that name chooses both answers. Answer with a public address the first time
+ * and `127.0.0.1` the second, and the request goes somewhere the guard never
+ * looked. This is DNS rebinding, it is a standard attack rather than a theoretical
+ * one, and no amount of care inside this module closes it: the platform `fetch`
+ * accepts a name, not the address that was checked.
+ *
+ * The runtime closes most of it. Deno applies `--deny-net` at connection time,
+ * against the address the connection is actually going to, so a second answer
+ * pointing inside the network is refused by the process rather than by the guard.
+ * One spelling of "this machine" is left over, and it is named below. The list is
+ * exported so it does not have to be retyped:
+ *
+ * ```ts
+ * import { DENY_NET_ADDRESSES, denyNetFlag } from "@spy4x/net/url-policy"
+ *
+ * console.log(denyNetFlag())
+ * // --deny-net=10.0.0.0/8,100.64.0.0/10,127.0.0.0/8,169.254.0.0/16,…,[::1],[::]
+ * ```
+ *
+ * Print it once and paste the result into the task, the Dockerfile or the unit
+ * file that starts the process — permissions are fixed when a process starts, so
+ * nothing the process itself calls can apply them:
+ *
+ * ```bash
+ * deno run --allow-net --deny-net=10.0.0.0/8,127.0.0.0/8,169.254.0.0/16,… server.ts
+ * ```
+ *
+ * Verified on Deno 2.9.7, with a server listening on `127.0.0.1` in another
+ * process: without the flag the fetch returns the internal service's body, with it
+ * the fetch fails with `Requires net access to "127.0.0.1:<port>"`.
+ *
+ * Four things about this layer are worth knowing before you rely on it:
+ *
+ * - **`0.0.0.0` still reaches services on this machine.** With exactly the flag
+ *   above, `fetch("http://0.0.0.0:<port>/")` returns the body of a server
+ *   listening locally, so a name that re-resolves to `0.0.0.0` is not covered.
+ *   `0.0.0.0` cannot go in the list, because a denied address cannot be listened
+ *   on either and `Deno.serve` binds the wildcard address by default: adding
+ *   `0.0.0.0/32` makes the application fail to start with `NotCapable`. A process
+ *   that never listens — a worker, a CLI, a job — can append `0.0.0.0/32` to the
+ *   flag and close this too. One that serves has to live with it, or serve from a
+ *   different process than the one that fetches. Both halves measured on
+ *   Deno 2.9.7.
+ * - **It covers IPv4 ranges and two IPv6 addresses.** `--deny-net` takes a CIDR
+ *   range for IPv4, but not for IPv6: `--deny-net=fc00::/7` stops the process from
+ *   starting (`ipv6 addresses must be enclosed in square brackets`), and
+ *   `[fc00::]/7` is not a host it accepts either. Only single addresses can be
+ *   written, which is why the list carries `[::1]` and `[::]` and nothing else in
+ *   that family — unique-local and link-local IPv6 have the guard itself as their
+ *   only layer. `[::]` can be denied where `0.0.0.0` cannot, because it does not
+ *   stop the **default** bind.
+ * - **A denied address cannot be listened on either.** Under the flag as shipped,
+ *   `Deno.serve` binds its default address and nothing else: both
+ *   `Deno.serve({ hostname: "127.0.0.1" })` and `Deno.serve({ hostname: "::" })`
+ *   fail with `NotCapable`. An application that listens on loopback behind a proxy
+ *   on the same host, or on `::` for dual stack, has to drop `127.0.0.0/8` or
+ *   `[::]` from the list and gives up that much cover in exchange.
+ * - **It is a second layer, not the first.** `validatePublicUrl` still has to run:
+ *   the deny list says nothing about `javascript:` locations, credentials in a URL,
+ *   or a name that resolves internally on the first lookup.
+ *
+ * The platform default follows redirects _inside_ `fetch`, where a guard cannot
+ * see them: validating only the URL you pass in means a public host can bounce you
+ * to `http://169.254.169.254/` and the runtime will happily fetch it.
+ *
+ * `safeFetch` therefore requests `redirect: "manual"` and re-validates every
+ * `Location` through `validatePublicUrl` before issuing the next request. Relative
+ * and protocol-relative locations are resolved against the current URL first, so a
+ * `Location: /admin` cannot smuggle you elsewhere. One `AbortController` and one
+ * timer cover the whole chain, the redirect count is capped
+ * (`DEFAULT_MAX_REDIRECTS = 3` hops, i.e. **up to 4 requests** — the original plus
+ * one per followed `Location`), each redirect body is cancelled before anything
+ * that can throw, and a 301/302/303 downgrades a non-`GET`/`HEAD` request to `GET`
+ * per RFC 9110.
+ *
+ * Taking redirects away from the platform `fetch` also takes away its header
+ * rules, so they are applied here: `Authorization`, `Cookie` and
+ * `Proxy-Authorization` (`CREDENTIAL_HEADERS`) are dropped as soon as a hop lands
+ * on a different origin, and stay dropped for the rest of the chain — a bounce
+ * back to the first site does not get them back, and neither does a further hop
+ * inside the second one. Scheme, host and port all count as a change of origin. A
+ * redirect refused by the policy, and a `Location` the URL parser cannot read,
+ * both raise `UrlValidationError` with code `invalid_redirect` or `non_public_ip`
+ * — never a bare `TypeError` — after the redirect body has been cancelled.
+ *
+ * A request body goes in `body`, in any shape the platform `fetch` takes, and is
+ * refused with `GET` or `HEAD`. A redirect that turns the request into a `GET`
+ * drops the body and its `Content-Type`, `Content-Encoding`, `Content-Language`
+ * and `Content-Location` headers. A 307 or 308 sends the body again only to the
+ * same origin, and only when it can be read twice: a string, `Blob`,
+ * `ArrayBuffer`, typed array or `DataView`, `FormData` or `URLSearchParams`. A
+ * 307 or 308 to another origin, or with any other body (a `ReadableStream`, an
+ * async or sync iterable, which are read once), is refused with code
+ * `invalid_redirect`. A custom `Fetcher` must forward `init.body`.
+ *
+ * ```ts
+ * const { response } = await safeFetch("https://push.example.com/send", {
+ *   method: SafeFetchMethod.Post,
+ *   headers: { "content-type": "application/json" },
+ *   body: JSON.stringify({ title: "Hello" }),
+ * })
+ * ```
+ *
+ * Two things about that rule are worth knowing before you rely on it:
+ *
+ * - **`headers` is parsed by the platform `Headers` before anything reads it**, so
+ *   a `Headers`, an array of name/value pairs and a plain object all behave the
+ *   same way. That is a security decision rather than a convenience: an array of
+ *   pairs read as a plain record gives back the _indices_ as header names, so a
+ *   credential crossed to the other origin under the name `0` with the secret
+ *   still in the value, and a `Headers` object read the same way lost every header
+ *   instead. Anything the platform refuses — a malformed pair, an invalid name, a
+ *   value with a newline in it — is refused here as `UrlValidationError` with code
+ *   `invalid_format`, before any request is made.
+ * - **Only the three standard names are dropped**, exactly as the platform does
+ *   it. A house header that carries a secret — `X-Api-Key`, `X-Auth-Token` — does
+ *   follow a redirect to another origin. Add it to the request only where it is
+ *   needed, or do not send it through `safeFetch`.
+ *
+ * `Fetcher` is the injection seam for the transport; `url` in the result is
+ * always the canonical URL that actually answered.
+ *
  * @module
  */
 

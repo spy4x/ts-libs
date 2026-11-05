@@ -43,6 +43,109 @@
  * id must be a plain file name (see {@link isSafeEntityId}); an update or delete goes to the
  * address `urlOf` gives, whatever the id.
  *
+ * `caldav/write` fills the `send`, `fetchServer` and `classify` ports of the outbox in
+ * `@spy4x/realtime/outbox`, so a queue of offline edits reaches a CalDAV server without overwriting
+ * anyone's change. A create is `PUT` with `If-None-Match: *` to `<entityId>.ics`; an update is `PUT`
+ * with `If-Match: <etag>`; a delete is `DELETE` with `If-Match`. Only a create
+ * needs the entity id to be a plain file name: an update or delete goes to the address `urlOf` gives.
+ * The app supplies the calendar, the object's address, the etag a write is based on, the iCalendar
+ * text, and how to turn an object into its entity.
+ *
+ * A repeat of a create after a lost answer finds its own object, by its UID. When that object holds
+ * the same content lines as the text being sent, in any order (Radicale stores the properties
+ * reordered), the create is done. When the lines differ, the repeat may carry an edit made since the
+ * first try (the outbox merges an edit into a create that is still queued), or another device may have
+ * changed the task after the create arrived. Nothing tells the two apart, so nothing is written and
+ * the queue sees `version`: the outbox fetches the server's copy, keeps the local text in the entry,
+ * and the person chooses.
+ *
+ * An update or delete whose `etagOf` gives no etag sends nothing and answers `version`: the queue then
+ * fetches the server's copy and the person chooses, so a change made on another device is never
+ * overwritten unseen.
+ *
+ * One delete finishes without an etag: the delete of a task this device created and never saw
+ * confirmed (the create's answer was lost, then the person deleted the task). The outbox hands such
+ * a delete the texts the create was sent with, as `ownCreates` on the command, and the transport
+ * reads the object first:
+ *
+ * - The address answers "not found": the create never reached the server. The delete is done, and
+ *   no request that changes the server is sent.
+ * - The object has the content lines of one of those texts, in any order, and so its UID too: it is
+ *   this device's own create. It is deleted with the etag just read, so a change another device makes
+ *   between the read and the delete is refused by the server and becomes `version`.
+ * - Anything else (another device edited the task, or another object sits at the address): nothing
+ *   is deleted and the queue sees `version`, as for any delete without an etag.
+ *
+ * The outbox lists the texts of the sends it still remembers: a task edited more than 20 times
+ * while its create waited has lost the oldest ones. A text that is missing from the list can only
+ * turn "mine" into "not mine", which is the conflict card of before.
+ *
+ * The comparison is the one a repeated create uses, and it answers "not mine" whenever the server
+ * stores other lines than it was sent. Radicale adds a `VTIMEZONE` to a task whose date has a `TZID`,
+ * and both Radicale and Stalwart rewrite a lower-case property name in capitals; such a task costs
+ * the person one tap on the conflict, and is never deleted unseen. `etagOf` must answer no etag for
+ * this delete, which it does when the app only knows etags the server gave it. `toIcs` must give the
+ * same text for the same payload each time it is called: a text that changes between calls (a fresh
+ * `DTSTAMP`, say) never matches what was sent.
+ *
+ * The calendar address may be path-only (`/dav/cal/me/tasks/`) for a browser app behind a relay:
+ * `objectUrl` then returns a path, and the writer receives paths only. An address that dot segments,
+ * backslashes or encoded dots would turn into another host or a `//` prefix throws a `RangeError`.
+ *
+ * | Server answer                                                                       | The queue sees                                 |
+ * | ----------------------------------------------------------------------------------- | ---------------------------------------------- |
+ * | 412 on an update or delete                                                          | `version`; the outbox then calls `fetchServer` |
+ * | 412 on a create, when the follow-up read finds no object (it was deleted meanwhile) | `already-exists`                               |
+ * | 404 or 410 on an update                                                             | `not-found`                                    |
+ * | 404 or 410 on a delete                                                              | success                                        |
+ * | network error, timeout, 5xx, 401, 408, 429                                          | `unreachable`: keep the entry, retry later     |
+ * | a 403 without a `DAV:error` condition, and the server lists no privilege to write   | `rejected`: the writes behind it are sent      |
+ * | a 403 without a `DAV:error` condition, and anything else (see below)                | `unreachable`: keep the entry, retry later     |
+ * | a 403 with a `DAV:error` condition (no privilege, data the calendar does not take)  | `rejected`: the writes behind it are sent      |
+ * | other 4xx (not 401, 403, 408, 429), a bad entity id on a create                     | `rejected`, with the message                   |
+ * | 412 on a create, and the object there has the same UID and the same content lines   | success, nothing written                       |
+ * | 412 on a create, and the object there has the same UID and other content            | `version`, nothing written                     |
+ * | 412 on a create, and the object there has another UID (or none)                     | `rejected`: no "Keep mine" can overwrite it    |
+ * | an update or delete with no etag known (`etagOf`)                                   | `version`, no request sent                     |
+ * | a delete with `ownCreates` and no etag: the read answers 404 or 410                 | success, nothing sent that changes the server  |
+ * | a delete with `ownCreates` and no etag: the object is one of the texts sent         | deleted with the etag just read                |
+ * | a delete with `ownCreates` and no etag: the object is anything else                 | `version`, nothing deleted                     |
+ *
+ * A 403 that names no condition does not say who refused. Stalwart 0.16 answers one, with no body
+ * and no header but `Date`, to a write into a calendar shared read-only; a proxy or a single sign-on
+ * whose session ended answers a 403 as well. So after such a 403 the transport asks the server what
+ * this user may do at that address, with the writer's `getPrivileges` (one `PROPFIND` of depth 0 for
+ * `current-user-privilege-set`, on the calendar for a create and on the object for an update or
+ * delete):
+ *
+ * - The server lists the user's privileges, and none of them allows writing (`all`, `write`,
+ *   `write-content`, `bind`, `unbind`): the refusal is final. The queue sees `rejected`, the person
+ *   sees the conflict, and the writes behind it are sent.
+ * - Anything else leaves the write queued as `unreachable`: the question fails (the proxy answers it
+ *   with a 403 or a sign-in page too, or the network is gone), the server gives no such list, the
+ *   list allows writing, or the writer has no `getPrivileges`.
+ *
+ * The question is asked once for each write that met such a 403, never on a timer. A flush stops at
+ * the first write that stays queued, so a signed-out session costs one question per flush; a final
+ * refusal takes the write out of the queue, so it is never asked about again. A relay adapter must
+ * pass on the 403 (as `Forbidden`, or as `Server` with `status: 403`) and implement `getPrivileges`
+ * for this to work; without them the write stays queued as before. A 507 (the account is out of
+ * space) stays `unreachable` like every 5xx: no question tells a full account from a proxy that is
+ * out of space, and the write succeeds once room is made.
+ *
+ * ```ts
+ * const writer = createCalDavClient({ serverUrl, auth }) // or an adapter with the same results
+ * const transport = createCalDavWriteTransport({
+ *   writer,
+ *   calendarUrl,
+ *   urlOf,
+ *   etagOf,
+ *   toIcs,
+ *   toEntity,
+ * })
+ * const outbox = createOutbox({ store, ...transport, lock, canSend })
+ * ```
+ *
  * @module
  */
 
