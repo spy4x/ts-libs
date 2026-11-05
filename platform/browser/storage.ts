@@ -10,6 +10,8 @@
  *    before it is stored, not only on read — an invalid writer is a bug, and a test is where it
  *    should surface. A read that fails validation evicts the entry, because a stored value that no
  *    longer matches its schema is stale, not merely missing.
+ *
+ * @module
  */
 
 import type { Type } from "arktype"

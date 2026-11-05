@@ -14,6 +14,8 @@
  * format.dateTime(note.updatedAt) // "17.10.2026, 15:45"
  * format.relative(note.updatedAt) // "vor 5 Minuten"
  * ```
+ *
+ * @module
  */
 
 import { isValidTimeZone } from "./tz.ts"

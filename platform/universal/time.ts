@@ -4,6 +4,8 @@
  *
  * No host-`TZ`-dependent assertion lives behind these — every one is a pure function of its
  * arguments, and the two date-formatting entry points take an explicit IANA time zone.
+ *
+ * @module
  */
 
 import { parseIsoDate } from "@spy4x/time/date"

@@ -15,6 +15,8 @@
  *   A language without gender writes `masculine` and repeats the same text for every gender.
  * - `nth.<n>` is the n-th such weekday of the month, `nth.-<n>` the n-th from its end, and
  *   `nth.every` every such weekday.
+ *
+ * @module
  */
 export default {
   "freq.daily": "Daily",

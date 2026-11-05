@@ -1,3 +1,17 @@
+/**
+ * The words of `describeRrule` in Brazilian Portuguese. Pass them as the `translation` of a translator:
+ *
+ * ```ts
+ * import en from "@spy4x/time/rrule-words/en"
+ * import ptBR from "@spy4x/time/rrule-words/pt-BR"
+ * import { createTranslator } from "@spy4x/platform/universal/i18n"
+ *
+ * const t = createTranslator({ language: "pt-BR", catalogs: [{ source: en, translation: ptBR }] })
+ * ```
+ *
+ * @module
+ */
+
 /** The words of `describeRrule` in pt-BR, translated from `./en.ts`, which explains every key. */
 export default {
   "freq.daily": "Diariamente",

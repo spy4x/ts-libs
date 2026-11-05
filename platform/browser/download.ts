@@ -6,6 +6,8 @@
  * pairs with the download response `@spy4x/server/export` builds, but the
  * two are separate packages on purpose: a server import must never pull in a
  * DOM type.
+ *
+ * @module
  */
 
 import { type CsvColumn, toCsvBytes } from "../universal/csv.ts"
