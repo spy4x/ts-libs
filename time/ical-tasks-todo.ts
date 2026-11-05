@@ -205,7 +205,7 @@ export interface Todo {
   relatedTo: RelatedTo[]
   /** The RRULE value as written, such as `FREQ=DAILY;INTERVAL=1`. */
   rrule?: string
-  /** Whether the task has an RRULE. The helpers never complete a series by themselves. */
+  /** Whether the task has an RRULE. */
   repeats: boolean
   /**
    * {@link RepeatFrom.Completion} when the task says `X-REPEAT-FROM:COMPLETION`; absent when it

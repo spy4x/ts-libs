@@ -46,7 +46,7 @@ export enum PriorityBand {
 /** A due or start value. */
 export type TaskDate = IcalDateValue
 
-/** A reminder the task carries. Read-only in v1. */
+/** A reminder the task carries; `editTask` changes them. */
 export interface TaskReminder {
   /** The `VALARM` trigger as written, e.g. `-PT15M`: what to show when `alarm` cannot be described. */
   trigger: string

@@ -59,7 +59,7 @@ export type Sleeper = (ms: number) => Promise<void>
  * now the home for this shape. Use that instead in new code. Kept as its own
  * `type Clock = () => number` declaration, not a `= NowFn` reference, for the same
  * contract-rendering reason documented on `platform/rate-limit/memory.ts`'s `Clock`: `deno doc`'s
- * text — which `docs/1.0-contract.md` pins verbatim — renders a reference to another named type
+ * text renders a reference to another named type
  * differently from an inline function type, even though the two are already structurally
  * interchangeable.
  */
