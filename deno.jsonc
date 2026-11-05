@@ -95,10 +95,9 @@
     // Records the demo video in `media/demo/` (vhs, bat, ffmpeg); `--encode` re-encodes the last
     // take only. See `media/demo/recipe/README.md`.
     "demo-video": "deno run --allow-read --allow-write --allow-run --allow-env media/demo/recipe/demo-video.ts",
-    // Regenerates `llms.txt` and `llms-full.txt` (#297): the exports of every entry point, each with
-    // its kind, import specifier and one-sentence JSDoc summary, and every README. See
-    // `infra/scripts/llms.ts`.
-    "llms": "deno run --allow-read --allow-write=llms.txt,llms-full.txt --allow-run=deno infra/scripts/llms.ts",
+    // Regenerates `llms.txt`: the exports of every entry point, each with its kind, import
+    // specifier and one-sentence JSDoc summary. See `infra/scripts/llms.ts`.
+    "llms": "deno run --allow-read --allow-write=llms.txt --allow-run=deno infra/scripts/llms.ts",
     // Applies `infra/jsr-metadata.json` (description, linked GitHub repo, runtime flags) to every
     // `@spy4x/*` package via JSR's package API (#174). `-- --dry-run` prints the requests without
     // sending them and needs no token; without it, `JSR_API_TOKEN` must be set. See

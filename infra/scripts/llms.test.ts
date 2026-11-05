@@ -12,9 +12,7 @@ import {
   FINGERPRINT_PREFIX,
   firstSentence,
   HEADER,
-  loadReadmes,
   renderLlms,
-  renderLlmsFull,
   surfaceFingerprint,
 } from "./llms.ts"
 
@@ -284,7 +282,7 @@ describe("exportSurface", () => {
 
 describe("generated files", () => {
   const root = fromFileUrl(import.meta.resolve("../../"))
-  const fix = "Run `deno task llms` and commit llms.txt and llms-full.txt."
+  const fix = "Run `deno task llms` and commit llms.txt."
 
   it("llms.txt has a four-field line for every entry point and matches the export surface", async () => {
     const text = await Deno.readTextFile(`${root}/llms.txt`)
@@ -310,16 +308,5 @@ describe("generated files", () => {
         `llms.txt is out of date: an export, its JSDoc or an entry point changed. ${fix}`,
       )
     }
-  })
-
-  it("llms-full.txt holds the root README and every package README as they are now", async () => {
-    const entries = await loadEntries(root)
-    const expected = renderLlmsFull(await loadReadmes(root, entries))
-    const actual = await Deno.readTextFile(`${root}/llms-full.txt`)
-    if (actual !== expected) throw new Error(`llms-full.txt is out of date. ${fix}`)
-    expect(actual.startsWith("# README.md\n")).toBe(true)
-    expect(actual).toContain("# net/README.md\n")
-    expect(actual).toContain("# platform/rate-limit/README.md\n")
-    expect(actual).toContain("# server/env-age64/README.md\n")
   })
 })

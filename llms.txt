@@ -3,7 +3,7 @@
 # Search: git grep -n -i '<word>' origin/main -- llms.txt
 # Use: deno add jsr:<package>, then import { <name> } from "<import specifier>".
 # Left out: a type or interface that describes the parameters of a listed function or class Foo, foo or createFoo and is named Foo plus Props, Labels, Options, Config, Deps, Input. Its signature: https://jsr.io/<package>/doc
-# Full READMEs: https://raw.githubusercontent.com/spy4x/ts-libs/main/llms-full.txt
+# Usage: each entry point's module doc, https://jsr.io/<package>/doc/<entry>
 BillingError	interface	@spy4x/billing	A failed request, safe to log: it never carries the secret key.
 BillingErrorCode	type	@spy4x/billing	Why a request to the provider failed.
 BillingEvent	type	@spy4x/billing	A verified webhook delivery, in provider-neutral terms.
@@ -118,7 +118,7 @@ serializeXml	function	@spy4x/caldav/xml	Serialise an element tree as an XML docu
 textContent	function	@spy4x/caldav/xml	All text under `element`, in document order, with nothing trimmed.
 xmlElement	function	@spy4x/caldav/xml	Build an element.
 Canonicalization	type	@spy4x/email	Which canonicalization RFC 6376 §3.4 applies to a header or a body.
-DARK_HTML_SHELL_THEME	constant	@spy4x/email	The look `htmlWrap` had before HtmlShellOptions.theme existed: a dark navy body with light text and an orange brand link, ported as-is from `mig`.
+DARK_HTML_SHELL_THEME	constant	@spy4x/email	The look `htmlWrap` had before HtmlShellOptions.theme existed: a dark navy body with light text and an orange brand link.
 DEFAULT_HTML_SHELL_THEME	constant	@spy4x/email	`htmlWrap`'s default look: a neutral light shell with no product association, so a caller gets a plain, readable letter unless it asks for something else.
 DEFAULT_MAX_HEADER_FIELDS	constant	@spy4x/email	Default DkimVerifyOptions.maxHeaderFields.
 DEFAULT_MAX_MESSAGE_LENGTH	constant	@spy4x/email	Default DkimVerifyOptions.maxMessageLength: 10 MiB of octets, which is above the message size limit relays usually impose and far below anything that takes a noticeable time to canonicalize.
@@ -215,7 +215,7 @@ sha256Base64	function	@spy4x/email/dkim-verify	Deprecated: An internal step of `
 splitMessage	function	@spy4x/email/dkim-verify	Deprecated: An internal step of `verifyDkim`, exported by mistake; it goes in 2.0. Split a raw RFC 5322 message into raw header lines and a raw body.
 verifyDkim	function	@spy4x/email/dkim-verify	Verify a message's DKIM signatures and report one verdict.
 verifyDkimSignatures	function	@spy4x/email/dkim-verify	Verify every `DKIM-Signature` field in the message and return one result each, in the order the fields appear.
-DARK_HTML_SHELL_THEME	constant	@spy4x/email/html	The look `htmlWrap` had before HtmlShellOptions.theme existed: a dark navy body with light text and an orange brand link, ported as-is from `mig`.
+DARK_HTML_SHELL_THEME	constant	@spy4x/email/html	The look `htmlWrap` had before HtmlShellOptions.theme existed: a dark navy body with light text and an orange brand link.
 DEFAULT_HTML_SHELL_THEME	constant	@spy4x/email/html	`htmlWrap`'s default look: a neutral light shell with no product association, so a caller gets a plain, readable letter unless it asks for something else.
 HtmlShellOptions	interface	@spy4x/email/html	Everything the shell interpolates around a body.
 HtmlShellTheme	interface	@spy4x/email/html	The four colours htmlWrap draws the shell in.
@@ -265,7 +265,7 @@ ChatClient	interface	@spy4x/integrations	A configured client.
 ChatJsonRequest	interface	@spy4x/integrations	Options for chatJson.
 ChatJsonResult	type	@spy4x/integrations	Outcome of chatJson.
 ChatMessage	interface	@spy4x/integrations	One message of a conversation.
-Clock	type	@spy4x/integrations	Deprecated: The same type as `NowFn` from `@spy4x/platform/universal/time` (`#71`), which is now the home for this shape. Millisecond time source.
+Clock	type	@spy4x/integrations	Deprecated: The same type as `NowFn` from `@spy4x/platform/universal/time`, which is now the home for this shape. Millisecond time source.
 CloudflarePurgeOptions	interface	@spy4x/integrations	Options for purgeUrls.
 CloudflarePurgeResult	interface	@spy4x/integrations	Outcome of a purge: `output` describes what happened on success, `error` on failure.
 CoinGeckoPlan	type	@spy4x/integrations	CoinGecko's plans differ in host and key header: the free Demo plan, or a paid one.
@@ -354,7 +354,7 @@ createChatClient	function	@spy4x/integrations	Builds a client.
 createCoinGeckoRates	function	@spy4x/integrations	Coin prices from CoinGecko's `GET /coins/{id}/history`, a snapshot at 00:00 UTC of the date asked.
 createDevtoArticle	function	@spy4x/integrations	Posts `article` to Dev.to and returns its id and address.
 createExchangeRateApiRates	function	@spy4x/integrations	Rates from exchangerate-api.com's history endpoint (`GET /v6/{key}/history/{base}/{year}/{month}/{day}`, Pro plan and above).
-createExponentialBackoff	function	@spy4x/integrations	Deprecated: Thin wrapper over `backoffDelay` from "@spy4x/platform/universal/async" (`#71`), kept for this module's existing 1-based-attempt, `Retry-After`-aware call shape. Exponential backoff, clamped and optionally jittered.
+createExponentialBackoff	function	@spy4x/integrations	Deprecated: Thin wrapper over `backoffDelay` from "@spy4x/platform/universal/async", kept for this module's existing 1-based-attempt, `Retry-After`-aware call shape. Exponential backoff, clamped and optionally jittered.
 createFrankfurterRates	function	@spy4x/integrations	Rates from Frankfurter v2 (`GET /v2/rates?date=&base=&quotes=`), which needs no key.
 createUmamiLink	function	@spy4x/integrations	Creates an Umami link and returns it.
 describeTransportError	function	@spy4x/integrations	Describes a transport failure **without** the request URL.
@@ -693,7 +693,7 @@ ItemListJsonLd	interface	@spy4x/platform	A schema.org `ItemList` of the items a 
 JsonLdBlog	interface	@spy4x/platform	The blog a post belongs to, described in full so the post's page stands alone.
 JsonLdPerson	interface	@spy4x/platform	A person named as a post's author, or as its publisher.
 JsonLdPersonNode	interface	@spy4x/platform	A schema.org `Person` or `Organization` node, or a reference to one by `@id`.
-KeyValueStore	interface	@spy4x/platform	Minimal synchronous key/value port: the subset of the DOM `Storage` interface a caller needs to persist a small value, and the one shape `@spy4x/platform/browser/storage`'s `StorageLike` and `@spy4x/realtime`'s `KeyValueStore` both alias (#71).
+KeyValueStore	interface	@spy4x/platform	Minimal synchronous key/value port: the subset of the DOM `Storage` interface a caller needs to persist a small value, and the one shape `@spy4x/platform/browser/storage`'s `StorageLike` and `@spy4x/realtime`'s `KeyValueStore` both alias.
 LlmsTxtDocument	interface	@spy4x/platform	What an `llms.txt` says: the site's name, a one-paragraph summary and its sections.
 LlmsTxtLink	interface	@spy4x/platform	One link in an `llms.txt` section.
 LlmsTxtSection	interface	@spy4x/platform	One `## Section` of an `llms.txt` and its links.
@@ -703,7 +703,7 @@ MILLISECONDS_IN_SECOND	constant	@spy4x/platform	Milliseconds in one second.
 MINUTES_IN_HOUR	constant	@spy4x/platform	Minutes in one hour.
 MIN_PASSWORD_LENGTH	constant	@spy4x/platform	Minimum accepted password length.
 MONTHS_IN_YEAR	constant	@spy4x/platform	Months in one year.
-NowFn	type	@spy4x/platform	Monotonic millisecond clock, function-shaped rather than object-shaped — the home for the `() => number` clock shape (`#71`), which cannot be merged into Clock without breaking a 1.x caller of one shape or the other.
+NowFn	type	@spy4x/platform	Monotonic millisecond clock, function-shaped rather than object-shaped — the home for the `() => number` clock shape, which cannot be merged into Clock without breaking a 1.x caller of one shape or the other.
 ONE_DAY_IN_MILLISECONDS	constant	@spy4x/platform	One day, in milliseconds.
 ONE_DAY_IN_SECONDS	constant	@spy4x/platform	One day, in seconds.
 ONE_HOUR_IN_MILLISECONDS	constant	@spy4x/platform	One hour, in milliseconds.
@@ -756,7 +756,7 @@ UUID_V7_PATTERN	constant	@spy4x/platform	A lower-case UUID of version 7, as uuid
 UnsafeTextOptions	interface	@spy4x/platform	Options of hasUnsafeTextCharacters.
 UuidVersion	type	@spy4x/platform	The version digit of a UUID: `4` is the random one, `7` the time-ordered one.
 ValidationError	type	@spy4x/platform	A rejected input: its kind, one sentence for the user, the issues per field path, and arktype's own errors.
-backoffDelay	function	@spy4x/platform	Caps a raw delay and jitters it — the exponential-backoff arithmetic that used to be implemented twice: once with symmetric jitter around the capped delay (`integrations/retry.ts`'s `createExponentialBackoff`) and once with jitter that only ever shortens the wait (`realtime/backoff.ts`'s `nextBackoffDelay`).
+backoffDelay	function	@spy4x/platform	Caps a raw delay and jitters it: the exponential-backoff arithmetic shared by `integrations/retry.ts`'s `createExponentialBackoff` (symmetric jitter around the capped delay) and `realtime/backoff.ts`'s `nextBackoffDelay` (jitter that only ever shortens the wait).
 blogPostingJsonLd	function	@spy4x/platform	The schema.org `BlogPosting` node for one post, with the fields Google reads for an article: `headline`, `image`, `datePublished`, `dateModified`, `author` and `publisher`, plus `mainEntityOfPage`, `articleSection`, `inLanguage`, `timeRequired` and `isPartOf`.
 breadcrumbItems	function	@spy4x/platform	`itemListElement` for a schema.org `BreadcrumbList`, built from the crumbs the caller stated.
 breadcrumbListJsonLd	function	@spy4x/platform	The complete `BreadcrumbList` node, `@id`-anchored to the page it describes.
@@ -1068,7 +1068,7 @@ pushSubscribeRequestSchema	constant	@spy4x/platform/model	Request body to regist
 pushSubscriptionKeysSchema	constant	@spy4x/platform/model	The two keys a `PushSubscription`'s `getKey` calls produce, base64url-encoded.
 pushSubscriptionSchema	constant	@spy4x/platform/model	A browser's `PushSubscription`, as `JSON.stringify`d by `PushSubscription.toJSON()`.
 pushUnsubscribeRequestSchema	constant	@spy4x/platform/model	Request body to drop a device's push subscription.
-Clock	type	@spy4x/platform/rate-limit	Deprecated: The same type as `NowFn` from `@spy4x/platform/universal/time` (`#71`), which is now the home for this shape. Monotonic millisecond clock.
+Clock	type	@spy4x/platform/rate-limit	Deprecated: The same type as `NowFn` from `@spy4x/platform/universal/time`, which is now the home for this shape. Monotonic millisecond clock.
 DEFAULT_IDLE_MS	constant	@spy4x/platform/rate-limit	How long a bucket survives after it stops being active.
 DenoKvLike	interface	@spy4x/platform/rate-limit	The three `Deno.Kv` operations this adapter needs.
 FORWARDED_HEADERS	constant	@spy4x/platform/rate-limit	The three headers in which a request names the client it came from, and which clientIp reads when told to trust a proxy.
@@ -1138,7 +1138,7 @@ RateLimitKvEntry	interface	@spy4x/platform/rate-limit/kv	One key's recorded wind
 RateLimitStoreOverKv	class	@spy4x/platform/rate-limit/kv	`RateLimitStore` implementation backed by a RateLimitKv.
 createKvStore	function	@spy4x/platform/rate-limit/kv	Build a `RateLimitStore` over any RateLimitKv.
 denoKvBackend	function	@spy4x/platform/rate-limit/kv	Deno KV adapter.
-Clock	type	@spy4x/platform/rate-limit/memory	Deprecated: The same type as `NowFn` from `@spy4x/platform/universal/time` (`#71`), which is now the home for this shape. Monotonic millisecond clock.
+Clock	type	@spy4x/platform/rate-limit/memory	Deprecated: The same type as `NowFn` from `@spy4x/platform/universal/time`, which is now the home for this shape. Monotonic millisecond clock.
 DEFAULT_IDLE_MS	constant	@spy4x/platform/rate-limit/memory	How long a bucket survives after it stops being active.
 MemoryRateLimiter	class	@spy4x/platform/rate-limit/memory	In-process sliding-window limiter.
 RateLimitConsumeResult	interface	@spy4x/platform/rate-limit/memory	Outcome of RateLimitStore.consume.
@@ -1159,7 +1159,7 @@ RequestInfoOptions	interface	@spy4x/platform/request-info	Options for requestInf
 TrustedProxyHeader	type	@spy4x/platform/request-info	A single proxy header clientIp may be told to trust, in place of the default all-three-headers order.
 requestInfoFromContext	function	@spy4x/platform/request-info	Build a RequestInfo from a Hono request: its request id (when the app's middleware set one), its client IP (see the module doc for the trust boundary), and its user agent.
 ByteReader	interface	@spy4x/platform/server	Chunked byte source for streaming hashing.
-ClockPort	type	@spy4x/platform/server	Deprecated: Identical shape to `Clock` from `@spy4x/platform/universal/time` (`#71`), which is now the one home for this shape. Clock injection point, so throttling is testable without sleeping.
+ClockPort	type	@spy4x/platform/server	Deprecated: Identical shape to `Clock` from `@spy4x/platform/universal/time`, which is now the one home for this shape. Clock injection point, so throttling is testable without sleeping.
 CommandSpawner	type	@spy4x/platform/server	A `Deno.Command`-shaped factory: builds a command whose `output()` runs it to completion.
 DEFAULT_FILE_LOCK_WAIT_MS	constant	@spy4x/platform/server	How long a FileLock.runExclusive call waits for an earlier one on the same instance.
 DEFAULT_REMINDER_CATCH_UP_MS	constant	@spy4x/platform/server	How far back the runner catches up unless `catchUpMs` says otherwise: one hour.
@@ -1249,7 +1249,7 @@ LogRecord	type	@spy4x/platform/server/jsonl-logger	One log record: the caller's 
 formatLogLine	function	@spy4x/platform/server/jsonl-logger	Serialise a log record to one line, stamped with the clock at append time.
 parseLogLines	function	@spy4x/platform/server/jsonl-logger	Parse JSONL text, skipping blank lines and reporting the lines that do not parse.
 ByteReader	interface	@spy4x/platform/server/ports	Chunked byte source for streaming hashing.
-ClockPort	type	@spy4x/platform/server/ports	Deprecated: Identical shape to `Clock` from `@spy4x/platform/universal/time` (`#71`), which is now the one home for this shape. Clock injection point, so throttling is testable without sleeping.
+ClockPort	type	@spy4x/platform/server/ports	Deprecated: Identical shape to `Clock` from `@spy4x/platform/universal/time`, which is now the one home for this shape. Clock injection point, so throttling is testable without sleeping.
 FileSystemPort	interface	@spy4x/platform/server/ports	Storage primitives a server helper needs.
 LockHandle	interface	@spy4x/platform/server/ports	A held file lock.
 WalkEntry	interface	@spy4x/platform/server/ports	A single directory entry, as returned by a directory listing.
@@ -1326,11 +1326,11 @@ monotonicUlid	function	@spy4x/platform/tokens	Deprecated: Every new id is a vers
 newOpaqueToken	function	@spy4x/platform/tokens	Mints an opaque token: `raw` goes to the caller, `hash` is what the server stores.
 randomBase64Url	function	@spy4x/platform/tokens	Cryptographically random bytes, base64url, unpadded.
 sha256Hex	function	@spy4x/platform/tokens	SHA-256 digest of one UTF-8 string, as lower-case hex, 64 characters.
-verifyOpaqueToken	function	@spy4x/platform/tokens	Recomputes `sha256Hex(raw + secret)` and compares it to the stored hash via `constantTimeEquals` — never `===`, never `!==` (the shape that made an earlier internal project's compare timing-unsafe).
+verifyOpaqueToken	function	@spy4x/platform/tokens	Recomputes `sha256Hex(raw + secret)` and compares it to the stored hash via `constantTimeEquals` — never `===` or `!==`, which leak timing.
 BackoffJitterMode	type	@spy4x/platform/universal/async	How backoffDelay spreads a capped delay.
 Debounced	interface	@spy4x/platform/universal/async	Trailing-edge debounce.
 RandomSource	type	@spy4x/platform/universal/async	A source of numbers in `[0, 1)`, the shape `Math.random` has.
-backoffDelay	function	@spy4x/platform/universal/async	Caps a raw delay and jitters it — the exponential-backoff arithmetic that used to be implemented twice: once with symmetric jitter around the capped delay (`integrations/retry.ts`'s `createExponentialBackoff`) and once with jitter that only ever shortens the wait (`realtime/backoff.ts`'s `nextBackoffDelay`).
+backoffDelay	function	@spy4x/platform/universal/async	Caps a raw delay and jitters it: the exponential-backoff arithmetic shared by `integrations/retry.ts`'s `createExponentialBackoff` (symmetric jitter around the capped delay) and `realtime/backoff.ts`'s `nextBackoffDelay` (jitter that only ever shortens the wait).
 debounce	function	@spy4x/platform/universal/async	Wrap `fn` in a trailing-edge debounce.
 sleep	function	@spy4x/platform/universal/async	Wait `ms` milliseconds.
 MAX_TICKS	constant	@spy4x/platform/universal/axis	Hard ceiling on generated ticks, and on the iterations the tick loop may spend producing them — see the doc of `ticksForStep` (the private loop behind ticks and stepAxis) for why the loop needs its own bound, not just the output's.
@@ -1452,7 +1452,7 @@ sortTasks	function	@spy4x/platform/universal/ical-tasks-view	Deprecated: Import 
 todayView	function	@spy4x/platform/universal/ical-tasks-view	Deprecated: Import from `@spy4x/tasks/view`. Overdue above today.
 upcomingView	function	@spy4x/platform/universal/ical-tasks-view	Deprecated: Import from `@spy4x/tasks/view`. Tomorrow through UPCOMING_DAYS days after today, one entry per day that has tasks, in date order.
 isRecord	function	@spy4x/platform/universal/is-record	True for a plain keyed object: not `null`, not an array.
-KeyValueStore	interface	@spy4x/platform/universal/key-value-store	Minimal synchronous key/value port: the subset of the DOM `Storage` interface a caller needs to persist a small value, and the one shape `@spy4x/platform/browser/storage`'s `StorageLike` and `@spy4x/realtime`'s `KeyValueStore` both alias (#71).
+KeyValueStore	interface	@spy4x/platform/universal/key-value-store	Minimal synchronous key/value port: the subset of the DOM `Storage` interface a caller needs to persist a small value, and the one shape `@spy4x/platform/browser/storage`'s `StorageLike` and `@spy4x/realtime`'s `KeyValueStore` both alias.
 MarkdownComponent	interface	@spy4x/platform/universal/markdown	A component tag as written in the Markdown: its name, its props and where it is.
 MarkdownHeading	interface	@spy4x/platform/universal/markdown	One heading of a rendered document, for its table of contents.
 MarkdownProblem	interface	@spy4x/platform/universal/markdown	A component tag line that could not be read.
@@ -1633,7 +1633,7 @@ utf8ByteLength	function	@spy4x/platform/universal/text	UTF-8 byte length, i.e. w
 Clock	interface	@spy4x/platform/universal/time	Injectable time source, so formatting and relative times are testable without a frozen host.
 DAYS_OF_WEEK	constant	@spy4x/platform/universal/time	Weekday names indexed Monday-first, matching getDaysOfWeek's bitmask order.
 DayOfWeek	type	@spy4x/platform/universal/time	Weekday identifier, Monday-first.
-NowFn	type	@spy4x/platform/universal/time	Monotonic millisecond clock, function-shaped rather than object-shaped — the home for the `() => number` clock shape (`#71`), which cannot be merged into Clock without breaking a 1.x caller of one shape or the other.
+NowFn	type	@spy4x/platform/universal/time	Monotonic millisecond clock, function-shaped rather than object-shaped — the home for the `() => number` clock shape, which cannot be merged into Clock without breaking a 1.x caller of one shape or the other.
 TimeFormatOptions	interface	@spy4x/platform/universal/time	Locale and zone applied by formatTime and timeAgo.
 TimeFormatter	class	@spy4x/platform/universal/time	Format an instant for display.
 formatTime	function	@spy4x/platform/universal/time	One-off TimeFormatter#format on the host clock.
@@ -1729,7 +1729,7 @@ GapReport	interface	@spy4x/realtime	A non-contiguous sequence, with the cursor a
 GateResult	interface	@spy4x/realtime	Outcome of the reconnect gate — typically `GET /api/auth/me`.
 HandshakeAcknowledgedEvent	interface	@spy4x/realtime	Delivered to `onHandshakeAcknowledged` listeners.
 IDEMPOTENCY_KEY_HEADER	constant	@spy4x/realtime	The header that carries a command's idempotency key.
-KeyValueStore	type	@spy4x/realtime	Deprecated: Use `KeyValueStore` from `@spy4x/platform/universal/key-value-store` — the same three methods, homed there (#71) since this package has no dependency of its own to protect either way and `@spy4x/platform` cannot depend on `@spy4x/realtime` without a publish-time dependency cycle (see #181's `realtime/backoff.ts` importing `@spy4x/platform/universal/async`). Minimal synchronous key/value store.
+KeyValueStore	type	@spy4x/realtime	Deprecated: Use `KeyValueStore` from `@spy4x/platform/universal/key-value-store` — the same three methods, homed there since this package has no dependency of its own to protect either way and `@spy4x/platform` cannot depend on `@spy4x/realtime` without a publish-time dependency cycle (`realtime/backoff.ts` imports `@spy4x/platform/universal/async`). Minimal synchronous key/value store.
 MalformedFrame	interface	@spy4x/realtime	A frame that could not be decoded, or arrived in the wrong direction.
 MalformedFrameHandler	type	@spy4x/realtime	
 ManagedSocket	type	@spy4x/realtime	What this package requires of a socket.
@@ -1766,7 +1766,7 @@ SocketCloseInfo	interface	@spy4x/realtime	Why and how a socket stopped.
 SocketFactory	type	@spy4x/realtime	Creates a socket for a URL.
 SocketObserverPort	interface	@spy4x/realtime	The inbound half of a socket, as a subscription API rather than `on*` properties.
 SocketPort	interface	@spy4x/realtime	The outbound half of a socket.
-SocketState	enum	@spy4x/realtime	Lifecycle state of a socket, mirroring the platform `WebSocket` constants.
+SocketState	enum	@spy4x/realtime	Lifecycle state of a socket: the platform `WebSocket`'s four states, numbered 1-4 (the platform uses 0-3).
 SyncRequest	interface	@spy4x/realtime	What a client tells the server on connect, and what a pull resumes from.
 TimerClock	interface	@spy4x/realtime	Time source and timer factory.
 TimerHandle	interface	@spy4x/realtime	Opaque handle to a scheduled callback.
@@ -1797,7 +1797,7 @@ isRealtimeErrorCode	function	@spy4x/realtime	Whether an unknown value is one of 
 isRetryable	function	@spy4x/realtime	Whether the outcome of a call is unknown or the server was busy, so trying again can help: the answer did not arrive in time, the connection dropped, the server gave up (`timeout`), it refused the call as `rate_limited` before running it, or it is still running the first try of the same command.
 isUnknownOutcome	function	@spy4x/realtime	Whether the outcome of a call is unknown: the network is down (`fetch` rejects with a `TypeError`) or the call is isRetryable.
 mapReadyState	function	@spy4x/realtime	Maps one native `readyState` value to this package's SocketState.
-nextBackoffDelay	function	@spy4x/realtime	Deprecated: Thin wrapper over `backoffDelay` from "@spy4x/platform/universal/async" (`#71`), kept for this module's existing 0-based-attempt, `factor`-parameterised call shape. Delay before retry `attempt`, in milliseconds.
+nextBackoffDelay	function	@spy4x/realtime	Deprecated: Thin wrapper over `backoffDelay` from "@spy4x/platform/universal/async", kept for this module's existing 0-based-attempt, `factor`-parameterised call shape. Delay before retry `attempt`, in milliseconds.
 parsePayload	function	@spy4x/realtime	Checks a request payload with an arktype schema and returns the parsed value.
 sendCommand	function	@spy4x/realtime	Sends a command with a fresh idempotency key and, when the outcome is unknown, sends it again with the same key.
 sendQuery	function	@spy4x/realtime	Sends a query, trying again when the connection is down or the answer is late.
@@ -1973,7 +1973,7 @@ flushOutbox	function	@spy4x/realtime/sync-runner	A flush for createSyncRunner th
 FakeClock	class	@spy4x/realtime/testing	Clock that only moves when a test moves it.
 FakeSocket	class	@spy4x/realtime/testing	In-memory socket: what a test drives, with no network and no WebSocket global.
 FakeSocketFactory	class	@spy4x/realtime/testing	Creates FakeSockets and keeps them, so a test can act as the server.
-KeyValueStore	type	@spy4x/realtime/testing	Deprecated: Use `KeyValueStore` from `@spy4x/platform/universal/key-value-store` — the same three methods, homed there (#71) since this package has no dependency of its own to protect either way and `@spy4x/platform` cannot depend on `@spy4x/realtime` without a publish-time dependency cycle (see #181's `realtime/backoff.ts` importing `@spy4x/platform/universal/async`). Minimal synchronous key/value store.
+KeyValueStore	type	@spy4x/realtime/testing	Deprecated: Use `KeyValueStore` from `@spy4x/platform/universal/key-value-store` — the same three methods, homed there since this package has no dependency of its own to protect either way and `@spy4x/platform` cannot depend on `@spy4x/realtime` without a publish-time dependency cycle (`realtime/backoff.ts` imports `@spy4x/platform/universal/async`). Minimal synchronous key/value store.
 MemoryKeyValueStore	class	@spy4x/realtime/testing	In-memory KeyValueStore.
 RecordingFanout	class	@spy4x/realtime/testing	Fan-out that records what it was asked to deliver.
 createMemoryReadCache	function	@spy4x/realtime/testing	A ReadCache in memory, for tests that have no IndexedDB.
@@ -2067,7 +2067,7 @@ IssuedReset	interface	@spy4x/server/auth/password	A reset code for the app to de
 IssuedVerification	interface	@spy4x/server/auth/password	A verification code for the app to deliver to `email`.
 PASSWORD_METHOD	constant	@spy4x/server/auth/password	The `AuthKey.method` of every key this provider writes.
 PASSWORD_RESET_PURPOSE	constant	@spy4x/server/auth/password	The challenge purpose of a password-reset code.
-PASSWORD_VERIFY_PURPOSE	constant	@spy4x/server/auth/password	The challenge purpose of an address-verification code (#149).
+PASSWORD_VERIFY_PURPOSE	constant	@spy4x/server/auth/password	The challenge purpose of an address-verification code.
 PasswordCredentials	interface	@spy4x/server/auth/password	Input of PasswordSignIn.signUp and PasswordSignIn.signIn.
 PasswordSignIn	interface	@spy4x/server/auth/password	The password provider.
 PasswordSignInError	class	@spy4x/server/auth/password	Thrown by every method of PasswordSignIn on a refusal.
@@ -2630,7 +2630,7 @@ unsubscribeTokenFrom	function	@spy4x/server/subscribers	The unsubscribe token of
 FileSubscriberStore	interface	@spy4x/server/subscribers/file	A SubscriberStore on disk, plus the one-time key backfill.
 LockUnavailableError	class	@spy4x/server/subscribers/file	Raised when another holder owns the lock.
 SubscriberFileError	class	@spy4x/server/subscribers/file	A list or unsubscribe record on disk that this store cannot use.
-createFileSendLog	function	@spy4x/server/subscribers/file	A SendLog kept in one JSON file, ported from antonshubin.com's `lib/newsletter-log.ts` and reading its `newsletter-log.json` unchanged: an array with one object per issue, keyed by `slug`.
+createFileSendLog	function	@spy4x/server/subscribers/file	A SendLog kept in one JSON file, reading antonshubin.com's `newsletter-log.json` unchanged: an array with one object per issue, keyed by `slug`.
 createFileSubscriberStore	function	@spy4x/server/subscribers/file	A SubscriberStore in a JSON file, for a single server or a few processes on one disk.
 AddSubscriberInput	interface	@spy4x/server/subscribers/memory	The input of SubscriberStore.add.
 AddSubscriberResult	type	@spy4x/server/subscribers/memory	What SubscriberStore.add did: stored the address, found it already there, or refused a confirm link issued before the address last unsubscribed.
@@ -3039,4 +3039,4 @@ firstIssueMessage	function	@spy4x/validation/validate	First issue message in a v
 isArkErrors	function	@spy4x/validation/validate	Whether a value is an arktype rejection, without relying on `instanceof`.
 toValidationError	function	@spy4x/validation/validate	Build a ValidationError from arktype's issues.
 validate	function	@spy4x/validation/validate	Parse `value` with an arktype schema exactly once.
-# export surface: sha256 6d1816dbd95068b39a1d6444c532fc893c48e17908c20a6736959bb4723a7c09
+# export surface: sha256 1f3794560338fb2631ed86b0e01e2ca6397cad90cc07f845765d3315502f9b47
