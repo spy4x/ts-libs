@@ -25,6 +25,9 @@
  *   entity whose create the server refused drops the create, as `useTheirs` does, and sends
  *   nothing.
  *
+ * Not the server's job outbox: that is `@spy4x/server/outbox`, which drains an outbox table and
+ * publishes its events.
+ *
  * @module
  */
 

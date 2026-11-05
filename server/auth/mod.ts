@@ -6,6 +6,8 @@
  * The Postgres implementation is `@spy4x/server/auth/postgres`; the in-memory one for unit tests
  * is `@spy4x/server/auth/memory-store`.
  *
+ * Sessions, the session cookie, guards and password hashing are in `@spy4x/server/sign-in`.
+ *
  * @module
  */
 

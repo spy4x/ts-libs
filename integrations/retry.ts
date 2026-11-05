@@ -20,6 +20,7 @@ import {
   backoffDelay,
   type RandomSource as PlatformRandomSource,
 } from "@spy4x/platform/universal/async"
+import type { NowFn } from "@spy4x/platform/universal/time"
 
 /**
  * Computes a delay. `attempt` is 1-based; `retryAfterMs` is set when the
@@ -281,7 +282,7 @@ export interface RetryRunOptions<R> {
     remainingBudgetMs: number,
   ) => Promise<{ failed: boolean; retryAfterMs?: number; value: R }>
   sleep: Sleeper
-  clock: Clock
+  clock: NowFn
   backoff: BackoffFn
 }
 

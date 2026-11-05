@@ -17,7 +17,7 @@
  * binding is a thin wrapper over {@link ClientTransport} and belongs in the component library.
  */
 
-export { type Clock, createSystemClock, type TimerHandle } from "./clock.ts"
+export { type Clock, createSystemClock, type TimerClock, type TimerHandle } from "./clock.ts"
 
 export {
   type BackoffConfig,

@@ -40,7 +40,7 @@ import {
   RequestTimeoutError,
   TransportStatus,
 } from "./client-transport.ts"
-import { type Clock, createSystemClock } from "./clock.ts"
+import { createSystemClock, type TimerClock } from "./clock.ts"
 import {
   isRealtimeErrorCode,
   type RealtimeErrorCode,
@@ -379,7 +379,7 @@ export interface FirstOpenWait {
    */
   maxMs?: number
   /** Schedules the bound. Defaults to the platform timers; a test passes a `FakeClock`. */
-  clock?: Clock
+  clock?: TimerClock
 }
 
 /** Options of {@link createComposedCallPort}. */

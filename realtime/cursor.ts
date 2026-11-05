@@ -14,7 +14,7 @@
  * @module
  */
 
-import type { Clock } from "./clock.ts"
+import type { TimerClock } from "./clock.ts"
 import type { KeyValueStore } from "@spy4x/platform/universal/key-value-store"
 
 /**
@@ -198,7 +198,7 @@ export interface PersistentCursorStoreOptions {
   /** Key prefix, so two clients in one origin do not read each other's cursors. */
   namespace?: string
   /** Time source for {@link PersistentCursorStore.syncedAt}. */
-  clock?: Clock
+  clock?: TimerClock
 }
 
 /**
@@ -215,7 +215,7 @@ export class PersistentCursorStore {
   readonly #tracker = new CursorTracker()
   readonly #storage: KeyValueStore
   readonly #prefix: string
-  readonly #clock: Clock | undefined
+  readonly #clock: TimerClock | undefined
   #loaded = false
   #syncedAt: number | null = null
 

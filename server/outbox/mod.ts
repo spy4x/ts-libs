@@ -2,6 +2,8 @@
  * `@spy4x/server/outbox` — transactional outbox drain: claim, publish, retry.
  * Extracted from `template/libs/server/outbox/+index.ts` (#75).
  *
+ * Not the client's offline queue of writes: that is `@spy4x/realtime/outbox`.
+ *
  * @module
  */
 export {

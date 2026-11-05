@@ -1708,7 +1708,7 @@ ClientMessage	type	@spy4x/realtime	Frames a client sends: liveness, the sync han
 ClientQueryMessage	interface	@spy4x/realtime	A request to read.
 ClientRequestMessage	type	@spy4x/realtime	A request frame, either kind.
 ClientTransport	class	@spy4x/realtime	A reconnecting client transport over an injected socket factory.
-Clock	interface	@spy4x/realtime	Time source and timer factory.
+Clock	type	@spy4x/realtime	Deprecated: Use `TimerClock`. The old name of TimerClock.
 CloseHandler	type	@spy4x/realtime	
 CloseReason	enum	@spy4x/realtime	Why a connection left the registry.
 CommandOptions	interface	@spy4x/realtime	Options for one ClientTransport.command.
@@ -1768,6 +1768,7 @@ SocketObserverPort	interface	@spy4x/realtime	The inbound half of a socket, as a 
 SocketPort	interface	@spy4x/realtime	The outbound half of a socket.
 SocketState	enum	@spy4x/realtime	Lifecycle state of a socket, mirroring the platform `WebSocket` constants.
 SyncRequest	interface	@spy4x/realtime	What a client tells the server on connect, and what a pull resumes from.
+TimerClock	interface	@spy4x/realtime	Time source and timer factory.
 TimerHandle	interface	@spy4x/realtime	Opaque handle to a scheduled callback.
 TransportStatus	enum	@spy4x/realtime	Where the transport is in its lifecycle.
 TransportStatusSnapshot	interface	@spy4x/realtime	Snapshot of transport state, delivered to `onStatus` listeners.
@@ -3038,4 +3039,4 @@ firstIssueMessage	function	@spy4x/validation/validate	First issue message in a v
 isArkErrors	function	@spy4x/validation/validate	Whether a value is an arktype rejection, without relying on `instanceof`.
 toValidationError	function	@spy4x/validation/validate	Build a ValidationError from arktype's issues.
 validate	function	@spy4x/validation/validate	Parse `value` with an arktype schema exactly once.
-# export surface: sha256 f92dc39c591983e7fd7650591c6ff8572739ff8dbdab6127ea27724ec81054dd
+# export surface: sha256 6d1816dbd95068b39a1d6444c532fc893c48e17908c20a6736959bb4723a7c09
