@@ -10,6 +10,42 @@
  *
  * Nothing here touches a framework, imports another package, or mutates arktype's global config.
  * Strictness (`onUndeclaredKey`) is the host application's decision, not a library's side effect.
+ *
+ * ## One outcome shape
+ *
+ * ```ts
+ * type ValidationResult<T extends Type> =
+ *   | { error: ValidationError; data: null }
+ *   | { error: null; data: T["infer"] }
+ *
+ * interface ValidationError {
+ *   type: ErrType.Validation // so a union of store errors narrows on `type`
+ *   message: string // VALIDATION_MESSAGE, one sentence for the user
+ *   errors: ValidationIssues // { "address.city": [{ code, path, message }] }
+ *   description: string // arktype's summary, one issue per line
+ *   details: ArkErrors // arktype's own instance
+ * }
+ * ```
+ *
+ * `errors` files every issue under its path as arktype prints it (`"address.city"`, `"items[1]"`),
+ * each with arktype's `code`, that `path` and a `message` without the path in it, ready to render
+ * next to a form input. An issue with no path — a rule spanning two fields, or a value that is not an
+ * object — goes under `FORM_FIELD` (`"_form"`) with an empty `path`, so it is never dropped.
+ *
+ * `description` is arktype's `summary` — every issue, one per line — and `details` is arktype's own
+ * `ArkErrors` instance, so `flatByPath`, `byPath` and iteration stay available to the caller.
+ * `firstIssueMessage` returns the first path-prefixed message from `details`, and still accepts an
+ * error built by hand with only `description` and `details`.
+ *
+ * ## Recognising an arktype rejection
+ *
+ * `validate` and `schemaIssues` tell a rejection from a parsed value with `isArkErrors`, a shape check
+ * (an array with a `summary` string and a `throw` method), not `instanceof ArkErrors`. Two different
+ * copies of arktype in the dependency tree have two different `ArkErrors` classes, so `instanceof`
+ * across them fails and a rejection built by one copy would be read as a successful value by the
+ * other. Pin arktype to one exact version everywhere it is used to avoid the mismatch in the first
+ * place; `isArkErrors` is the fallback for when that slips.
+ *
  * @module
  */
 
