@@ -1,6 +1,5 @@
 /**
- * Where `createOAuthSignIn` keeps a started flow between `authorizationUrl()` and the callback
- * (#150).
+ * Where `createOAuthSignIn` keeps a started flow between `authorizationUrl()` and the callback.
  *
  * A flow is written once with `put` and read back once with `take`, which deletes it in the same
  * step, so two parallel callbacks with the same `state` never both receive it. Two stores ship:

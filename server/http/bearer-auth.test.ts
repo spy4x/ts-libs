@@ -81,7 +81,7 @@ describe("constantTimeEquals", () => {
     assertEquals(await constantTimeEquals(FAKE_TOKEN, ""), false)
   })
 
-  it("agrees with platform/tokens' constantTimeEqualsText on every input (#71 alias)", async () => {
+  it("agrees with platform/tokens' constantTimeEqualsText on every input", async () => {
     // Behaviour proof that the deprecated alias and its home give the same answer,
     // rather than reading the alias's source: a table wide enough to catch a
     // reintroduced difference (empty, equal, prefix, different lengths, unicode).

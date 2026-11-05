@@ -31,4 +31,6 @@ Each module's usage is in its module doc, shown by `deno doc` and on JSR.
 - [`@spy4x/net/ip`](ip.ts): IP address parsing and CIDR range checks.
 - [`@spy4x/net/redirect-path`](redirect-path.ts): The one check for a "go here next" value that anyone can set, such as `?next=` on a sign-in page.
 - [`@spy4x/net/user-agent`](user-agent.ts): A display label for the device behind a `User-Agent` header.
+
+```
 ```

@@ -42,8 +42,8 @@
  * functions: `universal/money` is `universal/money-core` plus `currencyCode`, and `universal/color`
  * is `universal/color-core` plus `hexColor`. Browser code that only formats, parses or checks imports
  * the core subpath; a server that builds an arktype schema imports the full one. A bundle of
- * `formatMoney` and `isCurrencyCode` from `money-core` is about 2.5 KB; from `money` it was 156 KB
- * (#863). `universal/core-bundle.test.ts` keeps arktype out of both core subpaths.
+ * `formatMoney` and `isCurrencyCode` from `money-core` is about 2.5 KB; from `money` it was 156 KB.
+ * `universal/core-bundle.test.ts` keeps arktype out of both core subpaths.
  *
  * @module
  */

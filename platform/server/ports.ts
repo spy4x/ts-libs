@@ -37,7 +37,7 @@ export interface WalkEntry {
 /**
  * Clock injection point, so throttling is testable without sleeping.
  *
- * @deprecated Identical shape to `Clock` from `@spy4x/platform/universal/time` (`#71`), which is
+ * @deprecated Identical shape to `Clock` from `@spy4x/platform/universal/time`, which is
  * now the one home for this shape. Use that instead in new code.
  */
 export type ClockPort = Clock

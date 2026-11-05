@@ -29,13 +29,13 @@
  * - Every timer is injected, so nothing here sleeps and every deadline below is asserted.
  * - A failed reconnect gate stops the loop instead of being ignored; a gate that throws is retried
  *   on the next backoff step rather than treated as consent.
- * - A hint's sequence is no longer trusted as "received" on arrival (issue #65, finding 1): the
+ * - A hint's sequence is no longer trusted as "received" on arrival: the
  *   position now moves forward only once the pull it triggers has actually succeeded.
- * - A reconnect always pulls every group the client holds a cursor for (issue #65, finding 2): a
+ * - A reconnect always pulls every group the client holds a cursor for: a
  *   quiet group's gap used to surface only when a later hint happened to reveal it, which in a
  *   quiet group could be never.
  * - The reconnect backoff counter resets only once the connection has proven itself, rather than at
- *   the moment the socket merely opens (issue #65, finding 3): a server that accepts and immediately
+ *   the moment the socket merely opens: a server that accepts and immediately
  *   drops every attempt no longer causes a reconnect storm. "Proven" needs two things, not one — a
  *   message must have arrived, *and* the socket must have stayed open for at least `minHealthyMs`
  *   (default: the base backoff delay) — because a single inbound frame is not proof by itself: a
@@ -791,14 +791,14 @@ export class ClientTransport {
    * The socket opened: start the heartbeat, handshake, arm the health deadline, and — on a
    * reconnect — pull every group the client already holds a cursor for.
    *
-   * The attempt counter is deliberately *not* reset here (issue #65, finding 3): a socket that
+   * The attempt counter is deliberately *not* reset here: a socket that
    * merely opened has not been proven healthy yet. Resetting on open is what let a server that
    * accepts and immediately drops every attempt keep every reconnect delay at the base value
    * forever. `#openedAt` and `#healthyTimer` are what {@link #tryResetBackoff} checks against —
    * see that method for why one inbound message is not enough either.
    *
    * A reconnect — as opposed to the transport's first ever connect — also pulls every group the
-   * client holds a cursor for (issue #65, finding 2): a gap opened while the socket was down would
+   * client holds a cursor for: a gap opened while the socket was down would
    * otherwise surface only if a later hint happened to reveal it, which in a quiet group may never
    * happen. `attempt > 0` at this point is exactly "a reconnect": `connect()` starts it at zero and
    * only `#scheduleReconnect` ever increments it, always before the attempt that follows.
@@ -860,7 +860,7 @@ export class ClientTransport {
    * hints are decided in arrival order even when the cursor store is asynchronous.
    *
    * A frame arriving is one half of what proves the connection healthy and resets the backoff
-   * counter (issue #65, finding 3); {@link #tryResetBackoff} is the other half. Any frame counts
+   * counter; {@link #tryResetBackoff} is the other half. Any frame counts
    * toward this, decodable or not: bytes arriving at all is one signal of health, though on its own
    * — see that method — it is not enough.
    */
@@ -932,7 +932,7 @@ export class ClientTransport {
    * Decide one hint against the durable cursor, then fetch before the position moves.
    *
    * A hint carries no payload — only a sequence — so its arrival is never proof the client holds
-   * the data (issue #65, finding 1). Duplicate or older than the cursor → nothing new arrived,
+   * the data. Duplicate or older than the cursor → nothing new arrived,
    * ignored, no pull. Anything else — a genuine gap or a hint that is merely the next sequence — is
    * pulled first, with the range the client still needs; only once that pull has actually succeeded
    * is `cursors.apply` called, which is the one place the durable position moves. A failed pull
@@ -962,7 +962,7 @@ export class ClientTransport {
 
   /**
    * Pull every group the client already holds a cursor for: after a reconnect (issue #65, finding
-   * 2) and after the first handshake (issue #399). A cold client — no cursors yet — has nothing to
+   * 2) and after the first handshake. A cold client — no cursors yet — has nothing to
    * pull; its first fetch is the app's own bootstrap, which this package does not own (see README,
    * "Explicitly not implemented"). The app pulls at the right moment through
    * {@link ClientTransport.onHandshakeAcknowledged}.
@@ -1003,7 +1003,7 @@ export class ClientTransport {
    * On the first open (`isReconnect` false) the handshake's outcome also starts one pull of every
    * held cursor, whether it was acknowledged or not. The server only sends hints to a socket it has
    * adopted, so a change made after the app's start-up read and before the adoption would never
-   * reach the page (issue #399). A lost acknowledgement does not mean the socket was not adopted:
+   * reach the page. A lost acknowledgement does not mean the socket was not adopted:
    * such a socket still receives hints, so the pull runs then too. A first socket that closed before
    * the outcome is skipped, because the reconnect pulls straight away in {@link #handleOpen}. The transport does not de-duplicate: an app that also pulls on
    * its own first open simply pulls twice.
@@ -1047,7 +1047,7 @@ export class ClientTransport {
 
   /**
    * Reset the reconnect backoff to zero, but only once both are true: at least one message has
-   * arrived, and the socket has been open for at least `minHealthyMs` (issue #65, finding 3).
+   * arrived, and the socket has been open for at least `minHealthyMs`.
    *
    * Called from two places, because either condition can be satisfied first: {@link #handleMessage}
    * calls it on every inbound frame, for the case where the socket has already been open long

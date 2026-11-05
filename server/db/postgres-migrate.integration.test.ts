@@ -381,7 +381,7 @@ describe("the Postgres migration runner against a camelCase client", () => {
   // the first with `relation "migrations" already exists` — measured on #77, where the
   // template's API container runs migrations on every start. The alias no longer does the
   // work — every probe is read by column position now, which is what also fixed
-  // `postgres.pascal` below (#137) — but this test still holds and the alias still reads
+  // `postgres.pascal` below — but this test still holds and the alias still reads
   // fine under `postgres.camel`, so it stays as the regression test for #77.
 
   it("skips on the second run instead of failing on relation already exists", async () => {

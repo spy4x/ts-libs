@@ -203,7 +203,7 @@ export function createFakeSql(options: FakeSqlOptions = {}) {
   /**
    * The transaction handle, carrying the properties the real one carries and no others.
    *
-   * Measured against `postgres@3.4.7` and a real server (#115), a transaction handle's own
+   * Measured against `postgres@3.4.7` and a real server, a transaction handle's own
    * keys are `length`, `name`, `prototype`, `types`, `typed`, `unsafe`, `notify`, `array`,
    * `json`, `file`, `savepoint` and `prepare`. It has **no `begin`, no `reserve` and no
    * `listen`** — those are assigned to the root client alone (`src/index.js:69-82`), and

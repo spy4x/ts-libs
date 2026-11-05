@@ -12,7 +12,7 @@
  * ranges. A proxy that runs as a container gets a new address each time it is recreated, so this
  * module trusts it by name instead and follows the name's current address.
  *
- * Ported from `template/apps/api/middlewares/proxy-peer.ts` (spy4x/template#381, #469). What changed
+ * Ported from `template/apps/api/middlewares/proxy-peer.ts`. What changed
  * and why:
  *
  *  - The source awaited a DNS lookup inside the request with no bound: when the resolver hung

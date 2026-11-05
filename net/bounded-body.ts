@@ -326,7 +326,7 @@ export async function readBoundedJson<T = unknown>(
  * allocation. The one cast is on the view only: `readBoundedBody` declares
  * `Uint8Array<ArrayBufferLike>` while `BodyInit` demands `Uint8Array<ArrayBuffer>`.
  *
- * Moved here from `@spy4x/server/http/bounded-body` (#222), which still
+ * Moved here from `@spy4x/server/http/bounded-body`, which still
  * re-exports this same function, so a caller that only needs a form cap does not
  * depend on the whole server package.
  *

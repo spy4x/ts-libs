@@ -2,7 +2,7 @@
  * Transport retry policy, shared by every client in this package.
  *
  * Until `#67`, this file was byte-identical to `ops/notify/retry.ts`: the two
- * packages were owned by different issues (#16 and #18) and deliberately did
+ * packages were owned by different issues and deliberately did
  * not import from a packages directory neither owned, so the module was
  * copied rather than shared, guarded by a test that compared the two files'
  * bytes. `ops/` was removed and its copy of `ntfy.ts`/`healthchecks.ts` moved
@@ -56,7 +56,7 @@ export type Sleeper = (ms: number) => Promise<void>
 /**
  * Millisecond time source.
  *
- * @deprecated The same type as `NowFn` from `@spy4x/platform/universal/time` (`#71`), which is
+ * @deprecated The same type as `NowFn` from `@spy4x/platform/universal/time`, which is
  * now the home for this shape. Use that instead in new code. Kept as its own
  * `type Clock = () => number` declaration, not a `= NowFn` reference, for the same
  * contract-rendering reason documented on `platform/rate-limit/memory.ts`'s `Clock`: `deno doc`'s
@@ -159,11 +159,11 @@ export const parseRetryAfterMs = (value: string | null): number | undefined => {
  * exact code path deterministically.
  *
  * The capping and jittering is `@spy4x/platform/universal/async`'s
- * `backoffDelay` (`#71`): this function still owns the exponential growth
+ * `backoffDelay`: this function still owns the exponential growth
  * formula and the `Retry-After` override, and still returns exactly what it
  * returned before that extraction.
  *
- * @deprecated Thin wrapper over `backoffDelay` from "@spy4x/platform/universal/async" (`#71`),
+ * @deprecated Thin wrapper over `backoffDelay` from "@spy4x/platform/universal/async",
  * kept for this module's existing 1-based-attempt, `Retry-After`-aware call shape. New code
  * should call `backoffDelay` directly.
  */

@@ -13,7 +13,7 @@
  *  - a clone kept past `begin` has to be refused. Against a fake that is a flag; against
  *    a server it is whether the write reaches the transaction that connection is running
  *    next and vanishes with that transaction's rollback;
- *  - helpers kept in a class field must run inside `begin` (#230). Against a fake that
+ *  - helpers kept in a class field must run inside `begin`. Against a fake that
  *    is which handle a statement went through; against a server it is whether the row
  *    survives the rollback.
  *
@@ -313,7 +313,7 @@ async function withSchema(
  * The same list is written down in `services.test.ts`, where the fake has to match it.
  * Keeping it in both files is deliberate: this one is measured against the driver, so a
  * driver upgrade that changes the shape fails here, and the fake's copy is then a comment
- * that no longer matches a test somebody has to look at (#115).
+ * that no longer matches a test somebody has to look at.
  */
 const TRANSACTION_HANDLE_KEYS: string[] = [
   "array",
@@ -336,7 +336,7 @@ describe("DbServiceBase against a real server", () => {
     // and `listen` to the root client alone (`src/index.js:69-82`), and `scope` builds the
     // handle with `Sql(handler)` plus `savepoint` and `prepare` (`src/index.js:251-254`).
     // The fake used to offer `begin` and `reserve` here, which is how two call forms
-    // nobody can write reached the documentation (#115).
+    // nobody can write reached the documentation.
     await withSchema({ max: 1 }, async (sql) => {
       let keys: string[] = []
       let callable: string[] = []

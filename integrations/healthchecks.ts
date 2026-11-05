@@ -21,7 +21,7 @@
  *    concept. `outcome` is now the caller's explicit `"success" | "fail"`.
  *  - The source built its message from backup rows (`buildHealthchecksMessage`),
  *    including a padded table. That was backup-specific and was never ported
- *    here; it lived in `ops/`'s backup module, which is not part of ts-libs (#67).
+ *    here; it lived in `ops/`'s backup module, which is not part of ts-libs.
  *
  * ```ts
  * const client = new HealthchecksClient({ pingUrl })

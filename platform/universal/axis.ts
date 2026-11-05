@@ -39,7 +39,7 @@
  * `stepAxis(min, max, step)` (1.4.0) is for a caller that has already chosen its step: it rounds the
  * bounds outward to multiples of the step and returns them with the ticks between them, rounded by the
  * same rule, so the first and last tick are exactly the bounds. It exists so `preact-components`'
- * `niceScale` can drop its own copy of the tick loop (#201). The same release fixed tick rounding for
+ * `niceScale` can drop its own copy of the tick loop. The same release fixed tick rounding for
  * a step with more than one significant digit: `ticks(0, 10, 4)` returned `[0, 3, 5, 8, 10]` and now
  * returns `[0, 2.5, 5, 7.5, 10]`.
  *

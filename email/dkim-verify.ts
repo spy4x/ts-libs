@@ -84,7 +84,7 @@
  *   body cannot hide a header field, so the header block's stricter refusal has no
  *   reason to apply there — treating a lone CR as a line ending in the body used to
  *   disagree with every RFC-faithful signer on a body that legitimately carries one
- *   and reported it as tampered with (issue #94).
+ *   and reported it as tampered with.
  * - **That the message did not grow an instance of a header the signature covers**
  *   (§5.4.2). A signer lists a name in `h=` as many times as the message carried it,
  *   so an instance left over after the pairing means the message gained one after
@@ -360,7 +360,7 @@
  *   byte set copied from what `String.prototype.trim()` stripped, which missed
  *   several of `trim()`'s own Unicode whitespace characters (found in round 1
  *   review of the pull request that added it) and every control character and
- *   zero-width space RFC 5322 never allows in a name either (issue #106). This
+ *   zero-width space RFC 5322 never allows in a name either. This
  *   also means CR and LF are trimmed now, which is load-bearing rather than a
  *   side effect: RFC 5322 does not let a field name fold before its own colon —
  *   the obsolete syntax it does allow there is plain spaces and tabs,
@@ -379,7 +379,7 @@
  *   name can need more than one kind of disguise at once. A byte outside
  *   0x21-0x7E placed _inside_ a name — `Fr<U+00AD>om:` (a soft hyphen),
  *   `From<NUL>x:` (a NUL) — survives the end-trim untouched and used to slip
- *   past both checks (issue #113), because they bucketed a header purely by its
+ *   past both checks, because they bucketed a header purely by its
  *   exact trimmed name and never noticed that a name they never asked about
  *   could still read, to a lenient mail program, as one they did. A first fix
  *   for that read the trimmed name two further ways, independently over the
@@ -412,7 +412,7 @@
  *
  *   This is also why an mbox file's envelope line —
  *   `From sender@example.com Mon Sep 21 10:00:00 2026`, the line mbox storage
- *   puts in front of every message it holds — is refused (issue #120). That
+ *   puts in front of every message it holds — is refused. That
  *   line is not RFC 5322 at all: it has no colon before its first space, so this
  *   verifier reads it as a header field literally named `From sender@example.com
  *   Mon Sep 21 10` (the first colon sits inside the timestamp), and the loose
@@ -876,7 +876,7 @@ function refuseSignatureHeader(
   // it, so the signature would say nothing about the author either. The name is
   // read through `headerNameMatches`, not a plain end-trimmed comparison, so a
   // line whose only "From" is disguised inside the name still counts as present
-  // here (issue #113) — this check only ever widens what counts as an instance
+  // here — this check only ever widens what counts as an instance
   // to reject; `selectSignedHeaders`' own #113 guard is what actually refuses
   // such a line, whether or not a genuine `From:` sits elsewhere in the message.
   // A line with no colon at all is not a header field this verifier can name —

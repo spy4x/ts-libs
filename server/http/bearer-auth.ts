@@ -9,7 +9,7 @@
  * `redactor`, `formatLogLine`, `AUTHORIZATION_HEADER`, `REDACTED_TOKEN`, and the `TokenVerifier`
  * interface.
  *
- * Moved here from `mcp/auth.ts` when `mcp/` was removed (`#64`): a generic "extract and verify a
+ * Moved here from `mcp/auth.ts` when `mcp/` was removed: a generic "extract and verify a
  * bearer token, never in the environment at module scope, never compared with `===`" helper, with
  * nothing MCP-specific about it. Both sides of the comparison are SHA-256 digested before
  * `timingSafeEqual`, so neither the presented token's length nor a shared prefix is observable by
@@ -23,7 +23,7 @@
  * that reserves a rate-limit slot, verifies, and refunds the slot on a correct token. With an `await`
  * in between, parallel requests with the correct token see each other's reservations and get 429.
  *
- * `constantTimeEquals` is `@deprecated` (`#71`): it is now a thin alias of
+ * `constantTimeEquals` is `@deprecated`: it is now a thin alias of
  * `constantTimeEqualsText` from `@spy4x/platform/tokens`, the one home for an arbitrary-text
  * constant-time compare. Same signature, same behaviour; new code should import the home directly.
  *

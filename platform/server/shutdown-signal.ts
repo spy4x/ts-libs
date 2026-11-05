@@ -5,8 +5,8 @@
  * Windows: the default list works with Deno 2.7.6 or later, where `SIGTERM` fires on logoff and
  * system shutdown.
  *
- * `server/shutdown-signal` turns `SIGINT` and `SIGTERM` into one `AbortSignal` for a worker loop
- * (#187). It aborts once, on the first signal, with a `ShutdownSignalError` whose `signal` names it,
+ * `server/shutdown-signal` turns `SIGINT` and `SIGTERM` into one `AbortSignal` for a worker loop.
+ * It aborts once, on the first signal, with a `ShutdownSignalError` whose `signal` names it,
  * and removes every listener it added, so a second Ctrl+C ends the process the default way. A parent
  * `signal` option lets a caller that stops for another reason remove the listeners too. The listener
  * pair is injectable, so the tests fire fake signals. A listener whose removal throws does not stop

@@ -1,7 +1,7 @@
 /**
  * Double opt-in mailing lists: signed confirm and unsubscribe links that keep the address out of
  * the URL, a store port with the replay rule, and the subscribe, confirm and unsubscribe flows. The
- * app keeps its wording, pages and routes. Ported from spy4x/antonshubin.com (#369).
+ * app keeps its wording, pages and routes. Ported from spy4x/antonshubin.com.
  *
  * `createSubscriptionCrypto`, `CONFIRM_TTL_MS`, the `SubscriberStore` port, the flows
  * `requestSubscription`, `previewConfirmation`, `confirmSubscription`, `previewUnsubscribe` and
@@ -9,7 +9,7 @@
  * `sendIssue` and the `SendLog` port; `createMemorySubscriberStore` and `createMemorySendLog` in
  * `server/subscribers/memory`, `createFileSendLog` in `server/subscribers/file`; `createPostgresSubscriberStore`,
  * `createPostgresSendLog` and `SUBSCRIBERS_POSTGRES_SCHEMA` in `server/subscribers/postgres`. Ported from
- * spy4x/antonshubin.com (#369).
+ * spy4x/antonshubin.com.
  *
  * A double opt-in mailing list. A visitor enters an address, gets a confirm link, and joins the list
  * only after clicking it. Every mail after that carries an unsubscribe link that holds no address.

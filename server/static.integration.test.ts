@@ -1,5 +1,5 @@
 /**
- * `server/static.ts` against a real disk, through `denoStaticFs` (#58).
+ * `server/static.ts` against a real disk, through `denoStaticFs`.
  *
  * The unit tier proves the module's own streaming and close logic — including
  * closing the handle on a full read, a client cancel and a failed read — with a

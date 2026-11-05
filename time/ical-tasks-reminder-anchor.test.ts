@@ -1,4 +1,4 @@
-// A patch must not remove the date a remaining relative reminder counts from (#451). Hand-written
+// A patch must not remove the date a remaining relative reminder counts from. Hand-written
 // documents, one per case; the clock is passed in.
 
 import { assert, assertEquals } from "@std/assert"

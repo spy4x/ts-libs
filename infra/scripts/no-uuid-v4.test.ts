@@ -1,4 +1,4 @@
-// No package creates a UUID version 4 (#555). An id is `uuidV7()` from
+// No package creates a UUID version 4. An id is `uuidV7()` from
 // `@spy4x/platform/universal/uuid`; a value that works as a secret, or an id other people see that
 // must not show when it was made, is `randomBase64Url()` from `@spy4x/platform/tokens`. This test
 // reads every source and document of every package and fails on a call that makes a version 4 id,

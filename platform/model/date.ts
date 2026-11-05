@@ -10,11 +10,11 @@
  * `string.date.iso.parse` checks the string's *shape* against the ISO 8601 grammar and then parses
  * it with `new Date(...)`. `new Date` silently rolls an out-of-range day or month into the next one
  * instead of refusing it — `new Date("2026-02-30")` is 2 March 2026, not an error — so the source
- * accepted and stored a date that was never on any calendar (#131). V8 also reads two shapes the
+ * accepted and stored a date that was never on any calendar. V8 also reads two shapes the
  * grammar allows as the wrong date: an ordinal date (`"2024-005"`, 5 January, becomes 1 May) and a
- * year with a sign (`"-2024-01-01"` becomes 2024, `"+0099-12-31"` becomes 1999) (#136). See
+ * year with a sign (`"-2024-01-01"` becomes 2024, `"+0099-12-31"` becomes 1999). See
  * {@link isRealCalendarDate} for how each is refused. A date-time string with a time but no offset
- * and no `Z`, such as `"2024-02-29T10:00:00"`, is refused too (#135): the ECMA-262 date-time
+ * and no `Z`, such as `"2024-02-29T10:00:00"`, is refused too: the ECMA-262 date-time
  * production reads it in the host's own time zone, so the same string names a different instant on
  * a laptop set to one zone and a server set to another. A year, a year and month, or a `YYYY-MM-DD`
  * date — with no time part at all — is read as UTC midnight by the same specification and stays
@@ -95,9 +95,9 @@ function isRealCalendarDate(iso: string): boolean {
  * An ISO 8601 date string naming a real calendar date, parsed to a `Date`.
  *
  * Two `.narrow` steps, each with its own message: the first refuses a time with no `Z` and no
- * numeric offset (#135 — see `ISO_TIME_WITHOUT_OFFSET`), because that string names no single
+ * numeric offset, because that string names no single
  * instant rather than naming the wrong one; the second, {@link isRealCalendarDate}, refuses a
- * calendar date that does not exist or that V8 would misread (#131, #136). Kept separate so a
+ * calendar date that does not exist or that V8 would misread. Kept separate so a
  * caller reading the message can tell "add a time zone" from "this date does not exist" — merging
  * them into one `.narrow` would report only whichever ran last.
  */

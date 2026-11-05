@@ -5,7 +5,7 @@
  *
  * The account model, sign-in keys and challenges (`AuthStore`) are in `@spy4x/server/auth`.
  *
- * The building blocks a sign-in method stands on, extracted from the template's API (#75). Entry point:
+ * The building blocks a sign-in method stands on, extracted from the template's API. Entry point:
  * `sign-in/mod.ts`. Nothing here imports from `server/auth/`.
  *
  * | File            | What it is                                                                          |

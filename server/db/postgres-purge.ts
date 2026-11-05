@@ -9,7 +9,7 @@
  * The table listing here is read through `.values()` rather than by that or any other
  * name, so it survives `postgres.camel`, `postgres.pascal`, `postgres.kebab` or a custom
  * `transform.column.from` alike, including one that maps two different columns to the same
- * name; see `expectRowShape` in `postgres-migrate.ts` (#137).
+ * name; see `expectRowShape` in `postgres-migrate.ts`.
  *
  * **A table or schema name the same transform would rewrite is refused before any `DROP`
  * runs**, with {@link PostgresIdentifierTransformError}, whether `sql` is the pool client, a
@@ -106,7 +106,7 @@ export interface PurgeOptions {
  * `identifierRewrittenBy` in `postgres-migrate.ts`.
  *
  * **The listing is read through `.values()`, not by the `tablename` alias written above**
- * (#137) — see `expectRowShape` in `postgres-migrate.ts`. `postgres.camel` leaves a bare
+ * — see `expectRowShape` in `postgres-migrate.ts`. `postgres.camel` leaves a bare
  * lower-case word like `tablename` unchanged, but `postgres.pascal` upper-cases its first
  * letter regardless; a name-keyed read left `row.tablename` `undefined` on a
  * `postgres.pascal` client and the identifier splice below threw rather than dropping

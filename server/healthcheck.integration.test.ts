@@ -1,5 +1,5 @@
 /**
- * The healthcheck probe against a real TCP listener (#58).
+ * The healthcheck probe against a real TCP listener.
  *
  * `healthcheck.test.ts` drives `probeLoopback` with an injected `ProbeConnector`,
  * which proves the decision logic but never opens a socket. This file starts a

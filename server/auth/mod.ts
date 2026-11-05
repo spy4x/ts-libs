@@ -8,7 +8,7 @@
  *
  * Sessions, the session cookie, guards and password hashing are in `@spy4x/server/sign-in`.
  *
- * The sign-in account model and its store (#57): a minimal user, the keys a user signs in with, and
+ * The sign-in account model and its store: a minimal user, the keys a user signs in with, and
  * guess-counted challenges. The sign-in providers (password, a one-time code by email, OAuth2 and
  * OpenID Connect) are built on it; sessions, the cookie and password hashing come from
  * `server/sign-in`.

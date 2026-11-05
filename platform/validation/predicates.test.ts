@@ -169,7 +169,7 @@ Deno.test("time zone probe accepts real IANA zone names and rejects unknown, emp
   }
 })
 
-Deno.test("isValidTimeZoneName agrees with @spy4x/time/tz's isValidTimeZone (#71)", () => {
+Deno.test("isValidTimeZoneName agrees with @spy4x/time/tz's isValidTimeZone", () => {
   // isValidTimeZoneName is a deprecated call-through to isValidTimeZone. This checks that the two
   // agree on every case either suite uses, plus a lowercase zone; it cannot tell a call-through
   // from a copied body, so it guards behaviour, not the delegation.

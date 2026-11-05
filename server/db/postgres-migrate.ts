@@ -310,7 +310,7 @@ export function expectRowShape(context: string, row: unknown, expectedLength: nu
  * **One run at a time per instance.** {@link withLock} pins a connection and points this
  * instance's statements at it for the length of the run, so a second run started on the
  * *same instance* while the first is still going would share that connection. That is now
- * refused with {@link PostgresMigrationRunInProgressError} rather than deadlocking (#109).
+ * refused with {@link PostgresMigrationRunInProgressError} rather than deadlocking.
  * Two concurrent runs are two instances, which is also what two application instances are.
  *
  * **A table or schema name the client's own transform would rewrite is refused at
@@ -378,7 +378,7 @@ export class PostgresMigrationDriver implements MigrationDriver {
    * two ran at the same time and one of them crashed inside Postgres's own catalogue.
    * {@link resolvedTableRef} has the one case the resolution cannot cover.
    *
-   * **The wait is bounded** (#109). `pg_try_advisory_lock` in a retry loop rather than
+   * **The wait is bounded**. `pg_try_advisory_lock` in a retry loop rather than
    * `pg_advisory_lock`, which waits for ever: a second runner starting during a migration
    * should apply nothing and carry on, but one stuck runner used to stop every other
    * instance from starting, with nothing in the log to say why. After
@@ -396,7 +396,7 @@ export class PostgresMigrationDriver implements MigrationDriver {
    * nothing is applied twice because the run does not continue. What the caller sees is an
    * uncaught `TypeError: Cannot read properties of null (reading 'write')` raised from
    * inside `postgres@3.4.7/src/connection.js:250` on a timer the driver owns, not a
-   * rejected promise this method could wrap. Written down rather than dressed up (#109).
+   * rejected promise this method could wrap. Written down rather than dressed up.
    */
   async withLock<T>(run: () => Promise<T>): Promise<T> {
     // Before the first `await`, so two runs started together cannot both pass it.

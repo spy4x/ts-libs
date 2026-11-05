@@ -6,7 +6,7 @@
  * value produces the exact same ciphertext on a re-run (no diff noise in git) and a changed value
  * touches only its own line.
  *
- * Extracted from two existing copies (#173): rostok's `cli/age.ts`/`cli/encrypt.ts` (worktree-aware
+ * Extracted from two existing copies: rostok's `cli/age.ts`/`cli/encrypt.ts` (worktree-aware
  * key lookup, the occurrence-matched byte-stable renderer) and the template's
  * `infra/scripts/env/age.ts` (`export KEY=` support, rejecting unsupported syntax instead of
  * silently mangling it). The cryptography itself is new: both sources shelled out to the `age`

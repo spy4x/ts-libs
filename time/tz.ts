@@ -326,7 +326,7 @@ function requiredPart(
 /**
  * True when `tz` is a zone this runtime's tzdata knows.
  *
- * The one home for this probe (#71): `@spy4x/platform/validation/predicates`'s
+ * The one home for this probe: `@spy4x/platform/validation/predicates`'s
  * `isValidTimeZoneName` delegates here and is `@deprecated`.
  */
 export function isValidTimeZone(tz: string): boolean {

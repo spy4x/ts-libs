@@ -1,5 +1,5 @@
 /**
- * The Postgres `AuthStore` and `SessionStore` against a real server (#57 finding 5, #74).
+ * The Postgres `AuthStore` and `SessionStore` against a real server.
  *
  * The same contract suite the memory store passes runs here, so every rule a provider's unit tests
  * rely on is shown to hold in Postgres too. The tests after it need a real database: the stored
@@ -518,7 +518,7 @@ describe("AUTH_POSTGRES_SESSION_DEVICES_UPGRADE", () => {
     }))
 })
 
-describe("the stores inside the caller's transaction (#161)", () => {
+describe("the stores inside the caller's transaction", () => {
   /** Thrown by a test to roll its transaction back. */
   class Abort extends Error {}
 

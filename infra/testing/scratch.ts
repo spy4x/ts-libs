@@ -1,6 +1,6 @@
 /**
  * A throw-away folder on a real filesystem, for the rare integration test that needs
- * one instead of a fake (#73).
+ * one instead of a fake.
  *
  * `Deno.makeTempDir()` stays refused in the integration tier: it writes outside
  * `.volumes`, and the tier's `--allow-write` grant covers only `.volumes`. This module

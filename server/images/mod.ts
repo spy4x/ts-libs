@@ -1,5 +1,5 @@
 /**
- * `@spy4x/server/images` — turns an uploaded photo into images a public page can show (#762):
+ * `@spy4x/server/images` — turns an uploaded photo into images a public page can show:
  * upright, with every metadata block stripped (EXIF, XMP, GPS, ICC), as AVIF and WebP at a few
  * widths for a `srcset` (`responsiveImage` of `@spy4x/platform/universal/srcset`).
  *

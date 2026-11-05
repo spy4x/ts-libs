@@ -46,7 +46,7 @@
  * The retry mechanism is `retry.ts`, shared by `ntfy.ts`, `healthchecks.ts` and `webhooks.ts`'s
  * callers. It used to exist twice — a byte-identical copy lived in `ops/notify/retry.ts`, guarded by
  * a test that compared the two files — because the two packages were owned by different issues and
- * had to stay file-disjoint. That constraint went away with `ops/` (`#67`): the ops copy and its drift
+ * had to stay file-disjoint. That constraint went away with `ops/`: the ops copy and its drift
  * test are deleted, and this is now the only copy in the repo.
  *
  * Transient statuses are `429` and `5xx`; every other `4xx` is permanent. `Retry-After` in the
@@ -71,7 +71,7 @@
  *   clients, not the wiring around them.
  * - **A webhook router.** `verifyWebhookRequest` verifies. Routing, idempotency and retry queues are
  *   the caller's job.
- * - **Backup, deploy, env tooling.** `ops/` was removed from ts-libs (`#67`); a project built from the
+ * - **Backup, deploy, env tooling.** `ops/` was removed from ts-libs; a project built from the
  *   template gets the equivalent scripts from its own `infra/scripts/`.
  * - **Email and SMTP**, `server/email`.
  *

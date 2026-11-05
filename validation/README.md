@@ -11,7 +11,6 @@ deno add jsr:@spy4x/validation
 
 Runs on: shared — both the server and a browser bundle. Its sources use no `Deno.*` API.
 
-
 ## Modules
 
 - [`@spy4x/validation`](mod.ts): both halves below, plus `fieldErrors` for the wire.

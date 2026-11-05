@@ -1,5 +1,5 @@
 /**
- * The object-store smoke test of the integration tier (#74).
+ * The object-store smoke test of the integration tier.
  *
  * `server/storage.test.ts` drives `S3Storage` with an injected `fetch`, so the
  * presigned URLs it asserts have never been shown to a server that checks a

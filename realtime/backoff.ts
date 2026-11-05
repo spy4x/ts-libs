@@ -9,7 +9,7 @@
  * The `random` source is injected, so a test asserts the cap and the jitter band without waiting.
  *
  * The capping and jittering delegates to `@spy4x/platform/universal/async`'s `backoffDelay`
- * (`#71`): this module still owns the growth formula (`baseMs * factor ** attempt`) and the
+ * : this module still owns the growth formula (`baseMs * factor ** attempt`) and the
  * 0-based attempt numbering, and `nextBackoffDelay` still returns exactly what it returned before
  * that extraction.
  */
@@ -55,7 +55,7 @@ export interface BackoffOptions extends Partial<BackoffConfig> {
  * The uncapped value is `baseMs × factor ** attempt`; it is clamped to `maxMs` *before* jitter is
  * applied and clamped again after, so the cap holds for every value the random source can return.
  *
- * @deprecated Thin wrapper over `backoffDelay` from "@spy4x/platform/universal/async" (`#71`),
+ * @deprecated Thin wrapper over `backoffDelay` from "@spy4x/platform/universal/async",
  * kept for this module's existing 0-based-attempt, `factor`-parameterised call shape. New code
  * should call `backoffDelay` directly.
  */

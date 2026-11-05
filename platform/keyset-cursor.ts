@@ -2,7 +2,7 @@
  * Keyset pagination cursor: an opaque, signed page key bound to the scope it was issued for.
  *
  * Ported from spy4x/seed's `libs/server/groups/group-list-cursor.ts` and
- * `libs/server/notes/note-list-cursor.ts`, which were near-copies (#314). A cursor is a
+ * `libs/server/notes/note-list-cursor.ts`, which were near-copies. A cursor is a
  * {@link createSignedPayloadCodec} token under the cursor's purpose, so this module only adds what a
  * list endpoint needs on top of it: a default `{ updatedAt, id }` page key, scope fields bound as the
  * signed context, a signing key derived from one master secret per purpose, and a single error type.
@@ -41,7 +41,7 @@
  * The codec takes the master secret (usually the session-cookie secret) and signs with
  * `deriveCursorSecret(secret, purpose)`, which is `deriveSecret` from `./tokens` under the label
  * `spy4x.keyset-cursor.v1:<purpose>`, so each list has its own key and none is the raw master. Ported
- * from spy4x/seed's group-list and note-list cursors (#314).
+ * from spy4x/seed's group-list and note-list cursors.
  *
  * @module
  */

@@ -16,7 +16,7 @@
  * ## A deferred constraint's failure at implicit commit is not reported on a single statement
  *
  * **Do not declare a `DEFERRABLE INITIALLY DEFERRED` constraint and write to it through anything but
- * `sql.begin`** (#134). The pinned driver, `postgres@3.4.7`, resolves a single statement's promise
+ * `sql.begin`**. The pinned driver, `postgres@3.4.7`, resolves a single statement's promise
  * from the server's `CommandComplete` message, which arrives _before_ the implicit commit that
  * actually checks a deferred constraint. When that commit then fails, the `ErrorResponse` it carries
  * arrives on a query the driver has already resolved and cleared, so it has nothing left to reject —
@@ -68,7 +68,7 @@
  * the driver recognises a fragment, a `json` or `array` value or a query object by its class, and a
  * wrapper would not be one.
  *
- * **Two moments other than a call through the clone are checked too** (#108), because a call through
+ * **Two moments other than a call through the clone are checked too**, because a call through
  * the clone is not the only way a statement reaches the transaction's connection.
  *
  * A `postgres` query is lazy: nothing is sent when it is built, and `then`, `catch`, `finally`,
@@ -291,7 +291,7 @@ export function buildPostgresOptions(
  * `DbServiceBase.connect` exists.
  *
  * **Do not declare a `DEFERRABLE INITIALLY DEFERRED` constraint and write to it through
- * anything but `sql.begin`** (#134). The pinned driver, `postgres@3.4.7`, resolves a
+ * anything but `sql.begin`**. The pinned driver, `postgres@3.4.7`, resolves a
  * single statement's promise from the server's `CommandComplete`, which arrives before
  * the implicit commit that actually checks a deferred constraint; when that commit then
  * fails, the error has no query left to reject and the promise reports success —

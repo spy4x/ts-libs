@@ -117,7 +117,7 @@ export function isHoneypotFilled(value: string): boolean {
  * True when `Intl.DateTimeFormat` accepts `value` as a time zone.
  *
  * The copy of this probe formerly here was merged into `@spy4x/time/tz`'s {@link isValidTimeZone}
- * (#71); this is now a deprecated call-through.
+ * ; this is now a deprecated call-through.
  *
  * @deprecated Use `isValidTimeZone` from `@spy4x/time/tz`.
  */

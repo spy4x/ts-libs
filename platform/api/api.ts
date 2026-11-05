@@ -19,7 +19,7 @@
  * `init` does not get to overwrite by a later spread — every other `init` field (`credentials`,
  * `signal`, `method`, `body`, …) still reaches `fetch` exactly as the caller set it.
  *
- * **Bug fixed at extraction time (#132).** The source always set the default `content-type` to
+ * **Bug fixed at extraction time.** The source always set the default `content-type` to
  * `application/json`, even when `body` was a `FormData`: the request reached the server labelled
  * as JSON, without a multipart boundary, and the caller had no way to make `fetch` choose the right
  * type. The default is now applied only when `body` is a string or absent; any other body shape

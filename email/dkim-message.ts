@@ -67,7 +67,7 @@ function locateHeaderEnd(raw: string): { headerEnd: number; sepLen: number } {
 
 /**
  * A code point this file treats as hiding a header line break the way a lone
- * CR does (issue #121), and everything {@link FORBIDDEN_HEADER_BYTES} and
+ * CR does, and everything {@link FORBIDDEN_HEADER_BYTES} and
  * {@link FORBIDDEN_MULTIBYTE_SEQUENCES} are generated from — round 2 review
  * asked for the table to be generated from this list rather than hand-listed
  * byte sequences, after finding gaps a hand-picked list kept leaving: round 1
@@ -256,7 +256,7 @@ function matchesSequenceAt(
 /**
  * Scan a header block for {@link FORBIDDEN_HEADER_BYTES} and
  * {@link FORBIDDEN_MULTIBYTE_SEQUENCES}, byte by byte with no decoding step
- * for the single-byte set (issue #121). `end` is the same header-block
+ * for the single-byte set. `end` is the same header-block
  * boundary {@link refuseHeaderLineEndings} computes and passes in, so the
  * two checks can never disagree about where the block stops, and the scan
  * runs the full block rather than stopping at the first line ending — the

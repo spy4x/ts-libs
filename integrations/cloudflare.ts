@@ -1,8 +1,8 @@
 /**
  * Cloudflare cache purge by URL.
  *
- * Ported from `purgeCloudflare()` in `antonshubin.com/scripts/cloudflare-purge.ts`
- * (spy4x/antonshubin.com#300). The app-specific parts stay in the app: waiting for a
+ * Ported from `purgeCloudflare()` in `antonshubin.com/scripts/cloudflare-purge.ts`.
+ * The app-specific parts stay in the app: waiting for a
  * build id, mapping `static/` paths to URLs, and the git diff.
  *
  * Behaviour:

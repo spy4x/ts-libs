@@ -1,6 +1,6 @@
 /**
  * The attributes of a responsive `<img>` or `<picture>`, from the widths an image is stored at
- * (#762), such as the AVIF and WebP variants `processImage` of `@spy4x/server/images` makes.
+ * , such as the AVIF and WebP variants `processImage` of `@spy4x/server/images` makes.
  *
  * ```tsx
  * const image = responsiveImage(variants, "(min-width: 60rem) 50vw, 100vw")

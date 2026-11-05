@@ -843,7 +843,7 @@ export async function removeSqliteFiles(
  * (`<database>.migrate.lock`, `Deno.FsFile.lock()`) would not, because the kernel releases
  * it when the process dies.
  *
- * **That file lock is deliberately not built** (#110). It needs write permission next to
+ * **That file lock is deliberately not built**. It needs write permission next to
  * the database, it does not apply to `:memory:`, and no project this library serves runs
  * two processes against one SQLite file — a SQLite deployment here is one process with
  * Litestream behind it. Building it now would add a permission requirement and a second

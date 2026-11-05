@@ -107,7 +107,7 @@ export interface FormatTimeOptions {
 /**
  * Injectable time source, so formatting and relative times are testable without a frozen host.
  *
- * The one home for the object-shaped clock (`#71`): `platform/server/ports.ts`'s `ClockPort` is
+ * The one home for the object-shaped clock: `platform/server/ports.ts`'s `ClockPort` is
  * now an alias of this type, and `realtime/clock.ts`'s `TimerClock` extends it with timer methods.
  * `platform/rate-limit/memory.ts` also used to export its own function-shaped clock
  * (`() => number`) under the same names, `Clock`/`systemClock` — a different shape that this
@@ -125,7 +125,7 @@ export const systemClock: Clock = { now: () => Date.now() }
 
 /**
  * Monotonic millisecond clock, function-shaped rather than object-shaped — the home for the
- * `() => number` clock shape (`#71`), which cannot be merged into {@link Clock} without breaking
+ * `() => number` clock shape, which cannot be merged into {@link Clock} without breaking
  * a 1.x caller of one shape or the other. `platform/rate-limit/memory.ts`'s `Clock` is now the
  * same type as this one.
  */

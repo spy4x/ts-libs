@@ -1,9 +1,9 @@
 /**
  * `@spy4x/server/kv` — a Redis-backed key-value store, scoped to a caller-supplied
- * key prefix. Extracted from `template/libs/server/kv/+index.ts` (#75).
+ * key prefix. Extracted from `template/libs/server/kv/+index.ts`.
  *
  * `RedisKvStore`. A small wrapper over `@iuioiua/redis`'s `RedisClient`: `get`, `set` with a TTL,
- * `take`, `del`, `eval`, `reset`, `close`. Extracted from `template/libs/server/kv/+index.ts` (#75);
+ * `take`, `del`, `eval`, `reset`, `close`. Extracted from `template/libs/server/kv/+index.ts`;
  * `financy`'s copy differs from the template's by one import line (its own module alias for the cache
  * interface) and was not otherwise consulted. It runs on Deno, Node and Bun: the socket comes from
  * `@spy4x/platform/server/tcp`'s `connectTcp` (`Deno.connect` on Deno, `node:net` on Node and Bun).
@@ -20,7 +20,7 @@
  * server later, the next reconnect fails with a `RedisKvStoreConnectionError` whose `cause` is that
  * `RedisKvStoreAuthError`.
  *
- * **Structurally compatible with `ICacheStorage`.** `@spy4x/platform/cache`'s `ICacheStorage` (#125)
+ * **Structurally compatible with `ICacheStorage`.** `@spy4x/platform/cache`'s `ICacheStorage`
  * names `server/kv` in its own doc as the interface's Redis implementation, briefed against these exact
  * signatures: `get(key): Promise<string | null>`, `set(key, value: string, ttlSec): Promise<void>`,
  * `del(key): Promise<void>`, `reset(): Promise<void>`. This module does not import
@@ -106,7 +106,7 @@
  * primitive should not write to stdout on a caller's behalf. The caller decides whether connecting is
  * worth logging.
  *
- * **Reconnects itself once the connection dies (#158).** Earlier, a dead connection was permanent:
+ * **Reconnects itself once the connection dies.** Earlier, a dead connection was permanent:
  * every method recorded the failure once and threw `RedisKvStoreConnectionError` forever after, even
  * once Redis came back. Nothing watches the connection on its own; a dropped socket is noticed only
  * when a call next tries to use it. A call that finds the connection already recorded dead opens a
@@ -117,7 +117,7 @@
  * share one in-flight reconnect instead of each opening its own socket. `close()` racing a reconnect
  * still leaves no socket open.
  *
- * **Resends a command once after reconnecting (#169).** The call whose own write or read fails on a
+ * **Resends a command once after reconnecting.** The call whose own write or read fails on a
  * dead connection (not an error reply from Redis) reconnects and sends its command once more on the
  * fresh connection, so a Redis restart no longer costs the first call after it. A resend is not free
  * when the first send did reach Redis before the socket died: `GET`, `SCAN` and `CLIENT ID` only read,
@@ -128,7 +128,7 @@
  * with the failure as `cause`. While Redis is down, every call fails after one bounded attempt, with
  * no retry loop. An error reply such as `WRONGTYPE` is never resent.
  *
- * **Bounds every command (#172).** A command on an open connection waits at most 5 seconds for its
+ * **Bounds every command.** A command on an open connection waits at most 5 seconds for its
  * reply. When Redis freezes (`docker pause`, a stuck host), the store closes the connection, records
  * the failure and throws `RedisKvStoreConnectionError` with a `TimeoutError` as `cause`. Every command
  * queued behind it on that connection also throws `RedisKvStoreConnectionError`, with its own failed

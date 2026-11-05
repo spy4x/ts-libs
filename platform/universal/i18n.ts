@@ -51,7 +51,7 @@
  * catalog. Problems name `deno task i18n:stamp` as the fix, so an app names its stamp task that.
  *
  * Whether a `.json` export of a published JSR package builds in Vite through `@deno/vite-plugin` is
- * proven in two halves only (#364): a linked package's `.json` export resolved and built with one
+ * proven in two halves only: a linked package's `.json` export resolved and built with one
  * chunk per language, and a `.json` file served by jsr.io loaded through the plugin. It holds end to
  * end once the first consumer ships one.
  *

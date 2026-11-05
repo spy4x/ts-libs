@@ -124,7 +124,7 @@ export function trimHeaderName(value: string): string {
  * The name an already end-trimmed header name ({@link trimHeaderName}) reads
  * as, to a mail program that is lenient about a padding byte
  * ({@link isHeaderNamePadding}) sitting *inside* the name rather than at an
- * end (issue #113, the inside-the-name half of #106), if that reading is one
+ * end, if that reading is one
  * of `targets` (each already lowercase). Returns the matched target, or
  * `undefined`.
  *

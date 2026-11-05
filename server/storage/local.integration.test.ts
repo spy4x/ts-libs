@@ -1,5 +1,5 @@
 /**
- * `LocalStorage` and `S3Storage.download` against real disk I/O (#58, #74).
+ * `LocalStorage` and `S3Storage.download` against real disk I/O.
  *
  * `server/storage.test.ts` drives `LocalStorage` and `createDenoObjectFs` entirely
  * through `createMemoryObjectFs`, because the unit tier grants neither

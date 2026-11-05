@@ -1,5 +1,5 @@
 /**
- * Sign-in with a one-time code sent by email (#57, finding 3).
+ * Sign-in with a one-time code sent by email.
  *
  * `requestCode` issues a guess-counted challenge for the normalised address and hands the raw code
  * to the app's `sendCode`. `verifyCode` checks one guess; on a match it signs the person in to the
@@ -63,7 +63,7 @@
  * `EMAIL_CODE_PURPOSE`, `EMAIL_CODE_BYTES`, `DEFAULT_CODE_TTL_MINUTES`, `DEFAULT_CODE_MAX_ATTEMPTS`,
  * `EmailCodeSignIn`, `EmailCodeSignInDeps`, `VerifyCodeOptions`.
  *
- * Sign-in with a one-time code sent by email (#57). `requestCode(email)` issues a guess-counted
+ * Sign-in with a one-time code sent by email. `requestCode(email)` issues a guess-counted
  * challenge and hands the raw code to the app's `sendCode`; `requestBoundCode(email)` does the same
  * for a code only the browser that asked can spend, and is the one a sign-in page should call (see
  * "Bind the code to the browser that asked for it" below); `verifyCode(email, code)` checks one guess
@@ -140,7 +140,7 @@
  * **Bind the code to the browser that asked for it.** A code from `requestCode` is bound to the
  * address alone. Anyone who knows the address can send five wrong codes, lock its challenge, and keep
  * it locked by asking for a new code before it expires, so the owner cannot sign in with a code for as
- * long as that goes on (#601). `requestBoundCode` closes this. The app does three things:
+ * long as that goes on. `requestBoundCode` closes this. The app does three things:
  *
  * 1. Its route that sends a code calls `requestBoundCode`, and never `requestCode`.
  * 2. It keeps the returned binding in the browser that asked, in a cookie that is `HttpOnly`, `Secure`

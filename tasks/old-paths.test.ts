@@ -1,5 +1,5 @@
 // `@spy4x/tasks` publishes the to-do entry points whose code still sits in `platform/` and
-// `time/` (#600). An app may import a name from either path, so both must hand out the very same
+// `time/`. An app may import a name from either path, so both must hand out the very same
 // value: an enum or a constant that existed twice would stop comparing equal across the two.
 // Types have no value to compare; `llms.txt` lists them for every entry point.
 

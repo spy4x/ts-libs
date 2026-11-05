@@ -1,5 +1,5 @@
 /**
- * The real `WebSocket` adapter against a real local server (issue #65, findings 1, 2, 3 and 4).
+ * The real `WebSocket` adapter against a real local server.
  *
  * No real `WebSocket` was ever used in a test before this file: `client-transport.test.ts` drives
  * `FakeSocket`, and `web-socket-adapter.test.ts` drives a stand-in shaped like a native socket. Both

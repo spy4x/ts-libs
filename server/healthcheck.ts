@@ -22,8 +22,8 @@
  * database goes away.
  *
  * Where it lives: **`server/healthcheck.ts`, not a separate deploy-tooling package.**
- * `ops/` used to be that package (issue #18) and would have needed its own config for
- * 60 LOC; `ops/` was later removed from ts-libs entirely (#67). A loopback probe of an
+ * `ops/` used to be that package and would have needed its own config for
+ * 60 LOC; `ops/` was later removed from ts-libs entirely. A loopback probe of an
  * HTTP server is a server concern, and this module needs no package of its own — it
  * is a `server/` subpath.
  *
@@ -72,7 +72,7 @@
  * `content-length`.
  *
  * Lives here rather than in a deploy-tooling package: `ops/` used to be that package and would have
- * needed its own `deno.json` for 60 LOC, and `ops/` was later removed from ts-libs entirely (#67). The
+ * needed its own `deno.json` for 60 LOC, and `ops/` was later removed from ts-libs entirely. The
  * probe is separated from the exit so the decision is a return value a test can assert with
  * `--allow-read --allow-env` and no socket.
  *

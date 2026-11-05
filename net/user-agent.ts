@@ -1,5 +1,5 @@
 /**
- * A display label for the device behind a `User-Agent` header (#406).
+ * A display label for the device behind a `User-Agent` header.
  *
  * `deviceName` turns the header into a name a person recognises in a list of signed-in devices,
  * such as "Safari on iPhone". It is a label, not browser detection: it knows the common browsers

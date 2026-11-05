@@ -23,7 +23,7 @@
  * specification's "Registering a New Credential" (section 7.1) and "Verifying an Authentication
  * Assertion" (section 7.2).
  *
- * Passkeys for a relying party (spy4x/seed#222). Four functions and two response schemas. Adding a
+ * Passkeys for a relying party. Four functions and two response schemas. Adding a
  * passkey, with the app's own storage declared:
  *
  * ```ts

@@ -1,5 +1,5 @@
 /**
- * The Redis helper of the integration tier (#75): proves `redisSettings` points at a
+ * The Redis helper of the integration tier: proves `redisSettings` points at a
  * reachable container, and that a key written under a unique prefix reads back and is
  * actually gone after cleanup.
  *

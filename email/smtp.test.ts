@@ -600,8 +600,8 @@ Deno.test("reports a thrown non-Error without leaking the credentials", async ()
 /**
  * The error raised *before* anything is sent goes through the same scrubber.
  *
- * That path had no test, so deleting its `redact` call left the suite green
- * (#74). It is reachable with the arguments in the wrong order — `send({ to:
+ * That path had no test, so deleting its `redact` call left the suite green.
+ * It is reachable with the arguments in the wrong order — `send({ to:
  * password })` is a one-character slip — and the address parser quotes the value
  * it could not parse into the message, so the credential lands in whatever logs
  * the returned error.

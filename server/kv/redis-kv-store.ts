@@ -3,7 +3,7 @@
  *
  * Ported from `template/libs/server/kv/+index.ts`. That file `implements ICacheStorage`
  * from the template's own cache module; `@spy4x/platform/cache` is the extraction of
- * that interface (#125). This file does not import it — the two were extracted in
+ * that interface. This file does not import it — the two were extracted in
  * parallel and neither depends on the other's branch. Instead {@link RedisKvStore}
  * matches that interface's shape structurally: `get(key: string): Promise<string |
  * null>`, `set(key, value: string, ttlSec: number): Promise<void>`, `del(key):
@@ -42,7 +42,7 @@ const CONNECT_TIMEOUT_MS = 5000
  *
  * A Redis that freezes after the connection is open (`docker pause`, a stuck host) never
  * answers, and no OS timeout bounds a stalled read, so without this bound every call
- * waited for as long as the freeze lasted (#172). The same fixed value as
+ * waited for as long as the freeze lasted. The same fixed value as
  * {@link CONNECT_TIMEOUT_MS}, for the same reason: not configurable, not exported.
  */
 const COMMAND_TIMEOUT_MS = CONNECT_TIMEOUT_MS
@@ -213,7 +213,7 @@ interface OpenedConnection {
  * its own — a dropped socket is noticed only when a call next tries to use it. The
  * call whose command fails on a dead connection (a failed write or read, not an error
  * reply from Redis) reconnects and sends that command once more on the fresh
- * connection (#169), so a Redis restart no longer costs the first call after it. A
+ * connection, so a Redis restart no longer costs the first call after it. A
  * resend is not free when the first send did reach Redis: `GET`, `SCAN` and
  * `CLIENT ID` only read, but a resent `SET … EX` or `DEL` can overwrite a write
  * another client made in between, and a resent `GETDEL` finds the key already gone,
@@ -221,7 +221,7 @@ interface OpenedConnection {
  * a call that already reconnected before its first send, or whose one reconnect fails, throws
  * {@link RedisKvStoreConnectionError}, so while Redis stays unreachable every call
  * fails after one bounded attempt, never a loop. A command that got no reply within
- * {@link COMMAND_TIMEOUT_MS} (#172) closes the connection and throws without a resend:
+ * {@link COMMAND_TIMEOUT_MS} closes the connection and throws without a resend:
  * a frozen Redis would only freeze the resend too. A call that finds the connection
  * dead before it sends anything opens a fresh connection the same way {@link connect}
  * does — a TCP connect (`connectTcp`), then `AUTH` when a password was given, then a `PING` that must answer
@@ -499,7 +499,7 @@ export class RedisKvStore {
    * first send then fails on the connection itself — not an error reply, and not a
    * {@link COMMAND_TIMEOUT_MS} timeout — and this call has not reconnected yet, it
    * reconnects (or joins a reconnect already in flight, or finds a concurrent call
-   * already swapped a fresh connection in) and sends the command once more (#169).
+   * already swapped a fresh connection in) and sends the command once more.
    * A first send that did reach Redis before the socket died is repeated; what that
    * costs per command is described on {@link RedisKvStore}.
    *

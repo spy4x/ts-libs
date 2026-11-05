@@ -1,5 +1,5 @@
 /**
- * Sign-in with an email address and a password, built on `AuthStore` and `SessionManager` (#57).
+ * Sign-in with an email address and a password, built on `AuthStore` and `SessionManager`.
  *
  * Written from the rules in issue #57, not moved from the earlier `providers/email-password.ts`. The
  * rules this file carries:
@@ -17,7 +17,7 @@
  * - **Password sign-up does not prove the address.** The key starts unproven. Sign-up is refused
  *   when another user owns the address, and a completed reset proves it, taking it away from
  *   whoever registered it first. To keep the account, the signed-in user proves the address with
- *   `requestVerification` and `completeVerification` (#149), or with `proveAddress` of the
+ *   `requestVerification` and `completeVerification`, or with `proveAddress` of the
  *   email-code provider (`@spy4x/server/auth/email-code`). Either makes the user the address's
  *   owner, so a later reset keeps the same user.
  * - **Create before revoke.** A password change or reset stores the new secret and creates the new
@@ -31,7 +31,7 @@
  * `DEFAULT_MAX_RESET_ATTEMPTS`, and the input and option interfaces.
  *
  * Sign-up, sign-in, password change and password reset with an address and a password, on the
- * `server/auth` store and the `server/sign-in` session manager and hasher (#57). Written from #57's
+ * `server/auth` store and the `server/sign-in` session manager and hasher. Written from #57's
  * rules, not moved from the earlier `email-password.ts`. Every refusal is thrown as a
  * `PasswordSignInError` whose `reason` names it.
  *
@@ -86,7 +86,7 @@
  * **Sign-up does not prove the address; the verification step does.** The key starts unproven, with
  * `email` equal to its subject, the normalised address. Sign-up is refused as `email-taken` when
  * another user owns the address or a password key for it already exists. Follow every sign-up with the
- * verification step (#149): `requestVerification({ userId })` returns a code for the app to mail to the
+ * verification step: `requestVerification({ userId })` returns a code for the app to mail to the
  * key's address, and `completeVerification({ userId, code })` checks it and proves the key with
  * `AuthStore.proveKey`. The user keeps their id, password and sessions, and becomes the address's
  * owner. Take `userId` from a validated session. The code is bound to that user and that address, is
@@ -210,7 +210,7 @@ export const PASSWORD_METHOD = "password"
 /** The challenge purpose of a password-reset code. */
 export const PASSWORD_RESET_PURPOSE = "password-reset"
 
-/** The challenge purpose of an address-verification code (#149). */
+/** The challenge purpose of an address-verification code. */
 export const PASSWORD_VERIFY_PURPOSE = "password-verify"
 
 /** Shortest new password accepted by default, in characters (code points). */

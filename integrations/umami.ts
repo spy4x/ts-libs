@@ -4,7 +4,7 @@
  *
  * Umami's Links (`POST /api/links`) count every visit to `<umami>/q/<slug>` and then redirect to
  * the link's `url`. A product makes one link per place it shares an address in (a group, a social
- * network, a friend), so Umami can tell the places apart (spy4x/seed#483).
+ * network, a friend), so Umami can tell the places apart.
  *
  * Behaviour:
  *

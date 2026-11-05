@@ -1,5 +1,5 @@
 /**
- * Integration tier (#74): `NtfyClient` against a real HTTP server.
+ * Integration tier: `NtfyClient` against a real HTTP server.
  *
  * `ntfy.test.ts` replaces `fetch` with a fake that resolves synchronously, so the
  * timeout and retry behaviour has only ever run against instantaneous, in-process

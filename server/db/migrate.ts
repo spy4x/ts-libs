@@ -80,7 +80,7 @@
  * with `PostgresUnexpectedRowError` naming the query and what came back, instead of being read
  * positionally anyway and misreported as something else.
  *
- * **The wait is bounded** (#109). A second runner retries `pg_try_advisory_lock` every
+ * **The wait is bounded**. A second runner retries `pg_try_advisory_lock` every
  * `lockRetryMs` (250 ms by default) and gives up after `lockWaitMs` — one minute by default — with
  * `PostgresMigrationLockError`, having applied nothing. Raise `lockWaitMs` when the slowest honest run
  * in the deployment is longer than that. When it is hit, find the holder: `SELECT * FROM pg_locks WHERE
@@ -98,7 +98,7 @@
  * connection, both held a lock, and the process hung until it was killed. Two concurrent runs are two
  * driver objects, which is also what two application instances are.
  *
- * **A client built with `fetch_types: false` works, not refused** (#156). `withLock` reserves a
+ * **A client built with `fetch_types: false` works, not refused**. `withLock` reserves a
  * connection with `sql.reserve()`, and on a pool with no idle connection yet — the ordinary case at the
  * start of a run — `postgres@3.4.7` has a bug that leaves that call unresolved forever: `ReadyForQuery`
  * only hands a freshly opened connection back to a pending `reserve()` through the branch that also
@@ -138,7 +138,7 @@
  * migration cannot be applied twice: the loser's whole transaction, migration and history row
  * together, rolls back. A `.no_transaction` migration has no such protection.
  *
- * **A cross-process SQLite lock is deliberately not built** (#110). The design that would work is an
+ * **A cross-process SQLite lock is deliberately not built**. The design that would work is an
  * operating-system file lock on a sibling file (`<database>.migrate.lock`, `Deno.FsFile.lock()`), which
  * the kernel releases when the process dies and so has no stale-lock problem. It is not built because
  * it needs write permission next to the database, does not apply to `:memory:`, and no project this
@@ -155,7 +155,7 @@
  * because back-filling it from the file in front of the runner would record the current file as the one
  * that ran. The cost is that a run reads every migration from disk, not only the pending ones.
  *
- * Three neighbouring kinds of drift used to pass without a word (#110):
+ * Three neighbouring kinds of drift used to pass without a word:
  *
  * | Drift                                   | Now                                                                        |
  * | --------------------------------------- | -------------------------------------------------------------------------- |
@@ -303,7 +303,7 @@ export interface MigrationReport {
    * Names in the history table that no file on disk accounts for, oldest row first.
    *
    * A migration that was applied and then deleted used to be ignored in silence, so the
-   * history and the folder disagreed with nobody told (#110). It is reported rather than
+   * history and the folder disagreed with nobody told. It is reported rather than
    * refused, because squashing old migrations away is a legitimate thing to do and this
    * library has no opt-out for it yet; a caller that wants a run to stop on one checks
    * this list. It is also what the rename check is derived from.
@@ -469,7 +469,7 @@ interface PlannedMigration {
 /**
  * The body of one {@link runMigrations} run, with the lock already held.
  *
- * Three passes, and the split is the point (#110). Every file is read and hashed first,
+ * Three passes, and the split is the point. Every file is read and hashed first,
  * then the whole plan is checked, and only then is anything applied. Applying as it went
  * meant a new file that sorted *before* an edited one was applied and only then did the
  * run stop, so "the run was refused" did not mean "nothing was applied". The extra pass

@@ -17,7 +17,7 @@ export interface TimerHandle {
 /**
  * Time source and timer factory. Implementations: {@link createSystemClock}, `FakeClock`.
  *
- * Extends `Clock` from "@spy4x/platform/universal/time" (`#71`) with the timer methods this
+ * Extends `Clock` from "@spy4x/platform/universal/time" with the timer methods this
  * package's transport needs on top of the plain instant source.
  */
 export interface TimerClock extends PlatformClock {

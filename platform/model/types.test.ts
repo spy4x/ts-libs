@@ -1,5 +1,5 @@
 /**
- * Type-level pins for the explicit `Type<…>` annotations on the exported schemas (#141). JSR
+ * Type-level pins for the explicit `Type<…>` annotations on the exported schemas. JSR
  * requires every exported constant to declare its type, so each schema now spells out the type
  * arktype used to infer. These assertions fail to compile if an annotation changes what a consumer
  * sees: the value type a schema produces (`.infer`) and the input it accepts (`.inferIn`).

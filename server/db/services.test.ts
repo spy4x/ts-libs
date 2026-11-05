@@ -51,7 +51,7 @@ class TestService extends DbServiceBase {
  * for it.
  *
  * It lists what a `postgres@3.4.7` transaction handle actually carries. `begin`, `reserve`
- * and `listen` are absent because the driver's handle does not have them (#115).
+ * and `listen` are absent because the driver's handle does not have them.
  */
 interface FakeExecutor {
   (strings: TemplateStringsArray, ...values: unknown[]): Promise<unknown>
@@ -77,7 +77,7 @@ interface FakeExecutor {
  *
  * `services.integration.test.ts` asserts this same list against the driver itself, so a
  * driver upgrade that changes the shape turns that test red instead of leaving this fake
- * quietly describing a handle nobody has (#115).
+ * quietly describing a handle nobody has.
  */
 const TRANSACTION_HANDLE_KEYS: string[] = [
   "array",
@@ -517,7 +517,7 @@ Deno.test("the fake transaction handle carries the driver's own keys and no othe
   // The fake is the shape a contributor reads to learn the driver's surface. It used to
   // offer `begin` and `reserve` on the transaction handle, with a comment saying the
   // driver does too, and that put two call forms nobody can write into the list of
-  // refusals `services.ts` documents (#115).
+  // refusals `services.ts` documents.
   const fake = createFakeSql()
 
   assertEquals(

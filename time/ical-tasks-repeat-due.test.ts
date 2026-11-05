@@ -1,5 +1,5 @@
 // A repeat rule needs the due date it repeats from: `completeTask` moves a repeating task from its
-// due date and refuses one without (#451). The edit that would write the pair is refused instead.
+// due date and refuses one without. The edit that would write the pair is refused instead.
 
 import { expect } from "@std/expect"
 import { IcalDateKind, parseIcal, serializeIcal } from "./ical.ts"

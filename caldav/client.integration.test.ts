@@ -1,5 +1,5 @@
 /**
- * The CalDAV client against Radicale and Stalwart 0.16 (#417).
+ * The CalDAV client against Radicale and Stalwart 0.16.
  *
  * The same contract runs on both servers: discovery from the bare host and from a DAV path, a
  * calendar made and listed, a task created, a task written the way Tasks.org writes it and then

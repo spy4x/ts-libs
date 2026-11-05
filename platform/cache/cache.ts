@@ -22,7 +22,7 @@
  *
  * A fifth change: `schema` is an arktype `Type`, validated through `@spy4x/validation`'s
  * `validate`, not the source's `ValidationSchema` from its own `@platform/types` — this package
- * has no validator of its own and never will (issue #23).
+ * has no validator of its own and never will.
  */
 
 import type { Type } from "arktype"

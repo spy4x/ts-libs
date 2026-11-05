@@ -1,5 +1,5 @@
 /**
- * `openAuthSchema` ends the admin connection when setup fails (#347). A fake driver records every
+ * `openAuthSchema` ends the admin connection when setup fails. A fake driver records every
  * statement and every `end()`, so no database is needed.
  */
 

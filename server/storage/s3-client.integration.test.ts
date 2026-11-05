@@ -1,5 +1,5 @@
 /**
- * `S3Storage`'s browser-upload and object-management methods against real stores (#738):
+ * `S3Storage`'s browser-upload and object-management methods against real stores:
  * MinIO, and Garage, the store Seed bundles. `s3.test.ts` pins the URLs with a fake
  * `fetch`; only a store that checks the signature shows the signed headers are enforced.
  *

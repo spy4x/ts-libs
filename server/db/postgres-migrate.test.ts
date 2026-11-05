@@ -672,7 +672,7 @@ Deno.test("purgeDatabase reads the aliased column, not the bare information_sche
   // side; whether a real `postgres.camel` client still returns `tablename` unchanged is
   // `postgres-purge.integration.test.ts`'s "against a camelCase client" case — a bare
   // `table_name` would come back as `tableName` under that transform and `row.tablename`
-  // would be `undefined`, which is the bug this alias fixes (#77).
+  // would be `undefined`, which is the bug this alias fixes.
   const fake = createFakeSql({ answers: [[{ tablename: "users" }]] })
   const result = await purgeDatabase({ sql: fake.sql, environment: SAFE_ENVIRONMENT })
 

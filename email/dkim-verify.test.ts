@@ -809,7 +809,7 @@ describe("the l= body bound is counted in octets", () => {
  * accept a `Uint8Array` for exactly this case, alongside the `string` overload
  * that keeps working as before.
  */
-describe("accepting raw octets (issue #88)", () => {
+describe("accepting raw octets", () => {
   it("verifies 8-bit content that is not valid UTF-8, passed as bytes", async () => {
     // The body is one line, no WSP, so it is its own canonicalization under
     // both modes — the octets `bh=` covers are exactly the ones in `body`.
@@ -1571,7 +1571,7 @@ describe("the identity and key-record checks (§6.1.1, §3.6.1)", () => {
   it("ignores a signature tag no RFC defines, whatever its value", async () => {
     // §3.2: "Unrecognized tags MUST be ignored." An earlier revision rejected a
     // `dt=` tag with any value but `1` — an invented rule, unreachable in
-    // practice, that the README described as an ignored tag (#74).
+    // practice, that the README described as an ignored tag.
     const parsed = parseDkimSignature(
       "v=1; a=rsa-sha256; d=example.com; s=sel; h=from; bh=abc; b=xxx; dt=2; r=y",
     )
@@ -1903,7 +1903,7 @@ describe("canonicalizeBody", () => {
     assertEquals(canonicalizeBody("a\r", "relaxed"), "a\r\r\n")
   })
 
-  it("hashes the exact octets a signer that follows the RFC hashed (issue #94)", () => {
+  it("hashes the exact octets a signer that follows the RFC hashed", () => {
     // The reproduction from issue #94: a genuine signer canonicalizes
     // `before\rafter\r\n` to itself — 14 octets, no rewrite — because the body
     // already ends in CRLF and the interior CR is not a line ending. The old
@@ -2167,7 +2167,7 @@ describe("fetchDkimPublicKey", () => {
     // it changes a tag's value and the record stops naming an algorithm. The old
     // vector split between tags, where a stray space is swallowed again by the
     // tag scanner and by the base64 decoder — which is how joining the parts with
-    // a space stayed invisible to this suite (#74).
+    // a space stayed invisible to this suite.
     const resolver: DnsTxtResolver = {
       resolveTxt: () => Promise.resolve([["v=DKIM1; k=r", "sa; p=AAEC", "Aw=="]]),
     }
@@ -2889,7 +2889,7 @@ describe("a header block whose line endings are not uniform", () => {
   })
 })
 
-// --- a header value hiding a From behind another line-break byte (#121) ----
+// --- a header value hiding a From behind another line-break byte ----
 
 /**
  * Issue #121: CR is not the only byte some reader treats as ending a header
@@ -2907,7 +2907,7 @@ describe("a header block whose line endings are not uniform", () => {
  * the NEL and line/paragraph-separator attacks in the issue's own evidence
  * table.
  */
-describe("a From hidden behind a header line-break byte other than CR (issue #121)", () => {
+describe("a From hidden behind a header line-break byte other than CR", () => {
   const BODY = "This is a test.\r\n"
   const FORGED = "From: ceo@bank.example"
 
@@ -3318,7 +3318,7 @@ describe("a From hidden behind a header line-break byte other than CR (issue #12
   })
 })
 
-// --- an mbox envelope line above a signed message (issue #120) -------------
+// --- an mbox envelope line above a signed message -------------
 
 /**
  * Issue #120: a message that still carries its mbox envelope line — the
@@ -3337,7 +3337,7 @@ describe("a From hidden behind a header line-break byte other than CR (issue #12
  * RFC 5322 mail. `email/README.md`'s field-name paragraph states the rule; a
  * caller verifying mbox records must strip the envelope line first.
  */
-describe("an mbox envelope line above a signed message (issue #120)", () => {
+describe("an mbox envelope line above a signed message", () => {
   const BODY = "This is a test.\r\n"
   const ENVELOPE = "From sender@example.com Mon Sep 21 10:00:00 2026"
   const REASON = "unsigned additional instances of a signed header: from"
@@ -3717,7 +3717,7 @@ describe("trace fields a relay adds after signing (§5.4.2)", () => {
     })
   }
 
-  it("still rejects a From: whose name carries U+0085 (NEL), as a string (issue #121)", async () => {
+  it("still rejects a From: whose name carries U+0085 (NEL), as a string", async () => {
     // Caught earlier than the #106 forgeries above: `refuseHeaderLineEndings`
     // refuses NEL anywhere in the header block before this guard ever runs,
     // so the reason names the byte rather than the field name.
@@ -3732,7 +3732,7 @@ describe("trace fields a relay adds after signing (§5.4.2)", () => {
     )
   })
 
-  it("still rejects a From: whose name carries U+0085 (NEL), as bytes (issue #121)", async () => {
+  it("still rejects a From: whose name carries U+0085 (NEL), as bytes", async () => {
     const { raw, publicKey } = await sign(TEST_HEADERS, BODY)
     const attacked = `From${String.fromCodePoint(0x0085)}: ceo@bank.example\r\n${raw}`
     const result = await verifyDkim(new TextEncoder().encode(attacked), publicKey)
@@ -3744,7 +3744,7 @@ describe("trace fields a relay adds after signing (§5.4.2)", () => {
     )
   })
 
-  it("still rejects a Subject: whose name carries a zero-width space (issue #106)", async () => {
+  it("still rejects a Subject: whose name carries a zero-width space", async () => {
     // The Done-when box asks that the rule hold for a second Subject too, not
     // only for From. The guard has one code path for every field name, so one
     // character (U+200B) is enough to show it is not From-specific; the loop
@@ -3809,7 +3809,7 @@ describe("trace fields a relay adds after signing (§5.4.2)", () => {
 // `String.fromCodePoint`, matching this file's existing convention for the
 // same reason: several of these are invisible or easy to mistake for
 // something else in an editor or a diff.
-describe("a disguised byte inside a header name (issue #113)", () => {
+describe("a disguised byte inside a header name", () => {
   const BODY = "This is a test.\r\n"
   const SOFT_HYPHEN = String.fromCodePoint(0x00ad)
   const ZERO_WIDTH_SPACE = String.fromCodePoint(0x200b)

@@ -82,7 +82,7 @@
  *   the wall clock`, and restoring the loop fails the array-operation guard.
  *
  * **A hard cap: `maxBuckets`.** The sweep bounds memory by time, which is not enough when a client can
- * send keys faster than they expire. Set `maxBuckets` to bound the count as well (#220):
+ * send keys faster than they expire. Set `maxBuckets` to bound the count as well:
  *
  * ```ts
  * const limiter = createMemoryRateLimiter({ windowMs: 60_000, limit: 10, maxBuckets: 100_000 })
@@ -114,7 +114,7 @@ import { type NowFn, systemNow } from "../universal/time.ts"
 /**
  * Monotonic millisecond clock. Inject a fake in tests; never read `Date.now()` behind one.
  *
- * @deprecated The same type as `NowFn` from `@spy4x/platform/universal/time` (`#71`), which is
+ * @deprecated The same type as `NowFn` from `@spy4x/platform/universal/time`, which is
  * now the home for this shape. Use that instead in new code. Kept as its own
  * `type Clock = () => number` declaration, not a `= NowFn` reference, because `deno doc`'s text
  * rendering renders a reference to another named
@@ -191,7 +191,7 @@ export interface MemoryRateLimiterOptions extends RateLimitOptions {
   /** Notified with the number of buckets removed each time a sweep runs. */
   onSweep?: (removed: number) => void
   /**
-   * The most buckets the limiter may hold (#220). Left out, the idle sweep is the only bound.
+   * The most buckets the limiter may hold. Left out, the idle sweep is the only bound.
    *
    * When a request arrives for a new key and the limiter is full, it first drops every bucket with
    * no accepted request inside the window — those count nothing, so dropping one resets no one's

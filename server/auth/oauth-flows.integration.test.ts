@@ -1,5 +1,5 @@
 /**
- * The key-value flow store against a real Redis (#150), with `RedisKvStore` as its client: the
+ * The key-value flow store against a real Redis, with `RedisKvStore` as its client: the
  * `OAuthFlowStore` contract, and a callback completed on a second `createOAuthSignIn` that shares
  * the store with the first.
  *

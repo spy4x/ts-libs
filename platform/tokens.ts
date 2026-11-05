@@ -181,7 +181,7 @@ const DERIVE_SECRET_SALT = "spy4x.derive-secret.v1"
  * Use one label per purpose (`cookie`, `csrf`) so a single configured secret yields independent
  * keys; leaking one derived value does not reveal the master or the others. HKDF, not a plain
  * HMAC of the label, so a derived key never equals a signature the app makes with the master
- * secret, such as a signed cookie whose value is the label (#322). The master secret is held to
+ * secret, such as a signed cookie whose value is the label. The master secret is held to
  * the same floor as every other secret here.
  *
  * Changed in 1.21.0: earlier releases returned `HMAC-SHA-256(secret, label)`. Every derived key

@@ -1,13 +1,13 @@
 /**
  * `@spy4x/server/idempotency` — commands that are safe to send twice: a CQRS middleware that
  * replays the stored result of a command retried with the same key, and the stores behind it.
- * Extracted from `template/libs/server/idempotency/` (#313).
+ * Extracted from `template/libs/server/idempotency/`.
  *
  * `createIdempotencyMiddleware`, `fingerprint`, `isIdempotencyKey`, `IdempotencyError`,
  * `IdempotencyStore`, `PostgresIdempotencyStore`, `IDEMPOTENCY_POSTGRES_SCHEMA`,
  * `IDEMPOTENCY_POSTGRES_CLAIM_TOKEN_TEXT`, `IDEMPOTENCY_POSTGRES_USER_ID_TEXT`, `IdempotencyUserId`,
  * `MemoryIdempotencyStore`, `IDEMPOTENCY_LEASE_SECONDS`, `IDEMPOTENCY_RETENTION_DAYS`. Extracted from
- * `template/libs/server/idempotency/` (#313).
+ * `template/libs/server/idempotency/`.
  *
  * A command whose data carries an `idempotencyKey` and an `actor.userId` runs once per (user, key).
  * The user id is a number or a non-empty string, such as a version 7 UUID.

@@ -2,7 +2,7 @@
  * Signed payload codec: a small JSON value, bound to a purpose and signed with HMAC-SHA-256,
  * carried as one URL-safe string.
  *
- * Built for two consumers that each hand-rolled the same primitive (#202): the template's
+ * Built for two consumers that each hand-rolled the same primitive: the template's
  * group-list pagination cursor and the unsubscribe link on antonshubin.com. A token is
  *
  * ```
@@ -52,7 +52,7 @@
  * covered by the signature without being carried in the token. `verify` checks the signature before it
  * parses anything, validates the payload with an arktype schema, and returns a `Result` whose error is
  * a `SignedPayloadErrorCode`; it never throws for any token string. `sign` refuses what `verify` would
- * refuse. A separate subpath from `./tokens` because it needs arktype at runtime (#202).
+ * refuse. A separate subpath from `./tokens` because it needs arktype at runtime.
  *
  * @module
  */

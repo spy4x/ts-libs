@@ -24,7 +24,7 @@
  *
  * The same shape as `EnvReader` in `@spy4x/platform/server/process`, so a reader from either
  * package fits wherever the other is expected. It is declared here, not imported, because this
- * file imports nothing (#443): `@spy4x/server/config/env` pulls in no other package.
+ * file imports nothing: `@spy4x/server/config/env` pulls in no other package.
  */
 export interface EnvReader {
   /** Value of `name`, or `undefined` when unset or blank. */
@@ -47,7 +47,7 @@ function blankToUndefined(value: string | undefined): string | undefined {
  * The process environment, read on each call and never at module scope: `Deno.env` on Deno,
  * `process.env` on Node and Bun. The lookup is written here rather than imported from
  * `@spy4x/platform/server/process`, whose `processEnv` does the same, because this file imports
- * nothing (#443).
+ * nothing.
  *
  * @throws {Error} From `get`, on a runtime with neither (a browser).
  */

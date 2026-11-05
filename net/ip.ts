@@ -1,5 +1,5 @@
 /**
- * IP address parsing and CIDR range checks (#221).
+ * IP address parsing and CIDR range checks.
  *
  * `parseIp` accepts exactly one bare IPv4 or IPv6 address and nothing around it: no port, no
  * brackets, no zone id, no whitespace. It returns the address in one canonical spelling, so two

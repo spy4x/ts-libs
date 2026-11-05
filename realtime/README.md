@@ -32,5 +32,5 @@ Each module's usage is in its module doc, shown by `deno doc` and on JSR.
 - [`@spy4x/realtime/changes`](changes.ts): The cursor pull of ADR 002.
 - [`@spy4x/realtime/sync-runner`](sync-runner.ts): Drives a flush of the offline outbox (or any async sync step) at the moments a browser gives a page.
 - [`@spy4x/realtime/protocol`](codec.ts): Wire protocol for a hint-only socket.
-- [`@spy4x/realtime/web-socket`](web-socket-adapter.ts): Adapter from the platform `WebSocket` to this package's `ManagedSocket` port (issue #65, finding 4).
+- [`@spy4x/realtime/web-socket`](web-socket-adapter.ts): Adapter from the platform `WebSocket` to this package's `ManagedSocket` port.
 - [`@spy4x/realtime/testing`](testing.ts): Deterministic test doubles.

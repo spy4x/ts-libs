@@ -136,7 +136,7 @@ Deno.test("readBoundedBody rejects an oversized declared content-length before r
 
 Deno.test("readBoundedBody cancels a body it refuses on the declared length", async () => {
   // The canonical reader rejects the declared length before taking a reader, and
-  // cancels the stream itself so a refused body is released at once (#672):
+  // cancels the stream itself so a refused body is released at once:
   // the same reader serves outbound responses, whose connection would otherwise
   // stay open until the response is collected.
   let cancelled = false
@@ -249,7 +249,7 @@ Deno.test("readBoundedBody reports the read error even when cancel rejects", asy
 
 Deno.test("readBoundedBody rejects an unusable cap instead of reading", async () => {
   // The canonical reader raises `RangeError` for a cap that is not a positive
-  // finite number, so `-1` is refused as a bad option (#672). `1.5` is a
+  // finite number, so `-1` is refused as a bad option. `1.5` is a
   // positive finite cap, and fails closed on the same `PayloadTooLargeError` a
   // real over-cap body raises.
   // A fresh request per case: a body can only be read once, so reusing one

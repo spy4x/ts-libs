@@ -42,7 +42,7 @@
  * GitHub's is `@spy4x/server/auth/oauth-github`: `createGitHubOAuthProvider`, `readGitHubUser`,
  * `readGitHubPrimaryEmail` and GitHub's endpoint and default-scope constants.
  *
- * OAuth2 sign-in with any provider that has a user-info endpoint (#57). The provider is configuration,
+ * OAuth2 sign-in with any provider that has a user-info endpoint. The provider is configuration,
  * not an enum: an `id` (lower-case letters, digits and `-`, 1 to 58 characters), the client
  * credentials, three `https:` endpoints, scopes, and a `profile(body)` function that reads the
  * user-info answer. A provider whose user-info answer lacks something adds `completeProfile(profile,
@@ -81,7 +81,7 @@
  *    (`SignedUp`), which deletes every other user's unproven claim to the address.
  * 4. Otherwise: a new user whose key carries no address and is unproven (`SignedUp`).
  *
- * **Ask before creating an account: `signUp: "confirm"` (#317).** A person who picks the wrong
+ * **Ask before creating an account: `signUp: "confirm"`.** A person who picks the wrong
  * provider account otherwise gets a silent second account. With this option, a callback that would
  * reach rule 3 or 4 creates nothing and returns `{ outcome: OAuthOutcome.PendingSignUp, profile,
  * token, expiresAt }` instead; rules 1 and 2 still complete in the callback. Show the person the
@@ -134,7 +134,7 @@
  * the browser check, the expiry check and both provider requests, so a failed callback cannot be
  * retried with the same `state`.
  *
- * **Pending flows live in a flow store, memory by default (#150).** A started flow (its `state` and
+ * **Pending flows live in a flow store, memory by default.** A started flow (its `state` and
  * PKCE verifier) waits in the `flows` option's store until its callback. The store's `take` reads and
  * deletes it in one atomic step, so of parallel callbacks with one `state` only one proceeds. `take`
  * also returns the flow's `expiresAt`, and `handleCallback` checks it again, so a third-party store
@@ -213,7 +213,7 @@
  * token request's form body. Each request has a 10-second limit by default (`timeoutMs`). Every
  * answer (token, profile and `completeProfile`'s `getJson`) is read with `readBoundedJson` from
  * `@spy4x/net/bounded-body`: up to 64 KiB, and with the same `timeoutMs` as the longest wait for its
- * next chunk (#331). An answer that is larger, stalls or is not JSON refuses the step with its own
+ * next chunk. An answer that is larger, stalls or is not JSON refuses the step with its own
  * reason (`token-exchange-failed` or `profile-failed`); a parse failure keeps no `cause`, because the
  * parser's message quotes the start of the body. A token answer whose `token_type` is present and not
  * `bearer` is refused. The redirect URI is sent exactly
@@ -356,7 +356,7 @@ export interface OAuthSignInOptions extends ProviderDeps {
   /** Sends the requests to the provider. Defaults to the global `fetch`. */
   fetch?: (request: Request) => Promise<Response>
   /**
-   * Where started flows wait for their callback (#150). Defaults to
+   * Where started flows wait for their callback. Defaults to
    * `createMemoryOAuthFlowStore({ clock })`: in this process, at most
    * {@link MAX_PENDING_OAUTH_FLOWS}. Pass `createKvOAuthFlowStore` on a shared Redis when more than
    * one process serves the callback, or when a flood of started flows must not push out others.
@@ -560,7 +560,7 @@ const DEFAULT_FLOW_TTL_SECONDS = 600
 const DEFAULT_TIMEOUT_MS = 10_000
 /**
  * Most bytes read from one provider answer. A token, profile or address list is a few KiB at most;
- * anything larger refuses the step instead of being buffered (#331).
+ * anything larger refuses the step instead of being buffered.
  */
 const MAX_RESPONSE_BYTES = 64 * 1024
 /** 256 bits each; base64url renders them as 43 characters, the PKCE verifier's minimum length. */

@@ -33,7 +33,7 @@
  *
  * Like the migration driver, the table listing it purges from is read through `.values()`, not by the
  * `tablename` alias written in the query, so it survives any column-name transform the caller's client
- * carries — including a custom one that maps two different columns to the same name (`#137`).
+ * carries — including a custom one that maps two different columns to the same name.
  *
  * @module
  */

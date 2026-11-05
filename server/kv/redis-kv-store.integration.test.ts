@@ -218,7 +218,7 @@ describe("RedisKvStore against a real server", () => {
 
       // Nothing here watches the connection: the kill is only noticed once a call
       // next tries to use it. This `get` is that call — its own read fails — and it
-      // reconnects and sends the GET once more instead of throwing (#169).
+      // reconnects and sends the GET once more instead of throwing.
       assertEquals(await store.get("k"), "before-kill")
 
       // It really is a new connection, not the killed one answering after all.

@@ -34,12 +34,12 @@
  * or IPv6 address; anything else (a port, brackets, a zone id, a hostname, a 64 KB string) is treated as
  * if the header were absent, so the next source is used and in the end the peer address. Every address
  * `clientIp` returns is in one canonical spelling from `normalizeIp` in `@spy4x/net/ip`: `2001:DB8::1`
- * and `2001:db8::1` are one client, and an IPv4-mapped `::ffff:192.0.2.1` is returned as `192.0.2.1`
- * (#220). Earlier versions returned a forged header verbatim, so every distinct string became its own
+ * and `2001:db8::1` are one client, and an IPv4-mapped `::ffff:192.0.2.1` is returned as `192.0.2.1`.
+ * Earlier versions returned a forged header verbatim, so every distinct string became its own
  * bucket.
  *
  * **Trusting a header only from known proxies.** The fourth parameter's `trustedProxies` lists CIDR
- * ranges (#221). The header is then read only when the peer address lies inside one of them; any other
+ * ranges. The header is then read only when the peer address lies inside one of them; any other
  * peer, and a request with no peer address, is keyed on its own address. An empty list trusts no one,
  * and a malformed range throws a `RangeError` on every call, so a typo shows up on the first request.
  * This is what makes `CF-Connecting-IP` safe on a server that is also reachable around Cloudflare:
@@ -59,7 +59,7 @@
  * `userThenIp` takes the same `trustedProxies` option.
  *
  * **IPv6 clients are keyed on their /64.** One ordinary IPv6 allocation is a whole /64, 2^64 addresses
- * its holder can pick from, so a per-address key never limits it (#219). `userThenIp` therefore keys an
+ * its holder can pick from, so a per-address key never limits it. `userThenIp` therefore keys an
  * IPv6 client as `ip:2001:db8:1:2::/64`; IPv4 keys are unchanged. `ipv6PerAddress: true` restores one
  * key per IPv6 address. Outside the middleware, `clientIpBucket(ip)` does the same reduction:
  *
@@ -268,7 +268,7 @@ export interface ClientIpBucketOptions {
  *
  * One ordinary IPv6 allocation — a household, a phone, a rented server — is a whole /64, 2^64
  * addresses the holder can pick from freely. Keyed per address, such a client rotates through them
- * and is never limited, and every rotated address becomes a stored bucket (#219). Keyed per /64, it
+ * and is never limited, and every rotated address becomes a stored bucket. Keyed per /64, it
  * gets one budget, the same as one IPv4 client. A free tunnel broker hands out a /48, 65,536 /64s,
  * so a budget a stranger must not multiply counts per /48 (`ipv6Prefix: 48`). IPv4 addresses, and
  * values that are not an address (the placeholder, a Unix socket path), come back as they are. An

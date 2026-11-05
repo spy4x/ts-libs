@@ -346,7 +346,7 @@ function scopeExecutor(executor: Transaction): ScopedExecutor {
    * connection (`postgres@3.4.7/src/query.js:123-161`). So a query built through a live
    * clone and awaited after `begin()` has returned used to run inside whatever transaction
    * that connection held by then. A forgotten `await` is enough to write it, which is why
-   * it is closed here rather than only written down (#108).
+   * it is closed here rather than only written down.
    *
    * The check goes on the query's own `handle`, shadowing the one it inherits, and only the
    * **first** send is checked: awaiting a query a second time sends nothing, so a result
@@ -385,7 +385,7 @@ function scopeExecutor(executor: Transaction): ScopedExecutor {
    *
    * `sql.savepoint(fn)` calls `fn` with a handle the driver built, so that handle never
    * passed through this wrapper and a caller who kept it held an open door onto the
-   * connection for the rest of the process (#108). Replacing the callback is the only
+   * connection for the rest of the process. Replacing the callback is the only
    * place it can be caught, because the driver hands the handle over rather than returning
    * it.
    *
@@ -884,7 +884,7 @@ export class DbServiceBase {
    * A helper set closes over the instance that built it, so one built in a class field
    * (`notes = this.buildMethods(...)`) closes over the root. The clone reads that field
    * through its prototype, and without this step `tx.notes.createOne(...)` ran on the root
-   * client, outside the transaction, and wrote the cache before the commit (#230).
+   * client, outside the transaction, and wrote the cache before the commit.
    *
    * The walk covers own and inherited properties, symbols included, and reads only data
    * properties, so no getter runs. A property is rebuilt when its value is an object with at

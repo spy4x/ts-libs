@@ -4,7 +4,7 @@
  * shared by every server instance; past a free budget, each wrong guess locks the subject for
  * longer.
  *
- * Ported from spy4x/seed `apps/api/services/totp-failures.ts` (#315). The policy and the flow
+ * Ported from spy4x/seed `apps/api/services/totp-failures.ts`. The policy and the flow
  * are the template's; the table and its columns are now the caller's, behind {@link LockoutStore}.
  *
  * How a check goes: {@link Lockout.begin} runs first and counts the check as a failure in advance;
@@ -22,7 +22,7 @@
  *
  * `createLockout`, `lockDelayMs`, `beginCheck`, `resolveLockoutPolicy`, `DEFAULT_LOCKOUT_POLICY`,
  * `MAX_LOCK_LIMIT_MS` and the `LockoutStore` port; `createPostgresLockoutStore` in
- * `server/lockout/postgres`; `MemoryLockoutStore` in `server/lockout/memory-store`. Ported from spy4x/seed `apps/api/services/totp-failures.ts` (#315).
+ * `server/lockout/postgres`; `MemoryLockoutStore` in `server/lockout/memory-store`. Ported from spy4x/seed `apps/api/services/totp-failures.ts`.
  *
  * An escalating lockout for any secret a person can guess: a one-time code, an e-mail code, a PIN, a
  * recovery code. Counters are kept per subject, a key the caller chooses (a user id, an address), in a

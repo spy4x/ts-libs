@@ -1,7 +1,7 @@
 /**
  * `RedisKvStore`'s AUTH handshake against a real Redis started with `requirepass`
  * (`redis-auth` in `infra/compose.integration.yml`), the path the unit tests only
- * exercise against scripted replies (#360).
+ * exercise against scripted replies.
  *
  * Keys sit under a unique prefix and are removed in a `finally`; nothing flushes the
  * server.

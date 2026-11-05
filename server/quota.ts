@@ -200,7 +200,7 @@
  * enforced at the costly action _after_ authentication; a rate limiter counts requests per second,
  * keyed by whatever is cheap and not attacker-controlled, and runs as middleware before routing. `429`
  * here means "this principal has spent their budget", never "you are going too fast". Request
- * smoothing is `platform/rate-limit` (issue #4), which does not live here.
+ * smoothing is `platform/rate-limit`, which does not live here.
  *
  * @module
  */

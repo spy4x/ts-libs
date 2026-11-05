@@ -1,6 +1,6 @@
 /**
  * `@spy4x/server/outbox` — transactional outbox drain: claim, publish, retry.
- * Extracted from `template/libs/server/outbox/+index.ts` (#75).
+ * Extracted from `template/libs/server/outbox/+index.ts`.
  *
  * Not the client's offline queue of writes: that is `@spy4x/realtime/outbox`.
  *
@@ -8,7 +8,7 @@
  * `LoggingOutboxPublisher`, `JobPublisher`, `retryDelayMs`, `errorCodeOf`, `scheduleOutboxEvent`,
  * `ensureScheduledOutboxEvent`, `OutboxAttemptFailure`, `OutboxLeaseExpiredError`,
  * `attemptFailureLine`, `stepsJob`, `JobStep`. Extracted from
- * `template/libs/server/outbox/+index.ts` (#75) — the template is the only source of an outbox in this
+ * `template/libs/server/outbox/+index.ts` — the template is the only source of an outbox in this
  * wave's source repositories.
  *
  * A transactional outbox: a command writes an identity-only row (aggregate, version, kind — never a

@@ -102,7 +102,7 @@ export function canonicalizeBody(body: string, algorithm: Canonicalization): str
  * too, rewriting it to CRLF — which disagreed with every RFC-faithful signer
  * on a body that legitimately carries one (classic-Mac text pasted inline, an
  * 8-bit part that was never quoted-printable encoded) and reported it as
- * tampered with (issue #94). The last element is what followed the final line
+ * tampered with. The last element is what followed the final line
  * ending — the empty string when the body ends with one, and the whole
  * remaining text when it does not end with one at all.
  */

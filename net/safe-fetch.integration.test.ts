@@ -1,5 +1,5 @@
 /**
- * The loopback integration tests for `net/` (#61, #74).
+ * The loopback integration tests for `net/`.
  *
  * Everything else in this package is tested against a `Fetcher` that returns
  * hand-built `Response` objects. That is the right tool for policy decisions,

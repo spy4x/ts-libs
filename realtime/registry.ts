@@ -20,7 +20,7 @@
  * - **One interval, not one per socket**, so the timer count does not grow with connections.
  * - **Direction is enforced.** A client frame that decodes as a server frame is dropped as
  *   malformed instead of being dispatched.
- * - **Three limits neither source enforced (issue #65, finding 5).** A user id could open an
+ * - **Three limits neither source enforced.** A user id could open an
  *   unbounded number of sockets; an oversized text frame was handed straight to the codec and the
  *   validator before anything measured it; and nothing slowed delivery to a socket whose peer had
  *   stopped reading. `attach` now refuses past `maxConnectionsPerUser`, `#receive` measures a frame
@@ -45,7 +45,7 @@
  * const clock = createSystemClock()
  * const registry = new ConnectionRegistry({
  *   clock,
- *   // Defaults shown; override per deployment. See "Fixed after ship" below (issue #65, finding 5).
+ *   // Defaults shown; override per deployment. See "Fixed after ship" below.
  *   maxConnectionsPerUser: 20,
  *   maxMessageBytes: 64 * 1024,
  *   maxBufferedBytes: 1_000_000,

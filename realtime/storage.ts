@@ -13,7 +13,7 @@ import type { KeyValueStore as PlatformKeyValueStore } from "@spy4x/platform/uni
  * Minimal synchronous key/value store. `Storage` satisfies it structurally.
  *
  * @deprecated Use `KeyValueStore` from `@spy4x/platform/universal/key-value-store` — the same
- * three methods, homed there (#71) since this package has no dependency of its own to protect
+ * three methods, homed there since this package has no dependency of its own to protect
  * either way and `@spy4x/platform` cannot depend on `@spy4x/realtime` without a publish-time
  * dependency cycle (see #181's `realtime/backoff.ts` importing `@spy4x/platform/universal/async`).
  */

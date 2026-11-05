@@ -12,7 +12,7 @@
  * See `base-model.ts` and `push.ts` for which of these declare `"+": "reject"` and why.
  *
  * **Every exported schema declares its type.** JSR refuses an exported constant whose type is only
- * inferred, so each schema in `model/` carries an explicit arktype `Type<…>` annotation (#141). The
+ * inferred, so each schema in `model/` carries an explicit arktype `Type<…>` annotation. The
  * annotation spells out what arktype infers: `dateSchema` is `Type<Date | ((In: string) => Out<Date>)>`,
  * a pipe from a string to a `Date`, and a field with a default is `Default<T, V>`, imported from
  * `arktype/internal/attributes.ts` because arktype's main entry point does not export it.
