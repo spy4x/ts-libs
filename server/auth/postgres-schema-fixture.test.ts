@@ -1,5 +1,5 @@
 /**
- * Test-only: a pool on a fresh Postgres schema holding the auth tables (#347).
+ * Test-only: a pool on a fresh Postgres schema holding the auth tables.
  *
  * The three integration files that need one share this. The `.test.ts` name keeps it out of the
  * published package (root `publish.exclude`). `postgres-schema-fixture-leak.test.ts` covers the

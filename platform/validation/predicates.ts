@@ -1,8 +1,5 @@
 /**
- * Reusable arktype predicates for untrusted text, ported from `mig/routes/api/_validators.ts`.
- *
- * `BookingSchema` itself is product domain — a booking form — so it is not ported. What is ported
- * are the four reusable checks it was built from: the two control-character refinements, the
+ * Reusable arktype predicates for untrusted text: the two control-character refinements, the
  * honeypot field, and the time-zone probe.
  *
  * Control characters are what make CRLF/header injection possible: a value carrying LF can end the
@@ -12,10 +9,8 @@
  * illegal. {@link hasHeaderControlCharacters} and {@link hasTextControlCharacters} are exactly that
  * asymmetry, and a value can be safe for one and unsafe for the other.
  *
- * Ported and fixed at extraction time (`mig/routes/api/_validators.ts:35`): the honeypot field was
- * `z.string()` — required to be present, but never checked. A filled honeypot (a bot, or an
- * accessibility autofill) was accepted silently, so the anti-bot signal the field exists for was
- * thrown away. {@link honeypotField} requires present *and* empty, and {@link isHoneypotFilled}
+ * {@link honeypotField} requires the honeypot field present *and* empty, since a filled one (a bot,
+ * or an accessibility autofill) is the anti-bot signal the field exists for, and {@link isHoneypotFilled}
  * gives the caller the positive signal it can act on.
  *
  * A caveat on messages: arktype appends the offending value to a refinement message
@@ -23,6 +18,14 @@
  * means an arktype message must **never** be surfaced for a value holding secret material — the
  * recipient would read the secret straight out of the error. A secret needs a constant message
  * instead.
+ *
+ * Arktype predicates for untrusted text: `headerSafeString`, `textSafeString`, `honeypotField`,
+ * `timeZoneName`, and `emailAddress` with its plain check `isEmailAddress`. The email check is
+ * `isAddress` from `@spy4x/email/address` plus that module's exported 254-character limit,
+ * `MAX_ADDR_SPEC_LENGTH`, not a second pattern or a second number, so a form and the sender agree on
+ * what an address is; `platform` imports `email` and never the other way round.
+ *
+ * @module
  */
 
 import { Type, type } from "arktype"
@@ -46,7 +49,7 @@ export const TEXT_ALLOWED_CODE_POINTS: readonly number[] = [9, 10, 13]
 /**
  * Iterate `value` by code point and return the first character `isForbidden` rejects, if any.
  *
- * Iteration is by code point (`for...of`), matching the source's `[...value]` spread: an astral
+ * Iteration is by code point (`for...of`): an astral
  * character such as an emoji arrives as one code point above `0xFFFF`, never as its two surrogate
  * halves — so a surrogate (`>= 0xD800`) can not be mistaken for a control character. A code-unit
  * regex would be equivalent *only* because every code point in these ranges is in the BMP, which is
@@ -97,8 +100,7 @@ export function hasTextControlCharacters(value: string): boolean {
  * True when a honeypot field was filled in, i.e. the submission is very likely automated.
  *
  * Any non-empty value counts, whitespace included: a bot that fills `" "` is still a bot, and
- * trimming first would turn that signal into a silent acceptance — the same bug the source's
- * `z.string()` had. The caller decides what to do with the signal (reject, or accept into a spam
+ * trimming first would turn that signal into a silent acceptance. The caller decides what to do with the signal (reject, or accept into a spam
  * queue); this predicate only reports it.
  */
 export function isHoneypotFilled(value: string): boolean {
@@ -108,8 +110,7 @@ export function isHoneypotFilled(value: string): boolean {
 /**
  * True when `Intl.DateTimeFormat` accepts `value` as a time zone.
  *
- * The copy of this probe formerly here was merged into `@spy4x/time/tz`'s {@link isValidTimeZone}
- * (#71); this is now a deprecated call-through.
+ * A deprecated call-through to `@spy4x/time/tz`'s {@link isValidTimeZone}.
  *
  * @deprecated Use `isValidTimeZone` from `@spy4x/time/tz`.
  */
@@ -129,8 +130,7 @@ export function isValidTimeZoneName(value: string): boolean {
  * includes its 64-character limit on the local part, and the order of its checks: a look-alike such
  * as the Kelvin sign (U+212A), which lowercases to an ASCII `k`, is refused before any lowercasing.
  * The dependency runs `platform` to `email`, and `email` imports nothing from `platform`, so there
- * is no cycle. `mig`'s own pattern (a copy of Zod 3's `.email()`) differs only at the edges: it
- * refuses `%` in the local part, which this accepts, as RFC 5322 does. `value` is checked as given,
+ * is no cycle. A `%` in the local part is accepted, as RFC 5322 does. `value` is checked as given,
  * so surrounding whitespace is refused; trim and lowercase it first, as a form would.
  */
 export function isEmailAddress(value: string): boolean {

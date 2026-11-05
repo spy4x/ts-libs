@@ -18,6 +18,27 @@
  * Each output format lives in a sibling module, re-exported here: `seo-canonical.ts`,
  * `seo-json-ld.ts`, `seo-product.ts`, `seo-xml.ts` (sitemap and RSS) and `seo-llms-txt.ts`.
  *
+ * A page published in several languages lists every version in `alternates`, its own included, and
+ * each version's entry repeats the same list. `sitemapXml` writes one
+ * `<xhtml:link rel="alternate" hreflang="…" href="…"/>` per version and declares the `xhtml`
+ * namespace only when some entry has one, so a sitemap without alternates is unchanged. `lang` is a
+ * BCP 47 tag, written in its canonical form (`en-us` becomes `en-US`, and a deprecated code such as
+ * `iw` becomes `he`), or `x-default` for the version shown to everyone else; any other value throws.
+ *
+ * ```ts
+ * import { sitemapXml } from "@spy4x/platform/universal/seo"
+ *
+ * const alternates = [
+ *   { lang: "vi", url: "https://shop.example/" },
+ *   { lang: "en", url: "https://shop.example/en/" },
+ *   { lang: "x-default", url: "https://shop.example/" },
+ * ]
+ * const xml = sitemapXml([
+ *   { url: "https://shop.example/", alternates },
+ *   { url: "https://shop.example/en/", alternates },
+ * ])
+ * ```
+ *
  * @module
  */
 

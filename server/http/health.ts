@@ -13,6 +13,32 @@
  *
  * This is the HTTP side. The probe a container runs against itself is `@spy4x/server/healthcheck`.
  *
+ * `createHealthHandler` and the types `HealthHandlerOptions`, `HealthHandler`, `HealthCheck`,
+ * `HealthReport` and `HealthStatus`.
+ *
+ * A health endpoint over named checks. A **required** check that fails means nothing works: the
+ * answer is 503 with `status: "down"`, so a load balancer or a container probe takes the instance
+ * out. An **optional** check that fails means the service still works, only worse: the answer stays
+ * 200 with `status: "degraded"`, because restarting the instance would not bring that dependency
+ * back.
+ *
+ * ```ts
+ * const health = createHealthHandler({
+ *   required: { database: () => isDbConnected() },
+ *   optional: { cache: () => isCacheConnected() },
+ * })
+ * app.get("/health", () => health()) // Hono; or Deno.serve(health)
+ * // 200 {"status":"degraded","checks":{"database":true,"cache":false},"date":1700000000000}
+ * ```
+ *
+ * All checks run at once on every call. A check passes only when it resolves exactly `true`; one
+ * that throws, rejects or takes longer than `timeoutMs` (default two seconds) has failed, so a hung
+ * dependency cannot hang the endpoint. The body names each check and whether it passed, never why it
+ * failed: the endpoint is usually public, and an error message can carry a host name or a
+ * credential. The answer is marked `cache-control: no-store`. A name in both lists, a check that is
+ * not a function, or a `timeoutMs` that is not a finite number above 0 throws when the handler is
+ * built. This is the HTTP side; the probe a container runs against itself is `server/healthcheck`.
+ *
  * @module
  */
 

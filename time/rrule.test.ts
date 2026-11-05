@@ -621,8 +621,8 @@ function completeOnce(text: string, due: string, time = `13:30:00`): string {
 }
 
 Deno.test(`nextOccurrence gives the next due date Tasks.org's RepeatMonthlyTests expect`, () => {
-  // Rows ported from tasks/tasks RepeatMonthlyTests.kt at b5c8b08, plus the review's cases for a
-  // single BYMONTHDAY; each completes a task due on the date, so start and after are the same.
+  // Rows from tasks/tasks RepeatMonthlyTests.kt at b5c8b08, plus cases for a single BYMONTHDAY;
+  // each completes a task due on the date, so start and after are the same.
   const cases: [rule: string, due: string, expected: string][] = [
     [`FREQ=MONTHLY;INTERVAL=3`, `2016-08-28`, `2016-11-28`],
     [`FREQ=MONTHLY;INTERVAL=1`, `2017-01-31`, `2017-02-28`],

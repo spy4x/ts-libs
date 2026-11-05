@@ -317,7 +317,7 @@ Deno.test("a driver failure stops the run and propagates unchanged", async () =>
 })
 
 Deno.test("the whole run happens inside the lock, history read included", async () => {
-  // The order is the whole point. The race #59 measured is two runners each reading an
+  // The order is the whole point. The race is two runners each reading an
   // empty history before either applies anything, so a lock taken after the read — or
   // around one migration at a time — would not see it.
   const { driver, calls } = recordingDriver()
@@ -406,7 +406,7 @@ Deno.test("an applied migration that was edited afterwards stops the run", async
 })
 
 Deno.test("a run that is going to be refused applies nothing first", async () => {
-  // Issue #110's ordering half. The checks used to run file by file as the run went, so a
+  // The checks used to run file by file as the run went, so a
   // pending file that sorted *before* an edited one was applied and only then did the run
   // stop — "the run was refused" did not mean "nothing was applied". Measured on 6bfa1e8:
   // `0000_early` was in the history although the run ended in MigrationEditedError.
@@ -433,7 +433,7 @@ Deno.test("a run that is going to be refused applies nothing first", async () =>
 })
 
 Deno.test("a history row with no file on disk is reported as missing", async () => {
-  // Issue #110. An applied migration whose file was deleted used to be ignored, so the
+  // An applied migration whose file was deleted used to be ignored, so the
   // history and the folder disagreed with nobody told. It is reported rather than
   // refused: squashing old migrations away is legitimate and there is no opt-out yet.
   const first = "CREATE TABLE one (id INTEGER)"
@@ -458,7 +458,7 @@ Deno.test("a history row with no file on disk is reported as missing", async () 
 })
 
 Deno.test("a renamed applied migration is refused instead of applied a second time", async () => {
-  // Issue #110's damaging case. The renamed file looked new, so its body ran again
+  // The renamed file looked new, so its body ran again
   // against a database that already had it — measured: `INSERT INTO counter VALUES (1)`
   // ran twice and the history held both names.
   const body = "INSERT INTO counter VALUES (1)"
@@ -687,9 +687,8 @@ Deno.test("the SQLite migrator refuses a migration whose file changed after it r
 })
 
 Deno.test("the SQLite migrator refuses a renamed migration instead of running it again", async () => {
-  // Issue #110's measured case, against the real driver: `INSERT INTO counter VALUES (1)`
-  // ran a second time under the new name and the history held both, so the table ended up
-  // with rows [1, 2, 1].
+  // Against the real driver: run again under the new name, `INSERT INTO counter VALUES (1)`
+  // would leave the table with rows [1, 2, 1].
   const { db, migrations } = await recordingSqlite()
   await db.exec("CREATE TABLE counter (n INTEGER)")
   const body = "INSERT INTO counter VALUES (1)"

@@ -1,15 +1,9 @@
 /**
  * Hono middleware factory over any limiter from `memory.ts`.
  *
- * Ported from an earlier internal project's rate-limiter service and middleware, with the two
- * external packages dropped: `hono-rate-limiter`'s whole job here is "run a limiter, emit draft-6
- * headers", which is this file, and `rate-limit-redis` existed to put the store in Redis — a job
- * the `RateLimitStore` port now does without dragging a Redis client into the limiter.
- *
- * What is emitted is **draft-6**, matching `standardHeaders: "draft-6"` in the source: the three
- * separate fields `RateLimit-Limit`, `RateLimit-Remaining` and `RateLimit-Reset`, plus `Retry-After`
- * on a rejection. Draft-7 replaced them with one combined `RateLimit` field; that is not ported, so
- * a client written against draft-7 will not find the combined header here.
+ * What is emitted is **draft-6**: the three separate fields `RateLimit-Limit`,
+ * `RateLimit-Remaining` and `RateLimit-Reset`, plus `Retry-After` on a rejection. Draft-7 replaced
+ * them with one combined `RateLimit` field, which is not emitted, so a client written against draft-7 will not find the combined header here.
  *
  * Configuration is validated with arktype at factory time: a limiter built with `limit: 0` or a
  * negative window would silently deny or allow everything, and that failure belongs at startup, not
@@ -17,6 +11,43 @@
  * accessor wired and no trusted proxy header, every anonymous request buckets on the same
  * placeholder address, and a config that can do that silently is exactly the kind this factory
  * refuses to build. See {@link RateLimitMiddlewareOptions.remoteAddr}.
+ *
+ * ## Key resolution
+ *
+ * `keyResolver(req)` is a parameter, never a lookup into framework state: an optional lookup such as
+ * `c.get?.("auth")` silently degrades every request to a shared `ip:unknown` bucket when the auth
+ * middleware has not run. `userThenIp(userId)` provides
+ * the `user:<id>` / `ip:<addr>` shape; anything else is the caller's own resolver.
+ *
+ * ## Headers
+ *
+ * Draft-6 headers:
+ *
+ * | Header                | Value                                                           |
+ * | --------------------- | --------------------------------------------------------------- |
+ * | `RateLimit-Limit`     | requests allowed per window                                     |
+ * | `RateLimit-Remaining` | requests left in the window, never negative                     |
+ * | `RateLimit-Reset`     | seconds until the window has room (or until the retry succeeds) |
+ * | `Retry-After`         | the same countdown, on a 429 only                               |
+ *
+ * Every value is a whole number of seconds rendered as a decimal string — no fractions, no negatives,
+ * rounded up, because rounding down advertises a retry that the limiter still rejects. Draft-7's
+ * combined `RateLimit` field is not emitted.
+ *
+ * ## Counting failures only
+ *
+ * `skipSuccessful: true` on `createRateLimitMiddleware` spends the budget on failed requests only
+ * (status 400 or above), for a one-time-code or password step where a correct answer must not lock
+ * its owner out. Pass a function `(response) => boolean` to decide what counts as success. The slot
+ * is reserved before the handler and given back after a successful response through the limiter's
+ * `refund`, so a burst of parallel wrong guesses still stops at `limit`. Both limiters in `memory.ts`
+ * implement `refund`; a custom limiter must too. A predicate must not read the response body unless
+ * it calls `response.clone()` first, because the same response is sent to the client afterwards.
+ *
+ * A refund that fails, for example because the shared store went down after the handler ran, never
+ * changes the response: the slot stays spent, which errs on the safe side, and a completed sign-in
+ * keeps its status and its `Set-Cookie`. Pass `onRefundError: (error, key) => …` to hear about it; an
+ * `onRefundError` that throws or rejects is ignored.
  *
  * @module
  */
@@ -183,8 +214,7 @@ export type KeyResolver<E extends Env = Record<string, never>> = (
 export interface RateLimitMiddlewareOptions<E extends Env = Record<string, never>> {
   /**
    * Bucket the request. Given the request plus the context, because a request alone carries no peer
-   * address and reaching into Hono context for app state was what made the source's version
-   * uncopyable.
+   * address, and reaching into Hono context for app state would couple the limiter to one app.
    */
   keyResolver: KeyResolver<E>
   /**
@@ -258,10 +288,8 @@ export type RateLimitHonoContext<E extends Env = Record<string, never>> = Contex
 /**
  * Build the middleware for a limiter.
  *
- * The key resolver is a parameter because that was the only app-coupled line in the source
- * (`c.get?.("auth")`). Its optional chaining meant a missing auth middleware silently degraded
- * every request to a shared `ip:unknown` bucket; here the coupling is explicit and the fallback is
- * the caller's own code.
+ * The key resolver is a parameter, so the coupling to an app's auth is explicit and the fallback is
+ * the caller's own code, never a shared `ip:unknown` bucket.
  *
  * @param rateLimiter Limiter to consult. Sync or async, both are awaited.
  * @param options Runtime-validated configuration.
@@ -429,8 +457,8 @@ export interface UserThenIpOptions {
  *
  * An IPv6 client is keyed on its /64 network (`ip:2001:db8:1:2::/64`, see `clientIpBucket`), so a
  * client cannot escape the limit by rotating through the 2^64 addresses one allocation gives it.
- * IPv4 keys are unchanged. `ipv6PerAddress: true` keys every IPv6 address separately, as before
- * #219, for a deployment where one /64 is really shared by unrelated clients.
+ * IPv4 keys are per address. `ipv6PerAddress: true` keys every IPv6 address separately, for a
+ * deployment where one /64 is really shared by unrelated clients.
  */
 export function userThenIp<E extends Env = Record<string, never>>(
   userId: (req: Request, context: RateLimitContext<E>) =>

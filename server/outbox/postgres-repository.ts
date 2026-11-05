@@ -1,11 +1,8 @@
 /**
  * The generic-SQL `OutboxRepository`, over `postgres`.
  *
- * Ported from `template/libs/server/outbox/+index.ts`'s `PostgresOutboxRepository`.
- * The SQL is generic over any table shaped like the one below — nothing here
- * references the template's `groups`/`users` tables or its foreign keys, which is
- * what made this half of the extraction possible; see the {@link OutboxEvent} doc in
- * `processor.ts` for why those columns were dropped rather than kept.
+ * The SQL is generic over any table shaped like the one below and references no
+ * application table or foreign key; see the {@link OutboxEvent} doc in `processor.ts`.
  *
  * A caller wiring this up needs a table shaped like:
  *
@@ -28,8 +25,8 @@
  *
  * a name and a schema the caller's `Sql` already resolves to (`search_path` or a
  * qualified name), and a command that writes a row into it in the same transaction as
- * the state change it records — that command is the caller's own, not part of this
- * extraction, since it is one line embedded in application-specific write paths.
+ * the state change it records — that command is the caller's own, since it is one line
+ * embedded in application-specific write paths.
  *
  * `aggregate_id` only needs to be a type this driver returns as a string — `UUID`
  * fits the template's own aggregates, but nothing here assumes it. An app may keep

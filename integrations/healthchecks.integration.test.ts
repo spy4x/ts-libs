@@ -1,5 +1,5 @@
 /**
- * Integration tier (#74): `HealthchecksClient` against a real HTTP server.
+ * Integration tier: `HealthchecksClient` against a real HTTP server.
  *
  * `healthchecks.test.ts` replaces `fetch` with a fake that resolves
  * synchronously, so the timeout and retry behaviour has only ever run against

@@ -10,8 +10,27 @@
  * already pinned in the root import map, and the SQLite driver is the caller's
  * choice.
  *
- * Design sources: `template/libs/server/db` and the database layers of three
- * earlier internal projects.
+ * Two adapters, one migration runner. `@spy4x/server/db` is the barrel; `db/migrate`,
+ * `db/postgres` and `db/sqlite` are the subpaths. Nothing here ships a driver: `postgres` is pinned in
+ * the root import map and the SQLite driver is the caller's own, passed through `SqliteDriver`.
+ *
+ * ## Searching text with `LIKE`: `likeContains`
+ *
+ * `likeContains(value)` escapes `\`, `%` and `_` and wraps the result in `%…%`, so a search box's text
+ * matches literally instead of acting as a wildcard. Postgres escapes with `\` by default:
+ * `` sql`… WHERE email ILIKE ${likeContains(search)}` ``. SQLite has no default escape, so name it:
+ * `WHERE email LIKE ? ESCAPE '\'`.
+ *
+ * ## Purging
+ *
+ * `purgeDatabase` refuses unless `ENV` names one of `SAFE_ENV_VALUES` — `dev`, `development`, `local`,
+ * `test`, `ci`, compared trimmed and lower-cased — or the caller passes `--prod`. The list is frozen:
+ * `readonly` is a compile-time claim, and a consumer that cast the array and pushed onto it would arm
+ * the purge for that environment process-wide.
+ *
+ * Like the migration driver, the table listing it purges from is read through `.values()`, not by the
+ * `tablename` alias written in the query, so it survives any column-name transform the caller's client
+ * carries — including a custom one that maps two different columns to the same name.
  *
  * @module
  */

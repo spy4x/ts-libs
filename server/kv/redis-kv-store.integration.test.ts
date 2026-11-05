@@ -152,7 +152,7 @@ describe("RedisKvStore against a real server", () => {
   })
 
   it("a store's own prefix reaches a sibling that extends it with a colon", async () => {
-    // Not a bug: documents the design note in server/README.md. A prefix is a plain
+    // Not a bug: documents the design note in `kv/mod.ts`. A prefix is a plain
     // string match, not a namespace, so `outer`'s key `sub:k` and `inner`'s key `k`
     // are the same Redis key, and this overlap is expected.
     const settings = redisSettings()
@@ -218,7 +218,7 @@ describe("RedisKvStore against a real server", () => {
 
       // Nothing here watches the connection: the kill is only noticed once a call
       // next tries to use it. This `get` is that call — its own read fails — and it
-      // reconnects and sends the GET once more instead of throwing (#169).
+      // reconnects and sends the GET once more instead of throwing.
       assertEquals(await store.get("k"), "before-kill")
 
       // It really is a new connection, not the killed one answering after all.

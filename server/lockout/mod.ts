@@ -4,8 +4,7 @@
  * shared by every server instance; past a free budget, each wrong guess locks the subject for
  * longer.
  *
- * Ported from spy4x/seed `apps/api/services/totp-failures.ts` (#315). The policy and the flow
- * are the template's; the table and its columns are now the caller's, behind {@link LockoutStore}.
+ * The table and its columns are the caller's, behind {@link LockoutStore}.
  *
  * How a check goes: {@link Lockout.begin} runs first and counts the check as a failure in advance;
  * a correct secret then calls {@link Lockout.refund}, which gives that one slot back. A correct
@@ -19,6 +18,100 @@
  * a lock that let the right secret through would let a lucky guess through too. The price is that
  * someone who can reach the check can keep the owner out of it, up to
  * {@link LockoutPolicy.maxLockMs} at a time.
+ *
+ * `createLockout`, `lockDelayMs`, `beginCheck`, `resolveLockoutPolicy`, `DEFAULT_LOCKOUT_POLICY`,
+ * `MAX_LOCK_LIMIT_MS` and the `LockoutStore` port; `createPostgresLockoutStore` in
+ * `server/lockout/postgres`; `MemoryLockoutStore` in `server/lockout/memory-store`.
+ *
+ * An escalating lockout for any secret a person can guess: a one-time code, an e-mail code, a PIN, a
+ * recovery code. Counters are kept per subject, a key the caller chooses (a user id, an address), in a
+ * store that survives a restart and that every server instance shares. `@spy4x/platform/rate-limit`
+ * stops bursts; this stops a patient guesser.
+ *
+ * The default policy: 5 wrong guesses cost nothing, the next wrong one locks for 15 minutes, each one
+ * after doubles the lock up to one day, and 7 days with no wrong guess reset the count. Every number
+ * is an option; the maximum lock is capped at one year. The defaults allow about 580 guesses a year
+ * to a guesser who makes 12 wrong guesses, then waits out the 7 quiet days and starts again: under a
+ * 0.2% chance of hitting one of 3 valid six-digit codes. Guessing again the moment each lock ends gets
+ * fewer, about 380.
+ *
+ * ```ts
+ * import { createLockout } from "@spy4x/server/lockout"
+ * import { createPostgresLockoutStore } from "@spy4x/server/lockout/postgres"
+ *
+ * const lockout = createLockout({
+ *   store: createPostgresLockoutStore({ sql, table: "user_totp", columns: { subject: "user_id" } }),
+ * })
+ *
+ * const waitMs = await lockout.begin(userId)
+ * if (waitMs > 0) return tooManyAttempts(waitMs)
+ * if (await codeIsValid(userId, code)) await lockout.refund(userId)
+ * else await lockout.fail(userId)
+ * ```
+ *
+ * **Count first, refund on success.** `begin` counts the check as a failure before the secret is
+ * compared, in one atomic store update (`SELECT … FOR UPDATE` in Postgres), so parallel guesses cannot
+ * all slip through the free budget: of any number of simultaneous checks, at most the free budget plus
+ * one run. A correct secret gives back that one slot; it does not wipe the count, which would hand a
+ * guesser a fresh budget every time the owner signs in. While a lock runs, every check is refused, a
+ * correct one included, so someone who can reach the check can keep the owner out of it for up to the
+ * maximum lock.
+ *
+ * **Pass the pool.** On a pool each update runs in its own transaction and is committed at once.
+ * `createPostgresLockoutStore` also takes the `tx` of the app's own `sql.begin`; each update then runs
+ * in a savepoint, and the count commits or rolls back with the app's transaction. A rollback after a
+ * wrong guess erases that guess's count: an app that refuses a wrong code by throwing inside its
+ * transaction is never locked out, however many guesses it gets. A refused guess must commit, so pass
+ * a transaction handle only when that transaction commits whatever the guess was.
+ *
+ * **The Postgres store takes the caller's table.** Table, schema and column names must be lower-case
+ * identifiers; they are validated and sent through the driver's identifier quoting, never spliced
+ * into the SQL. The subject column must be unique. With `createMissing` (the default) an unknown
+ * subject's row is inserted, so every subject is counted; with `createMissing: false` a subject
+ * without a row has nothing to guess and is let through, which fits a table holding one row per
+ * enrolled secret.
+ *
+ * **Counters are never deleted.** With `createMissing`, every new subject adds a row, so an endpoint
+ * keyed by something a stranger chooses, such as an e-mail address, grows the table one row per
+ * address. On a table that holds only counters, delete the rows that decide nothing any more on a
+ * schedule; with the default policy and columns:
+ *
+ * ```sql
+ * DELETE FROM lockouts
+ * WHERE (last_failure_at IS NULL OR last_failure_at < now() - interval '7 days')
+ *   AND (locked_until IS NULL OR locked_until < now())
+ * ```
+ *
+ * A row past its quiet reset with no running lock would be reset by the next check anyway, and a row
+ * whose `last_failure_at` is `NULL` was never counted. On a table that holds enrolled secrets, never
+ * delete rows for this. `MemoryLockoutStore` compares subjects as strings, as a `TEXT` column does:
+ * `1` and `"1"` are one subject.
+ *
+ * **The memory store sweeps when told the quiet period.** Left alone, `MemoryLockoutStore` keeps
+ * every subject for as long as it lives. Give it the lockout's `quietResetMs` and its clock, and it
+ * drops a counter once no lock is running and neither a failure nor a write happened for that long:
+ * the same rows the `DELETE` above removes. Add `maxEntries` for a hard bound:
+ *
+ * ```ts
+ * const store = new MemoryLockoutStore({ quietResetMs: 7 * 24 * 60 * 60_000, maxEntries: 100_000 })
+ * ```
+ *
+ * A full store first drops what a sweep would drop. If nothing can go, a new subject is refused:
+ * `begin` rejects, and no counter is created. A counter with a running lock, or with a failure inside
+ * the quiet period, is never evicted to make room, so filling the store clears nobody's lock or
+ * count. The cost is that checks for new subjects fail for as long as the held counters keep being
+ * written, and for up to `quietResetMs` after the last write. One request per held subject per quiet
+ * period keeps the store full, and an ordinary successful check holds its slot for `quietResetMs`
+ * too, so size the cap well above the subjects you expect in one quiet period. There is no timer:
+ * sweeps run inside `update`, at most once per `quietResetMs` or every 512 calls. Neither option works
+ * with `createMissing: false`, where a dropped subject would stop being counted.
+ *
+ * The doublings of `lockDelayMs` are not capped at a count: `Math.min` already turns an infinite
+ * product into the maximum lock. A check that `begin` counted but whose `fail` never ran (the process
+ * crashed, the request was dropped) is still forgotten after the quiet reset, because `begin` stamps
+ * the time the reset counts from when it is empty. The year test tries every burst length from 1 to
+ * 40: stopping after 12 guesses and waiting out the quiet reset gets about 576 guesses a year, more
+ * than a guesser who tries again the moment each lock ends.
  *
  * @module
  */

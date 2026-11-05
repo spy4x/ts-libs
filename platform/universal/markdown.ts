@@ -22,6 +22,32 @@
  * `www.` and e-mail autolinks). Kept out of the `@spy4x/platform` root export so that importing
  * the package does not load `marked`.
  *
+ * `renderMarkdownSegments` renders like `renderMarkdown` and splits the HTML around component tags: a
+ * self-closing tag alone on a top-level line, its name starting with a capital, its props JSON in
+ * braces or text in double quotes. The library has no list of components and checks no props; the
+ * page maps each tag to its component and validates the props with that component's schema. A tag in
+ * a code block stays code. A line that starts like a tag but does not read as one, or a tag in a list
+ * or a quote, renders as nothing and comes back in `problems` with its line, its tag, an English
+ * `message` and a `code` an editor can translate: `nested` for a tag in a list or a quote, `syntax`
+ * for a line that does not read:
+ *
+ * ```ts
+ * import { renderMarkdownSegments } from "@spy4x/platform/universal/markdown"
+ *
+ * const { segments, problems } = renderMarkdownSegments(post.body)
+ * if (problems.length) throw new Error(problems.map((p) => `line ${p.line}: ${p.message}`).join("\n"))
+ * // "<RunsCalculator saving={15} />" on its own line becomes
+ * // { kind: "component", tag: "RunsCalculator", props: { saving: 15 }, line: 7 }
+ * const body = segments.map((s) =>
+ *   s.kind === "html"
+ *     ? <div dangerouslySetInnerHTML={{ __html: s.html }} />
+ *     : <Figure tag={s.tag} props={s.props} /> // looks the tag up and validates the props
+ * )
+ * ```
+ *
+ * Props are data, never HTML: a string prop comes back as written, so render it as text or an
+ * attribute, which Preact escapes.
+ *
  * @module
  */
 

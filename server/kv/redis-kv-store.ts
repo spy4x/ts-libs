@@ -1,10 +1,7 @@
 /**
  * A Redis-backed key-value store: `GET`/`SET … EX`/`DEL`/`GETDEL`, plus a scoped `reset`.
  *
- * Ported from `template/libs/server/kv/+index.ts`. That file `implements ICacheStorage`
- * from the template's own cache module; `@spy4x/platform/cache` is the extraction of
- * that interface (#125). This file does not import it — the two were extracted in
- * parallel and neither depends on the other's branch. Instead {@link RedisKvStore}
+ * It does not import `@spy4x/platform/cache`'s `ICacheStorage`; {@link RedisKvStore}
  * matches that interface's shape structurally: `get(key: string): Promise<string |
  * null>`, `set(key, value: string, ttlSec: number): Promise<void>`, `del(key):
  * Promise<void>`, `reset(): Promise<void>`. TypeScript's structural typing makes an
@@ -42,7 +39,7 @@ const CONNECT_TIMEOUT_MS = 5000
  *
  * A Redis that freezes after the connection is open (`docker pause`, a stuck host) never
  * answers, and no OS timeout bounds a stalled read, so without this bound every call
- * waited for as long as the freeze lasted (#172). The same fixed value as
+ * waited for as long as the freeze lasted. The same fixed value as
  * {@link CONNECT_TIMEOUT_MS}, for the same reason: not configurable, not exported.
  */
 const COMMAND_TIMEOUT_MS = CONNECT_TIMEOUT_MS
@@ -196,8 +193,8 @@ interface OpenedConnection {
 /**
  * A key-value store scoped to one Redis connection and one key prefix.
  *
- * **The prefix, and why `reset` needs one.** The ported original's `reset()` sent
- * `FLUSHDB`, which deletes every key in the database — including keys another
+ * **The prefix, and why `reset` needs one.** `FLUSHDB` would delete every key in
+ * the database — including keys another
  * application, or another test run, put there. That is not a safe operation for a
  * shared library to offer: this store instead takes a mandatory `keyPrefix` at
  * {@link connect} and every key it touches is scoped under it (`<prefix>:<key>`), so
@@ -213,7 +210,7 @@ interface OpenedConnection {
  * its own — a dropped socket is noticed only when a call next tries to use it. The
  * call whose command fails on a dead connection (a failed write or read, not an error
  * reply from Redis) reconnects and sends that command once more on the fresh
- * connection (#169), so a Redis restart no longer costs the first call after it. A
+ * connection, so a Redis restart no longer costs the first call after it. A
  * resend is not free when the first send did reach Redis: `GET`, `SCAN` and
  * `CLIENT ID` only read, but a resent `SET … EX` or `DEL` can overwrite a write
  * another client made in between, and a resent `GETDEL` finds the key already gone,
@@ -221,7 +218,7 @@ interface OpenedConnection {
  * a call that already reconnected before its first send, or whose one reconnect fails, throws
  * {@link RedisKvStoreConnectionError}, so while Redis stays unreachable every call
  * fails after one bounded attempt, never a loop. A command that got no reply within
- * {@link COMMAND_TIMEOUT_MS} (#172) closes the connection and throws without a resend:
+ * {@link COMMAND_TIMEOUT_MS} closes the connection and throws without a resend:
  * a frozen Redis would only freeze the resend too. A call that finds the connection
  * dead before it sends anything opens a fresh connection the same way {@link connect}
  * does — a TCP connect (`connectTcp`), then `AUTH` when a password was given, then a `PING` that must answer
@@ -499,7 +496,7 @@ export class RedisKvStore {
    * first send then fails on the connection itself — not an error reply, and not a
    * {@link COMMAND_TIMEOUT_MS} timeout — and this call has not reconnected yet, it
    * reconnects (or joins a reconnect already in flight, or finds a concurrent call
-   * already swapped a fresh connection in) and sends the command once more (#169).
+   * already swapped a fresh connection in) and sends the command once more.
    * A first send that did reach Redis before the socket died is repeated; what that
    * costs per command is described on {@link RedisKvStore}.
    *
@@ -538,10 +535,8 @@ export class RedisKvStore {
   /**
    * Gets a value, or `null` when the key does not exist.
    *
-   * The ported original was `get<T extends Reply>(key): Promise<null | T>`, letting
-   * every caller pick its own return type for a command whose reply is always a bulk
-   * string or `null` — an unchecked cast dressed up as a generic. `GET` never returns
-   * anything else, so the return type is fixed to what the protocol actually sends.
+   * Not generic: `GET` never returns anything but a bulk string or `null`, so the
+   * return type is fixed to what the protocol actually sends.
    */
   public async get(key: string): Promise<string | null> {
     return await this.#send<string | null>(["GET", this.#prefixed(key)])
@@ -550,8 +545,7 @@ export class RedisKvStore {
   /**
    * Sets a key with an expiration time.
    *
-   * `ttlSec` must be a positive integer. The ported original passed `ttlSec` straight
-   * through to `SET … EX`; Redis refuses `EX 0`, a negative `EX` and a fractional `EX`
+   * `ttlSec` must be a positive integer. Redis refuses `EX 0`, a negative `EX` and a fractional `EX`
    * with a protocol error (`ERR invalid expire time in 'set' command`), and `EX NaN`
    * or `EX Infinity` fail the same way once stringified — `Number.isInteger` rejects
    * all of them up front with a message naming the value, rather than an opaque
@@ -660,8 +654,7 @@ export class RedisKvStore {
   /**
    * Closes the connection.
    *
-   * Safe to call more than once: the ported original called `this.connection.close()`
-   * unconditionally, and `Deno.Conn.close()` throws `BadResource` on a connection
+   * Safe to call more than once: `Deno.Conn.close()` throws `BadResource` on a connection
    * already closed — a real risk for a caller that closes on both a normal shutdown
    * path and a signal handler. It also throws `BadResource` on a connection the far
    * end already killed, which is why this is wrapped rather than only guarded by

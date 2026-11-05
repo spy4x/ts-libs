@@ -63,8 +63,8 @@ export function breadcrumbItems(
  * The complete `BreadcrumbList` node, `@id`-anchored to the page it describes.
  *
  * The anchor is built from the normalised address, which is why it carries exactly one `#`: a
- * canonical address handed in with a fragment used to produce `…#frag#breadcrumb`, an identifier
- * no other node could ever match.
+ * canonical address handed in with a fragment never yields `…#frag#breadcrumb`, an identifier no
+ * other node could match.
  */
 export function breadcrumbListJsonLd(
   canonical: string,

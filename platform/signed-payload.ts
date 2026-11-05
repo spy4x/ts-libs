@@ -2,8 +2,7 @@
  * Signed payload codec: a small JSON value, bound to a purpose and signed with HMAC-SHA-256,
  * carried as one URL-safe string.
  *
- * Built for two consumers that each hand-rolled the same primitive (#202): the template's
- * group-list pagination cursor and the unsubscribe link on antonshubin.com. A token is
+ * Used by a keyset pagination cursor and a newsletter unsubscribe link. A token is
  *
  * ```
  * base64url(JSON envelope) + "." + base64url(HMAC-SHA-256(secret, MAC input))
@@ -45,6 +44,14 @@
  * const token = await unsubscribe.sign({}, { context: email.trim().toLowerCase() })
  * const result = await unsubscribe.verify(token, { context: email.trim().toLowerCase() })
  * ```
+ *
+ * `createSignedPayloadCodec` signs and verifies a purpose-bound, versioned JSON payload with
+ * HMAC-SHA-256: a pagination cursor, an unsubscribe link. The purpose, the version and an optional
+ * expiry are signed with the payload, and an optional bound context (a user id, an email address) is
+ * covered by the signature without being carried in the token. `verify` checks the signature before it
+ * parses anything, validates the payload with an arktype schema, and returns a `Result` whose error is
+ * a `SignedPayloadErrorCode`; it never throws for any token string. `sign` refuses what `verify` would
+ * refuse. A separate subpath from `./tokens` because it needs arktype at runtime.
  *
  * @module
  */

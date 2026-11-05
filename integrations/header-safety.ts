@@ -1,10 +1,9 @@
 /**
  * Header safety: the transliteration that `Headers` demands.
  *
- * This is the trap `mig` kept a fix for and that `#16` carries. `Headers.set`
- * rejects code points the platform will not accept in a header value, and the
- * rejection surfaces from inside `fetch` as an opaque `TypeError: Value is not a
- * valid ByteString`. Two different needs follow, and `mig` conflated them:
+ * `Headers.set` rejects code points the platform will not accept in a header
+ * value, and the rejection surfaces from inside `fetch` as an opaque
+ * `TypeError: Value is not a valid ByteString`. Two different needs follow:
  *
  * - A **header value** must be transliterated to printable ASCII.
  *   `toAsciiHeaderValue` maps the characters that matter for readability
@@ -13,10 +12,9 @@
  *   `?`. Each run of HT, LF and CR becomes one space: `Headers.set` refuses LF
  *   and CR inside a value, so a multi-line title would otherwise throw before
  *   the request is sent.
- * - A **message body** must be left alone. `mig` passed the body through this
- *   same sanitiser (`notify.ts:119`), so `Café ☕` reached ntfy as `Caf? ?` and
- *   every accented, Cyrillic, CJK and emoji payload was destroyed. Only headers
- *   go through here; nothing in this package applies it to a body.
+ * - A **message body** must be left alone: through this sanitiser, `Café ☕`
+ *   would reach ntfy as `Caf? ?`. Only headers go through here; nothing in this
+ *   package applies it to a body.
  */
 
 /**

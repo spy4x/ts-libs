@@ -67,14 +67,11 @@ function locateHeaderEnd(raw: string): { headerEnd: number; sepLen: number } {
 
 /**
  * A code point this file treats as hiding a header line break the way a lone
- * CR does (issue #121), and everything {@link FORBIDDEN_HEADER_BYTES} and
- * {@link FORBIDDEN_MULTIBYTE_SEQUENCES} are generated from — round 2 review
- * asked for the table to be generated from this list rather than hand-listed
- * byte sequences, after finding gaps a hand-picked list kept leaving: round 1
- * caught 0x85 exempted as a false continuation byte, round 2 found the same
- * exemption problem applies to *any* of these code points once an attacker
- * is allowed to pick *any* UTF-8 byte length and any amount of overlong
- * padding, including of LF and CR themselves — `C0 8A` is an overlong 2-byte
+ * CR does, and everything {@link FORBIDDEN_HEADER_BYTES} and
+ * {@link FORBIDDEN_MULTIBYTE_SEQUENCES} are generated from. The table is
+ * generated, not hand-listed, because an attacker may pick *any* UTF-8 byte
+ * length and any amount of overlong padding for any of these code points,
+ * including LF and CR themselves — `C0 8A` is an overlong 2-byte
  * encoding of LF that a lenient decoder reads as a line break, even though
  * the raw byte 0x0A never appears in the message at all, so the CR/LF
  * uniformity check above never sees it either.
@@ -85,7 +82,7 @@ function locateHeaderEnd(raw: string): { headerEnd: number; sepLen: number } {
  * NEL: 0x85 is not ASCII, so its own least-overlong *UTF-8* encoding is the
  * two-byte `C2 85`, one byte longer than its raw-octet form. That raw form
  * is a different thing entirely — not UTF-8 at all, just the byte value
- * 0x85 on its own, the Latin-1/windows-1252 reading round 1 review named —
+ * 0x85 on its own, the Latin-1/windows-1252 reading —
  * which is exactly what `flatScanSingleByte` covers instead, so 0x85 is the
  * one code point both fields apply to. `minimalLength` tells
  * {@link FORBIDDEN_MULTIBYTE_SEQUENCES} which generated packing is the
@@ -106,7 +103,7 @@ function locateHeaderEnd(raw: string): { headerEnd: number; sepLen: number } {
  * Refusing every UTF-8 packing of every one of these here is therefore the
  * safe direction, not a free one: it costs genuine RFC 6532 mail whose text
  * needs one of the two rare Unicode code points, by UTF-8 byte content
- * rather than by meaning. `email/README.md` states that cost beside this
+ * rather than by meaning. `dkim-verify.ts` states that cost beside this
  * rule: a legitimate header value whose UTF-8 encoding happens to contain
  * 0x85 (`Å` C3 85, `ą` C4 85, `久` E4 B9 85, `😅` F0 9F 98 85) is refused too.
  */
@@ -237,8 +234,7 @@ const FORBIDDEN_MULTIBYTE_SEQUENCES_BY_LEAD_BYTE: ReadonlyMap<
  * `i + sequence.length > end`, not `>=`: a sequence that ends *exactly* at
  * `end` — the last bytes in a header block that has no trailing empty line
  * — fits entirely inside the block and must match, not be treated as
- * spilling past it. Round 2 review asked this boundary be pinned by a test
- * rather than left to reviewers to notice by reading the comparison.
+ * spilling past it. A test pins this boundary.
  */
 function matchesSequenceAt(
   raw: string,
@@ -256,7 +252,7 @@ function matchesSequenceAt(
 /**
  * Scan a header block for {@link FORBIDDEN_HEADER_BYTES} and
  * {@link FORBIDDEN_MULTIBYTE_SEQUENCES}, byte by byte with no decoding step
- * for the single-byte set (issue #121). `end` is the same header-block
+ * for the single-byte set. `end` is the same header-block
  * boundary {@link refuseHeaderLineEndings} computes and passes in, so the
  * two checks can never disagree about where the block stops, and the scan
  * runs the full block rather than stopping at the first line ending — the
@@ -314,7 +310,7 @@ function scanForbiddenHeaderBytes(raw: string, end: number): string | undefined 
  * is what mailbox storage produces — RFC 6376 §3.4.5's own example message, as
  * this package's `rfc6376-rsa` fixture carries it, has no CR anywhere.
  *
- * Issue #121: a raw CR or LF are not the only way a reader can take a byte
+ * A raw CR or LF are not the only way a reader can take a byte
  * sequence for a line break inside a header value. A vertical tab, a form
  * feed, the file/group/record separators (0x1C-0x1E) and NEL (0x85) are
  * refused as raw bytes wherever they occur, and every UTF-8 packing — the

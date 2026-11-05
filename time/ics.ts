@@ -6,9 +6,82 @@
  * It depends only on `time/ics-core.ts` — deliberately not on `time/tz.ts` —
  * so the entire timezone contract is "give me the correct UTC instant".
  *
- * Out of scope by design (documented in `time/README.md`): RRULE/EXDATE/
+ * Out of scope by design: RRULE/EXDATE/
  * RECURRENCE-ID, VTIMEZONE/TZID, VALARM/DURATION, VTODO, multiple VEVENTs, and
  * any parsing of existing calendars.
+ *
+ * ```ts
+ * import { generateIcs, IcsEventStatus } from "@spy4x/time/ics"
+ * import { zonedDateTime } from "@spy4x/time/tz"
+ *
+ * const start = zonedDateTime("2026-08-28", "10:00", "Europe/Berlin")
+ * const ics = generateIcs(
+ *   {
+ *     uid: "01HXYZBK8M@calendar.example.com",
+ *     start,
+ *     end: new Date(start.getTime() + 30 * 60_000),
+ *     summary: "Meeting with Jane Doe",
+ *     organizer: { email: "jane@example.com", name: "Jane Doe" },
+ *     attendees: [{ email: "client@example.com", name: "Client", rsvp: true }],
+ *   },
+ *   { prodid: "-//example.com//booking//EN", dtstamp: new Date() },
+ * )
+ * ```
+ *
+ * ## Timezone contract
+ *
+ * `generateIcs` takes **absolute instants** (`Date`) and always writes UTC
+ * (`DTSTART:20260828T080000Z`), never a local wall clock and never a `TZID`. It does not import
+ * `time/tz.ts` and never reads the host `TZ`.
+ *
+ * Converting a wall-clock date + time + IANA zone into an instant is the caller's one line:
+ * `zonedDateTime("2026-08-28", "10:00", "Europe/Berlin")`. Keeping that out of the writer is what
+ * makes the writer dependency-free and testable — UTC output is an absolute instant, so every client
+ * renders it in the viewer's own zone anyway, and there is no `VTIMEZONE` component to get wrong.
+ *
+ * Because `dtstamp` is a required option rather than `new Date()` read internally, two calls with the
+ * same arguments produce byte-identical documents.
+ *
+ * **The trap is on the caller's side, not in this API.** `start` and `end` must be `Date` objects — a
+ * string throws (`TypeError: event.start.getTime is not a function`), so nothing is silently converted
+ * for you. What _is_ silent is how you make that `Date`: `new Date("2026-08-28T10:00:00")` — no offset —
+ * is parsed by JavaScript as **host-local**, so the same call means different instants on a laptop and
+ * in CI. Always name the zone explicitly, with `zonedDateTime(date, time, zone)` from `time/tz` or a
+ * `Z`-suffixed ISO string:
+ *
+ * ```ts
+ * // Wrong: host-local, differs per machine.
+ * generateIcs({ ...event, start: new Date("2026-08-28T10:00:00") }, options)
+ * // Right: the wall clock is tied to a zone, or the instant is given outright.
+ * generateIcs({ ...event, start: zonedDateTime("2026-08-28", "10:00", "Europe/Berlin") }, options)
+ * ```
+ *
+ * ```ts
+ * generateIcs(event, { prodid, dtstamp })
+ * ```
+ *
+ * ## Not in scope
+ *
+ * **Across the package.** Inputs are typed values, and anything outside the type throws rather than
+ * being coerced: `generateIcs` rejects a non-`Date` instant, a missing `uid`, a `sequence` that is not
+ * a non-negative integer and an empty mail address. There is no silent conversion anywhere in `time/`.
+ *
+ * **`time/ics` — calendar features.** Not implemented, and not planned here. Do not assume otherwise:
+ *
+ * - **No recurrence.** No `RRULE`, no `EXDATE`, no `RDATE`, no `RECURRENCE-ID`. One VEVENT, one
+ *   occurrence.
+ * - **No `VTIMEZONE` and no `TZID`.** All times are UTC with a `Z` suffix.
+ * - **No alarms and no explicit duration.** No `VALARM`, no `DURATION` (`DTEND` is always written).
+ * - **No other components.** No VTODO, no VJOURNAL, no VFREEBUSY, no multiple VEVENTs in one
+ *   VCALENDAR.
+ * - **No parsing of a calendar.** The writer is write-only, and no ISO-8601 or relative-date parser
+ *   feeds it. Reading and editing an existing calendar object is `time/ical`'s job.
+ * - **No CalDAV wire concerns.** `RELATED-TO`, `ETag`/`If-Match` and HTTP transport are not this
+ *   package's job.
+ * - **No product domain.** No bookings, hosts, guests, availability, rate limits or cancel tokens —
+ *   callers map their own types onto `IcsEvent`. A human-readable summary of an instant is
+ *   `formatInstantLong(start, zone)` from `time/tz`, not a calendar concern.
+ *
  * @module
  */
 

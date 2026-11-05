@@ -8,6 +8,8 @@
  *
  * It fails open: a tracker that is down, slow or unreachable never throws into the app. Without a
  * DSN it is off and makes no request.
+ *
+ * @module
  */
 
 import { uuidV7 } from "./uuid.ts"

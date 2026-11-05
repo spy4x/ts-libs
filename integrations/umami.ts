@@ -4,7 +4,7 @@
  *
  * Umami's Links (`POST /api/links`) count every visit to `<umami>/q/<slug>` and then redirect to
  * the link's `url`. A product makes one link per place it shares an address in (a group, a social
- * network, a friend), so Umami can tell the places apart (spy4x/seed#483).
+ * network, a friend), so Umami can tell the places apart.
  *
  * Behaviour:
  *
@@ -21,6 +21,53 @@
  * Shapes checked against Umami's source, `src/app/api/links/route.ts`,
  * `src/app/(collect)/q/[slug]/route.ts` and `src/app/api/websites/[websiteId]/{stats,metrics,
  * pageviews,event-data/values}/route.ts` (v3.4).
+ *
+ * ## `createUmamiLink`, `checkUmami`, `umamiLinkUrl` — Umami links
+ *
+ * A self-hosted Umami (v3) counts every visit to a link's `<umami>/q/<slug>` and redirects it to the
+ * link's `url`. A product makes one link per place it shares an address in, so Umami tells the
+ * places apart. Each function returns `{ success, output, error }` and never throws.
+ *
+ * - **`createUmamiLink({ baseUrl, token, id?, name, url, slug, teamId?, fetch?, requestTimeoutMs? })`**
+ *   posts to `/api/links` with the token as `Authorization: Bearer` and returns the stored link
+ *   (`id`, `name`, `url`, `slug`) as `output`. `baseUrl` is the instance, with its base path if any.
+ *   Umami's limits are checked first: a name of 1 to 100 characters, an `http`/`https` url of at most
+ *   500, and a slug of 8 to 100 letters, digits, `-` and `_`.
+ * - **Idempotent with an `id`.** Pass a UUID as `id`, kept with the product's own row. A retry after
+ *   a lost answer, or two creates at once, then make one link: when Umami refuses the create, the
+ *   link is read back by its id, and one with the same slug and url counts as created.
+ * - **`checkUmami({ baseUrl, fetch?, requestTimeoutMs? })`** asks `/api/heartbeat`, with no token,
+ *   whether the instance answers, so a redirect can skip Umami while it is down.
+ * - **`umamiLinkUrl(baseUrl, slug)`** is the link's public address, `<baseUrl>/q/<slug>`.
+ * - **Secrets.** The token never appears in `error` or `output`: Umami's message is cleaned
+ *   (control characters removed, the token replaced by `<REDACTED:TOKEN>`, cut to 200 characters),
+ *   and a transport failure names only the error class. Answers are read under a 64 KiB cap.
+ * - **Timeout.** Each request runs under `AbortSignal.timeout(requestTimeoutMs)`, 10 s by default.
+ *
+ * ## `readUmamiStats`, `readUmamiMetrics`, `readUmamiPageviews`, `readUmamiEventValues`, `checkUmamiWebsite` — a website's numbers
+ *
+ * Each read takes `{ baseUrl, token, websiteId, startAt, endAt, filters?, fetch?, requestTimeoutMs? }`
+ * (times in milliseconds) and returns `{ success, output, error }`, plus the HTTP `status` on a
+ * failure (`null` when Umami did not answer), so a caller tells a refused token from an outage.
+ * `filters` narrows every count to events whose value equals the one given, such as
+ * `{ utmSource: "zalo-a" }` or `{ path: "/shirts/linen" }`. Each is sent as Umami's `eq.<value>`, so a
+ * value that starts like one of Umami's operators (`c.`, `re.`) is still matched as written. A value
+ * with a comma (which Umami reads as a list), an empty one, or a name outside `UMAMI_FILTER_NAMES` is
+ * refused before any request, as are a `type`, `unit`, `limit` or time zone Umami does not take.
+ *
+ * - **`readUmamiStats`**: the period's `pageviews`, `visitors`, `visits`, `bounces` and `totaltime`,
+ *   and the same under `comparison` for the period of the same length just before.
+ * - **`readUmamiMetrics({ type, limit? })`**: rows `{ x, y }`, largest first. For `type: "event"`, `y`
+ *   counts the custom events of each name; for the others (`path`, `utmSource` and the rest), the
+ *   visitors who viewed a page with that value.
+ * - **`readUmamiPageviews({ unit, timezone, compare? })`**: `pageviews` and `sessions` per unit, and
+ *   the previous period's under `compare`. Umami leaves out a unit with nothing in it.
+ * - **`readUmamiEventValues({ eventName, propertyName })`**: how many events carried each value of a
+ *   property, such as the item of an `order-telegram` event.
+ * - **`checkUmamiWebsite({ baseUrl, token, websiteId })`** says why a website cannot be read:
+ *   `problem` is `settings` (a base address or token that cannot work), `token` (Umami refuses it),
+ *   `website` (an id that is no UUID, or one the working token does not see) or `unreachable`.
+ *
  * @module
  */
 

@@ -7,6 +7,42 @@
  * (`href`, `etag`, moving between lists, the undo text) on top. Nothing here reads the clock or
  * the network: the caller passes `now` and the new `UID`.
  *
+ * ## Editing the repeat rule and the reminders of a task
+ *
+ * `TaskEdit.repeatRule` takes the `RRULE` value (`formatRrule` writes it; `null` removes the repeat)
+ * and `TaskEdit.reminders` takes the `AlarmInput` list the task should have afterwards (an empty list
+ * removes them all). Both go through the lossless patch: a rule that means what the task has, and
+ * reminders with the triggers it has, leave their lines as they are, and a reminder that stays keeps
+ * its vendor lines. `rebaseEdit`, `keepMine` and `collisions` know both fields (`EditField.Repeat`,
+ * `EditField.Reminders`). A rule `parseRrule` does not read is refused.
+ *
+ * `TaskEdit.repeatFrom` sets what the next date is counted from: `RepeatFrom.Completion` adds the line
+ * `X-REPEAT-FROM:COMPLETION`, `RepeatFrom.DueDate` removes it, and the value the task already has
+ * leaves the text byte for byte. Removing the repeat rule removes the line too, and on a task that
+ * does not repeat after the edit nothing is written. `rebaseEdit`, `keepMine` and `keepMineText` carry
+ * the choice like any other field. `completeTask(task, now, { timeZone })` and
+ * `keepMineText(baseIcs, mineIcs, theirs, now, { timeZone })` take the person's zone for such a task.
+ *
+ * A repeat rule needs a due date, because `completeTask` moves a repeating task from its due date and
+ * refuses one that has none. `editTask` (and `rebaseEdit`, `keepMine` and `keepMineText`, which write
+ * through it) refuses an edit that would leave a rule on a task with no due date, and the message
+ * names the rule: a new or changed `repeatRule` on a task without a due date, and `due: null` on a
+ * task that repeats. The same edit goes through when it also sets `due`, or also passes
+ * `repeatRule: null`. A task that arrives repeating without a due date, written by another app, can
+ * still be renamed or changed in any way that does not write a rule; `completeTask` still refuses it
+ * with `NoDueDate` until it gets a due date or loses the rule.
+ *
+ * `keepMineText(baseIcs, mineIcs, theirs, now)` is "keep mine" for a change stored as whole text, such
+ * as a write that waited in a queue while the server's copy changed. It returns the server's text with
+ * only what differs between the base text and mine on it: every `TaskEdit` field except the list, and
+ * a completion or a reopening I made, unless the server's copy already has it. A repeating task I
+ * completed is recognised by its dates and rule, and the server's copy moves on from its own dates.
+ * A task that counts from completion is recognised only when `now` is the day I completed it; on a
+ * later day the result keeps the dates my completion gave.
+ * It refuses with a `KeepMineStep` (and the `CompleteTodoErrorCode` for a completion) when a text does
+ * not read, the server's copy cannot take the completion, or `editTask` refuses a field; never send my
+ * whole text then, which would undo every change of the other side.
+ *
  * @module
  */
 

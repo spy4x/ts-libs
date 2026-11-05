@@ -204,9 +204,8 @@ export interface PersistentCursorStoreOptions {
 /**
  * A {@link CursorTracker} whose state survives a reload.
  *
- * Financy kept its sync checkpoint in an in-memory signal and sent a hardcoded `0` as the sync
- * floor, so every connect re-downloaded everything: a checkpoint that does not survive a reload is
- * not a checkpoint. Here the cursors and the last successful sync timestamp are written through an
+ * A checkpoint that does not survive a reload is not a checkpoint, so the cursors and the last
+ * successful sync timestamp are written through an
  * injected {@link KeyValueStore}, the store is read lazily on first use rather than at import time,
  * and an entry that does not parse is treated as absent (fail closed to a full pull). A read that
  * throws reaches the caller, and the next call loads again.

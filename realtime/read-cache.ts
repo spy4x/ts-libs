@@ -21,6 +21,84 @@
  * The cache holds server state only. Values must be structured-cloneable. Writes made offline wait
  * in the outbox (`@spy4x/realtime/outbox`), and the app layers them on top of what a read returns.
  *
+ * The offline-readable level of ADR 003: a copy of a list read, kept on the device, that answers when
+ * the server cannot be reached. One cache per signed-in user, over `createDataCache`.
+ *
+ * ```ts
+ * import { cachedRead, createReadCache, readCopy } from "@spy4x/realtime/read-cache"
+ *
+ * const cache = createReadCache({ name: `reads:${userId}` }) // or undefined: no local data
+ *
+ * const copy = await readCopy<Group[]>(cache, `groups`) // paint at once; undefined when none
+ * const { value, fresh, savedAt } = await cachedRead(cache, `groups`, () => fetchGroups())
+ * // fresh: the server answered now. Not fresh: a copy taken at `savedAt` (epoch ms).
+ *
+ * await cache.delete(`groups`) // the server refused this read: drop only that list's copy
+ * await cache.clear() // sign-out, or a start that finds no session: every copy of this user
+ * ```
+ *
+ * - Every answer replaces the copy under its key. A read that cannot reach the server
+ *   (`ConnectionLostError`, a `RequestTimeoutError`, or the `TypeError` a failed `fetch` rejects with)
+ *   answers from the copy,
+ *   or throws the connection error when there is none. A `TypeError` thrown by your own `read`
+ *   function counts as unreachable too.
+ * - `delete(key)` removes one copy and leaves the rest; it does nothing when there is none.
+ *   `createMemoryReadCache()` from `@spy4x/realtime/testing` is an in-memory `ReadCache` for tests
+ *   (no IndexedDB); it keeps the same rule that nothing is saved after `clear`. A custom `ReadCache`
+ *   must now implement `delete`.
+ * - `clear()` finishes the instance: it stores nothing more, so a read still in flight at sign-out
+ *   cannot write its answer back. A new user needs a new cache.
+ * - Any other error is thrown and the copy stays. `unauthorized` and `forbidden` therefore neither
+ *   return nor replace it.
+ * - A device that cannot save does not fail the read; the answer is returned and the copy is not
+ *   updated. `readCopy` never rejects.
+ * - `cachedRead(undefined, key, read)` only calls `read`, so a store has one code path and an app
+ *   without local data touches no IndexedDB.
+ * - Run the full read inside `read` (all pages), so the copy is the whole list. Search and filters
+ *   then run over the list the store holds. `cache.get` / `cache.set` let a layer on top (the
+ *   offline-writable collection) read and update a copy directly.
+ *
+ * ## Local reads: the rules a screen needs
+ *
+ * `createLocalReads` wraps `cachedRead` with the rules a store follows when a read is refused, so an
+ * app does not write them again:
+ *
+ * ```ts
+ * import { createLocalReads, ReadRefused } from "@spy4x/realtime/read-cache"
+ *
+ * const reads = createLocalReads(() => currentUserCache) // undefined: no local data, nothing kept
+ *
+ * async function fetchGroups(): Promise<Group[]> {
+ *   const response = await fetch(`/api/groups`)
+ *   const body = await response.json().catch(() => null)
+ *   if (!response.ok) {
+ *     throw new ReadRefused(
+ *       body?.error?.message ?? `Request failed`,
+ *       response.status,
+ *       body?.error?.code,
+ *     )
+ *   }
+ *   return body.groups
+ * }
+ *
+ * const { value, fresh, savedAt } = await reads.through(`groups`, fetchGroups, (copy) => {
+ *   if (groups.value.length) return false // a list is on screen already: do not paint the copy
+ *   groups.value = copy?.value ?? [] // the copy before the answer; `undefined` takes it back
+ * })
+ * ```
+ *
+ * - A REST reader throws `ReadRefused(failure, status, code)` for an answer that is not `ok`, so the
+ *   answer is neither kept nor hidden behind the copy.
+ * - `isProxyAnswer(error)`: a `ReadRefused` that `isForeignAnswer` takes for the proxy's (a 5xx, a
+ *   404 or a 429 without an error code). `through` answers it from the copy, as with no network.
+ * - `isRefusal(error)`: the server refuses this person the list. A 401 or 403, a 404 with a code, or a
+ *   socket read refused `unauthorized`, `forbidden` or `not_found`. `through` deletes the copy, so it
+ *   is not shown offline later. Any other error (a 500 with a code) is thrown and the copy stays.
+ * - `early` is given the copy only before the server has answered. When the read then rejects,
+ *   `early` is called once more with `undefined` to take back what it painted, unless it returned
+ *   `false` (it painted nothing).
+ * - `current` is asked at every read, so the reads follow the signed-in user's cache.
+ *
  * @module
  */
 

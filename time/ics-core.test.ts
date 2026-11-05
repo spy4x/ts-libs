@@ -216,7 +216,7 @@ Deno.test("icsEscape strips NUL, BEL and DEL but keeps HTAB", () => {
 Deno.test("icsUnescape decodes hand-written wire escapes literally", () => {
   // Literal expectations against escapes written by hand, NOT produced by
   // icsEscape. A round-trip alone cannot catch a symmetric error (encoder and
-  // its inverse agreeing on the wrong thing), and #13 uses this function to
+  // its inverse agreeing on the wrong thing), and an exporter uses this function to
   // decode documents this package did not write.
   assertEquals(icsUnescape("a\\nb"), `a${LF}b`)
   assertEquals(icsUnescape("a\\Nb"), `a${LF}b`)

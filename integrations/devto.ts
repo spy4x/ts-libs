@@ -15,6 +15,27 @@
  *    transport failures; posting does not, because the article may already exist.
  *  - The functions never throw.
  *
+ * Cross-posts an article to Dev.to (Forem API v1) with `canonical_url` pointing at the original, so
+ * the copy helps the original's search ranking. Both return `{ success, output, error }` and never
+ * throw.
+ *
+ * - **`createDevtoArticle({ apiKey, article, fetch?, requestTimeoutMs?, sleep? })`** posts
+ *   `{ article: { title, body_markdown, published, canonical_url, description?, tags?, main_image? } }`
+ *   to `https://dev.to/api/articles` and answers `output: { id, url }`. At most 4 tags, sent as one
+ *   comma-separated string; `canonical_url` and `main_image` must be `http`/`https`.
+ * - **`findDevtoArticleByCanonical({ apiKey, canonicalUrl, fetch?, requestTimeoutMs?, sleep? })`**
+ *   reads `/api/articles/me/all` 1,000 articles per page until an empty page, and answers the
+ *   article whose `canonical_url` matches after URL parsing, or `output: null`. A malformed page, or
+ *   more than 100 pages, is a failure, never "not found".
+ * - **Look up before posting.** Posting is not idempotent. Only `429` is retried on a post; after a
+ *   `5xx`, a timeout or a dropped connection the error says the article may exist. The lookup also
+ *   retries those. `Retry-After` is waited exactly, up to 30 s; three attempts at most.
+ * - **The key stays secret.** It is sent only in the `api-key` header, a redirect is refused rather
+ *   than followed, transport errors carry only the error class, and Forem's error text is cleaned,
+ *   capped at 200 characters and has the key replaced by `<REDACTED:API_KEY>`.
+ * - **Answers are checked.** Bodies are read under a cap (64 KiB for errors, 32 MiB for a page) and
+ *   validated with arktype; an article `url` that is not `https` is refused.
+ *
  * @module
  */
 

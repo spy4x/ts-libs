@@ -1,14 +1,8 @@
 // The session cookie: a signed, HTTP-only cookie holding `<session id>:<token>`, plus a readable
 // cookie holding the user id for the front end.
 //
-// Rewritten from `template/apps/api/services/auth/cookie.ts`. The source passed Hono's `maxAge` in
-// milliseconds whenever it was given an expiry date and in seconds otherwise. Hono's `maxAge` is
-// seconds, so that branch asked for a cookie a thousand times too long, and Hono throws for anything
-// over 400 days. No caller in the template passed a date, so the cookie always got the full lifetime
-// from the moment it was set and was never sent again when the session was extended. `Max-Age` is
-// now computed in seconds from the session's own expiry, and `createAuth` sends the cookie again
-// after an extension. The source's `secure` followed an `isDev` flag read from the app's config;
-// here it is an option that defaults to on.
+// `Max-Age` is computed in seconds (Hono's unit) from the session's own expiry, and `createAuth`
+// sends the cookie again after an extension. `secure` is an option that defaults to on.
 
 import { deleteCookie, getSignedCookie, setCookie, setSignedCookie } from "hono/cookie"
 import type { Context } from "hono"

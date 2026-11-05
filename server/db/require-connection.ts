@@ -4,6 +4,19 @@
  *
  * Nothing here opens a connection or reads the environment at import time.
  *
+ * ```ts
+ * import { createSql } from "@spy4x/server/db/postgres"
+ * import { requireDbConnection } from "@spy4x/server/db/testing"
+ *
+ * const sql = createSql(requireDbConnection({ hint: "recipe in docs/handoff.md" }))
+ * ```
+ *
+ * `requireDbConnection({ env?, hint? })` reads `DB_HOST`, `DB_USER`, `DB_PASS`, `DB_NAME` and the
+ * optional `DB_PORT` and returns `{ connection, connectTimeout: 5 }`. When variables are missing or
+ * blank it throws one error naming all of them, for example `integration test needs DB_HOST, DB_PASS
+ * (recipe in docs/handoff.md)`, so a test fails instead of skipping. `env` is an `EnvReader`
+ * (`createEnvReader` makes one for a test); the default is the process environment.
+ *
  * @module
  */
 

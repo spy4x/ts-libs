@@ -1,5 +1,5 @@
 /**
- * What a browser bundle of `universal/money-core` and `universal/color-core` carries (#863).
+ * What a browser bundle of `universal/money-core` and `universal/color-core` carries.
  *
  * arktype's own module code runs when it loads and the package does not declare
  * `sideEffects: false`, so any import of it keeps about 150 KB in a bundle, used or not. The core

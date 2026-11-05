@@ -15,13 +15,9 @@ import { type CronSchedule, nextCronRun, parseCron } from "@spy4x/time/cron"
 /**
  * One outbox row.
  *
- * The ported original (`template/libs/server/outbox/+index.ts`) also carried
- * `groupId` and `actorUserId` — the template's own data model, not something a
- * generic outbox needs. A consumer that wants to route or filter on more than
- * `aggregateType`/`aggregateId` pulls the authoritative row, per the module doc
- * above; that is the whole point of an identity-only outbox. Dropped here rather
- * than kept as optional fields, since a library-level type should not carry an
- * application's foreign keys at all.
+ * It carries no application foreign keys (a group, an actor). A consumer that wants to
+ * route or filter on more than `aggregateType`/`aggregateId` pulls the authoritative
+ * row, per the module doc above; that is the whole point of an identity-only outbox.
  */
 export interface OutboxEvent {
   id: string
@@ -339,11 +335,9 @@ export function retryDelayMs(
  * Falls back to `"Error"` when `name` is not a string, the same rule
  * `integrations/retry.ts`'s `readErrorName` follows: `Error.prototype.name` is a
  * writable property, so nothing stops a caller's `Error` carrying a non-string `name`.
- * The ported original was `error.name || "Error"`, which is truthy — and therefore
- * used as-is — for any non-empty, non-zero `name`, including a number; the value then
- * reached `.slice(0, 64)` and threw `TypeError: name.slice is not a function`, which
- * `drainOnce` never caught (it is thrown by the code inside its own `catch` block), so
- * one such event stopped the whole batch instead of being rescheduled.
+ * `error.name || "Error"` would pass a number through to `.slice(0, 64)`, and the
+ * `TypeError` it throws inside `drainOnce`'s own `catch` block would stop the whole
+ * batch instead of rescheduling the one event.
  */
 export function errorCodeOf(error: unknown): string {
   if (!(error instanceof Error)) {

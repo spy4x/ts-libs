@@ -85,11 +85,11 @@ Deno.test("resolveKeyFile: a linked worktree with its OWN key uses it, not the m
 })
 
 Deno.test(
-  "resolveKeyFile: GIT_DIR/GIT_COMMON_DIR/GIT_WORK_TREE/GIT_INDEX_FILE pointed at a decoy never affect resolution (#173)",
+  "resolveKeyFile: GIT_DIR/GIT_COMMON_DIR/GIT_WORK_TREE/GIT_INDEX_FILE pointed at a decoy never affect resolution",
   async () => {
     // The module reads no environment variable at all for this lookup — it can't be poisoned by
     // construction. This proves it: pointing every git-common env var this rostok's own history
-    // (#226) warned about at a decoy still resolves to the real main checkout's key.
+    // warned about at a decoy still resolves to the real main checkout's key.
     const root = await createScratchFolder("age64_poison")
     try {
       const main = join(root, "main")

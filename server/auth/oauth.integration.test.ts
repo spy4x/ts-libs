@@ -1,5 +1,5 @@
 /**
- * OAuth sign-in against a real Postgres (#57 finding 2, #74).
+ * OAuth sign-in against a real Postgres.
  *
  * The same account scenarios the unit tier runs on `MemoryAuthStore` run here on the Postgres store
  * and session store: a new sub creates an account, a verified address links to its proven owner and

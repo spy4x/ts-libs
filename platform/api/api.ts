@@ -2,29 +2,16 @@
  * The browser side of the API result convention: {@link apiFetch} wraps `fetch` so a caller
  * branches on `ok` instead of on a thrown exception, and always gets a typed status and a message.
  *
- * Moved from `template/apps/spa/src/state/api.ts`. Browser-only — nothing here imports Hono or a
- * server type, and this file must stay that way so a server bundle never pulls in `fetch`-shaped
- * browser code it does not need. {@link ApiError} and {@link ApiResult} are moved from
- * `template/libs/platform/types/+index.ts`; `ApiError` is now an `interface` with the same two
- * fields plus an optional `code`, `ApiResult` is unchanged.
+ * Browser-only — nothing here imports Hono or a server type, and this file must stay that way so a
+ * server bundle never pulls in `fetch`-shaped browser code it does not need.
  *
- * **Bug fixed at extraction time.** The source built the request as
- * `{ credentials: "include", headers: { "content-type": "application/json", ...init?.headers },
- * ...init }`. Because `init` was spread last, a caller passing its own `headers` replaced the
- * whole merged headers object instead of adding to it — a caller who only wanted to add
- * `Authorization` silently lost `content-type`. Here the default header and the caller's headers
- * are merged into one `Headers` instance first (accepting every `HeadersInit` form: a plain
- * object, an array of `[name, value]` pairs, or a `Headers` instance), the caller's own
- * `content-type` wins because it is applied after the default, and `headers` is the only field
- * `init` does not get to overwrite by a later spread — every other `init` field (`credentials`,
- * `signal`, `method`, `body`, …) still reaches `fetch` exactly as the caller set it.
- *
- * **Bug fixed at extraction time (#132).** The source always set the default `content-type` to
- * `application/json`, even when `body` was a `FormData`: the request reached the server labelled
- * as JSON, without a multipart boundary, and the caller had no way to make `fetch` choose the right
- * type. The default is now applied only when `body` is a string or absent; any other body shape
- * (`FormData`, `URLSearchParams`, `Blob`, `ArrayBuffer`/typed array, a stream) is left without a
- * default so `fetch` sets its own `content-type`.
+ * The default `content-type` header and the caller's headers are merged into one `Headers`
+ * instance (accepting every `HeadersInit` form), so a caller who adds `Authorization` keeps
+ * `content-type`, and the caller's own `content-type` wins. Every other `init` field
+ * (`credentials`, `signal`, `method`, `body`, …) reaches `fetch` exactly as the caller set it. The
+ * default `application/json` applies only when `body` is a string or absent; any other body shape
+ * (`FormData`, `URLSearchParams`, `Blob`, `ArrayBuffer`/typed array, a stream) gets no default, so
+ * `fetch` sets its own `content-type` and a multipart boundary.
  */
 
 import type { FieldErrors } from "@spy4x/validation"

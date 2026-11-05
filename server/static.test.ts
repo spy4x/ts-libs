@@ -651,8 +651,8 @@ Deno.test("static: denoStaticFs refuses to open a directory as a file", async ()
 })
 
 Deno.test("static: nodeStaticFs streams a file over several chunks, byte for byte", async () => {
-  // llms-full.txt is far larger than one 64 KiB chunk.
-  const path = new URL("../llms-full.txt", import.meta.url).pathname
+  // llms.txt is far larger than one 64 KiB chunk.
+  const path = new URL("../llms.txt", import.meta.url).pathname
   const handle = await nodeStaticFs.open(path)
   assertStrictEquals(handle !== null, true)
   const expected = await Deno.readFile(path)
@@ -885,7 +885,7 @@ for (
   const [name, fs] of [["denoStaticFs", denoStaticFs], ["nodeStaticFs", nodeStaticFs]] as const
 ) {
   Deno.test(`static: ${name}.openAt starts the body at the given byte, with mtime`, async () => {
-    const path = new URL("../llms-full.txt", import.meta.url).pathname
+    const path = new URL("../llms.txt", import.meta.url).pathname
     const expected = await Deno.readFile(path)
     const handle = await fs.openAt!(path, 100_000)
     assertEquals(handle!.size, expected.byteLength)
@@ -898,7 +898,7 @@ for (
   })
 
   Deno.test(`serveFile: a range deep in a real file through ${name}`, async () => {
-    const path = new URL("../llms-full.txt", import.meta.url).pathname
+    const path = new URL("../llms.txt", import.meta.url).pathname
     const expected = await Deno.readFile(path)
     const response = await serveFile(get({ Range: "bytes=70000-200000" }), path, { fs })
     assertEquals(response!.status, 206)

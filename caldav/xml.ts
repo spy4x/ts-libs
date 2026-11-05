@@ -10,6 +10,52 @@
  * Text is returned exactly as decoded, line breaks included: `calendar-data` is iCalendar, whose
  * wire format is CRLF, so the reader does not apply XML's CRLF-to-LF normalisation.
  *
+ * ## Reading a multistatus response
+ *
+ * ```ts
+ * import {
+ *   CALDAV_NS,
+ *   calendarQueryBody,
+ *   DAV_NS,
+ *   getPropText,
+ *   parseMultistatus,
+ * } from "@spy4x/caldav/xml"
+ * import { resolveHref } from "@spy4x/caldav/url"
+ *
+ * const calendarUrl = "https://dav.example.com/dav/cal/user%40example.com/inbox/"
+ * const response = await fetch(calendarUrl, {
+ *   method: "REPORT",
+ *   headers: { Depth: "1", "Content-Type": "application/xml; charset=utf-8" },
+ *   body: calendarQueryBody({ component: "VTODO" }),
+ * })
+ * const parsed = parseMultistatus(await response.text())
+ * if (!parsed.success) throw new Error(parsed.error.message)
+ *
+ * for (const item of parsed.output) {
+ *   const url = resolveHref(item.href, calendarUrl) // `%40` and `%2F` kept as sent
+ *   const etag = getPropText(item, DAV_NS, "getetag") // `"123"`, never `&quot;123&quot;`
+ *   const ics = getPropText(item, CALDAV_NS, "calendar-data")
+ * }
+ * ```
+ *
+ * What the reader guarantees:
+ *
+ * - **Namespaces, not prefixes.** Stalwart writes `D:` and `A:`, Radicale a default namespace; both
+ *   resolve to the same `{ namespace, name }`.
+ * - **Decoded text.** The five predefined entities, numeric references and CDATA are decoded, so an
+ *   etag arrives as `"…"`. Line breaks are kept as sent, so `calendar-data` keeps its CRLF.
+ * - **Per-propstat status.** Each `propstat` keeps its own status. `getProp` and `getPropText` read
+ *   only 2xx propstats, so a property listed under a 404 propstat reads as missing.
+ * - **Refuses what it should.** A `<!DOCTYPE`, any other entity, a document over `maxBytes` (default
+ *   10 MiB) or nested deeper than `maxDepth` (default 64) is refused with an `XmlErrorCode`. The
+ *   reader is one forward pass, so its time is linear in the input.
+ *
+ * ## Building requests
+ *
+ * `propfindBody`, `calendarQueryBody`, `calendarMultigetBody`, `mkcalendarBody` and `proppatchBody`
+ * return a complete XML document. Every value they write — a display name, an href, a component name
+ * — is escaped, so a display name cannot inject an element.
+ *
  * @module
  */
 

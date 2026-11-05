@@ -1,28 +1,9 @@
 /**
  * A JSON cache in front of a pluggable {@link ICacheStorage}.
  *
- * Ported from `template/libs/platform/cache/+index.ts`. Four behaviour changes at extraction
- * time, each one because this package is published to arbitrary consumers rather than kept next
- * to one app — see the docs on {@link reviveIsoDatesEndingInAt}, {@link CacheService.wrap} and
- * `normalizeTtlSeconds` for the reasoning behind each:
- *
- * 1. The date-reviving `JSON.parse` reviver is opt-in (`CacheServiceOptions.reviver`), not applied
- *    unconditionally to every value.
- * 2. `set`/`wrap`'s TTL parameter is named and typed as seconds throughout, matching what
- *    {@link ICacheStorage.set} actually expects — the source's `ICacheService` interface named it
- *    `ttlMs` while every implementation and caller treated it as seconds with no conversion, which
- *    is a real bug: a caller trusting the interface's own name and passing milliseconds would get
- *    a cache entry roughly 1000x longer-lived than intended.
- * 3. A TTL is validated and rounded up to a whole second (`normalizeTtlSeconds`) before it reaches
- *    storage. Redis refuses a fractional or zero expiry — `SET … EX 0.2` and `SET … EX 0` are both
- *    errors, and `EXPIRE key 0` deletes the key immediately — so this is done here, once, rather
- *    than in every `ICacheStorage`.
- * 4. `wrap` lets a caller that finds another caller's `fn()` for the same key still running on
- *    this instance await that call instead of starting its own; it is not a lock.
- *
- * A fifth change: `schema` is an arktype `Type`, validated through `@spy4x/validation`'s
- * `validate`, not the source's `ValidationSchema` from its own `@platform/types` — this package
- * has no validator of its own and never will (issue #23).
+ * The rules it keeps (opt-in reviver, TTL in seconds, whole-second rounding, a coalesced `wrap`)
+ * and why are in the module doc (`mod.ts`). `schema` is an arktype `Type`, validated through
+ * `@spy4x/validation`'s `validate`.
  */
 
 import type { Type } from "arktype"
@@ -35,11 +16,9 @@ const ISO_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/
  * `JSON.parse` reviver that turns a string property whose key ends in `At` into a `Date`, when
  * the string looks like an ISO-8601 UTC timestamp.
  *
- * The template this was ported from applied exactly this behaviour unconditionally, to every
- * cached value. That is a bug for a library with consumers this package does not control: the
- * check is on the property *name*, not on a schema, so it also fires on a field that merely ends
- * in "At" without meaning a date — `formatAt`, `chatAt` — and there is no way for a caller to opt
- * out. Here it only runs when a caller passes this function as `CacheServiceOptions.reviver`.
+ * Opt-in: the check is on the property *name*, not on a schema, so it also fires on a field that
+ * merely ends in "At" without meaning a date — `formatAt`, `chatAt`. It only runs when a caller
+ * passes this function as `CacheServiceOptions.reviver`.
  */
 export function reviveIsoDatesEndingInAt(key: string, value: unknown): unknown {
   return typeof value === "string" && key.endsWith("At") && ISO_DATE_PATTERN.test(value)
@@ -98,7 +77,7 @@ export interface CacheServiceOptions {
   /**
    * `JSON.parse` reviver applied to every value read back from storage, on both a `get` and a
    * `wrap` cache hit. Omitted by default, which is a plain `JSON.parse`. Pass
-   * {@link reviveIsoDatesEndingInAt} to restore the template's old default behaviour.
+   * {@link reviveIsoDatesEndingInAt} to turn ISO strings in `...At` fields back into dates.
    */
   reviver?: (key: string, value: unknown) => unknown
 }
@@ -328,9 +307,8 @@ export interface PublicAPICacheModel<T, K extends string | number = number> {
  * `wrapMany`'s result is not run through `schema`: `schema` describes one `T`, and validating an
  * array would mean validating each element, which is a different, unrequested feature.
  *
- * `get` returns a falsy cached value (`0`, `""`, `false`) as-is. The source checked `if (!result)`
- * on the *decoded* value and returned `null` for any of those, which is a bug: a cached `0` or
- * `false` is indistinguishable from "not cached" to a caller of the source's `get`.
+ * `get` returns a falsy cached value (`0`, `""`, `false`) as-is, so a cached `0` or `false` stays
+ * distinguishable from "not cached".
  */
 export function buildMethods<T, K extends string | number = number>(
   cacheService: ICacheService,

@@ -1,10 +1,10 @@
 /**
  * Run one or more `deno task`s the way CI does: `CI=true` and an empty `DENO_DIR`.
  *
- * A warm local run is not evidence — it hides cache assumptions. This script replaces a shell
- * block that every agent used to copy (`D=$(mktemp -d …)`, run, `rm -rf -- "$D"`). That block
- * had two costs: an `rm` on a shell variable makes an agent harness stop and ask a person before
- * every run, and an agent that lost the variable left the cache behind.
+ * A warm local run is not evidence — it hides cache assumptions. This script takes the place
+ * of a hand-written block (`D=$(mktemp -d …)`, run, `rm -rf -- "$D"`): an `rm` on a shell variable
+ * makes an agent harness stop and ask a person, and an agent that lost the variable leaves the cache
+ * behind.
  *
  * `CI=true` does not freeze the lockfile: a task that resolves a dependency missing from
  * `deno.lock` downloads it, rewrites the file and still exits 0. So the script compares

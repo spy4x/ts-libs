@@ -7,8 +7,22 @@
  * copy of its own. It deliberately contains no VCALENDAR/VEVENT
  * structure and no parser: it is the byte-level layer, not the format on top.
  *
- * The folding algorithm originates in `mig/lib/ics.ts` (fold) and this port
- * keeps its UTF-8 boundary handling unchanged.
+ * `time/ics-core.ts` holds the byte-level RFC 5545 primitives: 75-octet folding, unfolding, TEXT
+ * escaping, RFC 6868 parameter escaping, control-character stripping and the UTC DATE-TIME format.
+ * `time/ics.ts` builds VCALENDAR/VEVENT on top of it, and the `caldav/` package imports the same
+ * module instead of carrying a copy of its own. Folding never splits a multi-byte UTF-8 character.
+ *
+ * ## Folding
+ *
+ * `foldLine` folds at 75 **octets** _excluding_ the CRLF line break, counting the one-octet
+ * continuation space toward the limit (so continuation lines carry at most 74 octets of content). It
+ * iterates by code point and measures each with `TextEncoder`, so a multi-byte sequence is never split.
+ * `String.prototype.length` is never consulted: 25 CJK code points are 25 characters but 75 octets.
+ *
+ * Control characters are stripped before escaping; `HTAB` is the one C0 character kept in a TEXT
+ * value, and a mail address is stripped harder (no C0 at all) because it sits in the property _value_
+ * position where no escaping helper applies.
+ *
  * @module
  */
 
@@ -211,8 +225,7 @@ export function foldLine(line: string): string {
  * Unfold every content line in an iCalendar document: a CRLF (or bare LF)
  * followed by SPACE or HTAB continues the previous line (RFC 5545 §3.1).
  *
- * Exported because it is the inverse of {@link foldLine} and because #13 needs
- * the same definition; tests use it to assert octet-exact round trips.
+ * Exported because it is the inverse of {@link foldLine}; tests use it to assert octet-exact round trips.
  */
 export function unfoldLines(text: string): string {
   return text.replace(/\r?\n[ \t]/g, "")

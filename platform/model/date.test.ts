@@ -44,11 +44,11 @@ describe("dateSchema", () => {
   })
 
   /**
-   * #131: `new Date(...)` silently rolls an out-of-range day into the next month instead of
+   * `new Date(...)` silently rolls an out-of-range day into the next month instead of
    * refusing it (`new Date("2026-02-30")` is 2 March 2026), so the schema must catch this itself
    * rather than delegate to `Date` parsing.
    */
-  describe("calendar dates that do not exist (#131)", () => {
+  describe("calendar dates that do not exist", () => {
     it("rejects 30 February", () => {
       expect(dateSchema("2026-02-30") instanceof type.errors).toBe(true)
     })
@@ -115,16 +115,16 @@ describe("dateSchema", () => {
       expect(dateSchema("+2023-02-29") instanceof type.errors).toBe(true)
       expect(dateSchema("+2026-04-31") instanceof type.errors).toBe(true)
       expect(dateSchema("-1900-02-29") instanceof type.errors).toBe(true)
-      // Refused since #136: a signed year is refused even when the date exists.
+      // Refused: a signed year is refused even when the date exists.
       expect(dateSchema("+2024-02-29") instanceof type.errors).toBe(true)
     })
   })
 
   /**
-   * #136: V8's `new Date` reads an ordinal date's day of the year as a month, and drops the sign
+   * V8's `new Date` reads an ordinal date's day of the year as a month, and drops the sign
    * of a signed four-digit year, with no error. Both shapes are refused rather than mis-dated.
    */
-  describe("shapes new Date reads as the wrong date (#136)", () => {
+  describe("shapes new Date reads as the wrong date", () => {
     it("rejects an ordinal date that new Date would read as the first of a month", () => {
       // "2024-005" is 5 January; new Date reads it as 1 May.
       for (const input of ["2024-002", "2024-005", "2024-012"]) {
@@ -162,13 +162,13 @@ describe("dateSchema", () => {
   })
 
   /**
-   * #135: a date-time string with a time but no offset and no `Z` is read in the host's own time
+   * A date-time string with a time but no offset and no `Z` is read in the host's own time
    * zone by `new Date`, so the same wire string would parse to a different instant depending on
    * where the process runs. These cases pin the fix without depending on the host's `TZ` — they
    * assert only that the string is refused, never a particular instant — and are also proven by
    * hand in the PR body: the same script run once under `TZ=UTC` and once under `TZ=Asia/Bangkok`.
    */
-  describe("offset-less date-time strings depend on the host time zone (#135)", () => {
+  describe("offset-less date-time strings depend on the host time zone", () => {
     it("rejects a date-time with no offset and no Z", () => {
       expect(dateSchema("2024-02-29T10:00:00") instanceof type.errors).toBe(true)
     })
@@ -265,7 +265,7 @@ describe("dateSchema", () => {
       expect((dateSchema("2024-05") as Date).toISOString()).toBe("2024-05-01T00:00:00.000Z")
     })
 
-    it("still rejects an ordinal date regardless of a time part, unaffected by host TZ (#136)", () => {
+    it("still rejects an ordinal date regardless of a time part, unaffected by host TZ", () => {
       expect(dateSchema("2024-001") instanceof type.errors).toBe(true)
       expect(dateSchema("2024-001T10:00:00Z") instanceof type.errors).toBe(true)
     })
@@ -315,7 +315,7 @@ describe("DateNullableSchema", () => {
     expect(result instanceof type.errors).toBe(true)
   })
 
-  it("inherits the calendar-date check (#131): still rejects 30 February", () => {
+  it("inherits the calendar-date check: still rejects 30 February", () => {
     const result = wrapper({ d: "2026-02-30" })
     expect(result instanceof type.errors).toBe(true)
   })

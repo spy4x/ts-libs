@@ -23,6 +23,8 @@
  * ```
  *
  * Nothing touches a global at import time: the worker scope and the cache storage are parameters.
+ *
+ * @module
  */
 
 /** Cache surface this module needs; a real `Cache` fits. */

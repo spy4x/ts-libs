@@ -3,8 +3,47 @@
  *
  * Shipped rather than hidden in `*.test.ts` because a host application needs the same doubles to
  * test its own wiring, and because "testable without a network, a browser or a sleep" is a promise
- * this package makes in its README. Everything here is dependency-free: no fake-timer library, no
+ * this package makes. Everything here is dependency-free: no fake-timer library, no
  * mocking framework.
+ *
+ * ```bash
+ * deno task test realtime/      # unit tier, this package (docs/testing.md has the tiers)
+ * deno task test:integration   # integration tier, the whole workspace
+ * ```
+ *
+ * Scoped to just this package:
+ *
+ * ```bash
+ * deno test --no-prompt --allow-read --allow-env --ignore='**\/*.integration.test.ts' realtime/
+ * deno test --no-prompt --allow-read --allow-env --allow-net realtime/*.integration.test.ts
+ * ```
+ *
+ * Almost all of the unit tier has no sleeps, no network, no extra permissions: `FakeClock`
+ * fires timers only when a test advances it, `FakeSocket` is driven by the test
+ * as the peer, and `MemoryKeyValueStore` stands in for storage. The one exception is
+ * `clock.test.ts`, which exercises `createSystemClock` — the adapter over the real platform
+ * timers — and so waits on a handful of short real `setTimeout`s to prove a callback fires or a
+ * handle actually cancels it; every other suite in this tier stays on `FakeClock` and sleeps
+ * nothing.
+ *
+ * The integration tier (`web-socket-adapter.integration.test.ts`) runs the real
+ * adapter against a real WebSocket server the test itself starts on `127.0.0.1`
+ * with an ephemeral port (`Deno.serve({ port: 0 })`, `Deno.upgradeWebSocket`). It
+ * needs `--allow-net` and no container — nothing it does reaches past loopback —
+ * and every server and socket it opens is closed before the test ends, so
+ * Deno's resource and op sanitizers stay on.
+ *
+ * The doubles are exported from `@spy4x/realtime/testing` so a host can test its
+ * own wiring without inventing a second set.
+ *
+ * Dependencies: arktype (the repository's only validator) for the wire schemas,
+ * `@spy4x/platform` (`universal/time`) for the plain instant source
+ * `clock.ts`'s `TimerClock` extends, `@spy4x/net` (`bounded-body`) for the capped body read in
+ * `operations.ts`, and `@std/*` in tests. No WebSocket library, no
+ * framework, no Preact, no signals. `web-socket-adapter.ts` is the one file that
+ * names the platform `WebSocket` type, and only as a type — it constructs one
+ * only in `createWebSocketFactory`, which a browser client calls, and in the
+ * integration test, which is Deno-only.
  *
  * @module
  */
@@ -181,8 +220,8 @@ export class FakeSocket implements ManagedSocket {
    * `close` event — and the move to `Closed` — happens on a later microtask.
    *
    * A real `WebSocket.close()` does not close synchronously; a caller that reads `state` right
-   * after calling it sees `Closing`, and code that assumed otherwise (a fixed bug in this package,
-   * issue #74) has to be wrong in a way a test can catch. `closeCalls` still records the call
+   * after calling it sees `Closing`, and code that assumes otherwise has to be wrong in a way a test
+   * can catch. `closeCalls` still records the call
    * immediately, so a test asserting *that* a close was requested does not need to await anything.
    *
    * The close event reports a clean close of an open socket as `abnormal: false` with the given

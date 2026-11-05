@@ -1,9 +1,7 @@
 /**
  * Web Push sender: one notification to every stored subscription of one user.
  *
- * Ported from `template/apps/api/services/web-push-service.ts` and `webPush.ts`. The
- * template's Postgres store, its `UserPushTokenPublic` shape and its welcome push stay in the
- * app; the store is a two-method port ({@link PushSubscriptionStore}) and the subscription is
+ * The store is a two-method port ({@link PushSubscriptionStore}) and the subscription is
  * `platform/model`'s `PushSubscriptionJson`, not a second shape.
  *
  * Keys, encryption (RFC 8291) and VAPID signing come from `@negrel/webpush` and
@@ -27,6 +25,53 @@
  *  - One deadline covers the DNS check and the request, and it aborts the request.
  *  - `error` and `output` never contain an endpoint (its path is a capability), a key, or
  *    a response body: statuses and error class names only.
+ *
+ * ```ts
+ * const { publicKey, keys } = await generateVapidKeyPair() // once; store `keys`, serve `publicKey`
+ * const sender = await createWebPushSender({
+ *   vapidKeys: keys,
+ *   subject: "mailto:ops@example.com",
+ *   store,
+ * })
+ * const result = await sender.send(user.id, { title: "Backup done", body: null, url: null })
+ * ```
+ *
+ * `store` is the app's port: `listByUser(userId)` and `deleteByEndpoint(userId, endpoint)`, over
+ * `platform/model`'s `PushSubscriptionJson`. `send` never throws and returns one delivery per
+ * subscription. A 404 or 410 from the push service deletes that subscription; every other failure
+ * keeps it, and so does a subscription with malformed keys, which is reported as such.
+ *
+ * `sendTo(subscription, message, options?)` pushes to one given subscription (a welcome push to the
+ * device that just subscribed, a test push from a settings page) and returns the same result with one
+ * delivery. It never reads or writes the store. A 404 or 410 gives status `gone` with
+ * `deleted: false`: there is no user to delete it for, so the caller removes the subscription.
+ *
+ * Keys, encryption (RFC 8291) and VAPID signing come from `@negrel/webpush` and `@negrel/http-ece`;
+ * the request is sent here, through the injectable `fetch` option, with `redirect: "manual"` and one
+ * abort signal that also bounds the DNS check. The library's own `pushMessage` is not used: it follows
+ * redirects and takes no signal. A 3xx answer is a failure and is never followed, so a push service
+ * cannot send the payload to a private address. `safeFetch` was not used because it cannot carry a
+ * request body. Endpoints must be public HTTPS addresses; the DNS check and the connection resolve
+ * separately, so a DNS-rebinding race remains.
+ *
+ * An app with no database keeps its subscriptions with `createFilePushSubscriptionStore({ fs, path })`
+ * from `./push-file-store`: one JSON file, written atomically and readable by its owner only, at most
+ * 20 subscriptions per user, and a corrupt file is reported, never replaced. Its `state(name)` keeps a
+ * small named value in the same file, such as the state of `@spy4x/platform/server/reminder-runner`.
+ * A message may carry a `tag`: a notification with the same tag replaces the one on screen.
+ *
+ * `./push-reminders` joins the sender to `@spy4x/platform/server/reminder-runner`:
+ * `createReminderNotify({ sender, userId, url })` is the runner's `notify`. It cuts a long task title
+ * to the 120 characters a message may have and tags the push with a hash of the reminder's key, so the
+ * message is always one the sender accepts; a `url` too long to be pushed beside the longest title is
+ * refused when the function is built. A reminder counts as delivered when at least one device got it,
+ * when no device is subscribed, or when every device was gone and removed. It is tried again when no
+ * device got it and a failure may pass (no answer, HTTP 408, 429 or 5xx, an unreadable store). When no
+ * device got it and every push service refused for good (HTTP 400, 401, 403, 413, as after a change of
+ * VAPID keys), the answer is `"drop"`: the runner reports the reminder once through its `onError` and
+ * leaves it. `onDeviceFailure` is told how many devices of a reminder that is not tried again failed,
+ * and with which HTTP status, never an endpoint or a push service's answer.
+ *
  * @module
  */
 

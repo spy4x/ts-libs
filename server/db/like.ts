@@ -19,8 +19,6 @@
  * SQLite has no default escape character, so a query there must name it:
  * `WHERE email LIKE ? ESCAPE '\'`. Without the `ESCAPE` clause SQLite reads `\%` as a backslash
  * followed by a wildcard.
- *
- * Ported from `template/libs/server/auth/admin-users.ts` (`containsPattern`).
  */
 export function likeContains(value: string): string {
   return `%${value.replace(/[\\%_]/g, (character) => `\\${character}`)}%`

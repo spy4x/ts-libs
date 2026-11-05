@@ -9,8 +9,7 @@
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
 [Packages on JSR](https://jsr.io/@spy4x) · [Contributing](CONTRIBUTING.md) ·
-[llms.txt](https://raw.githubusercontent.com/spy4x/ts-libs/main/llms.txt) ·
-[llms-full.txt](https://raw.githubusercontent.com/spy4x/ts-libs/main/llms-full.txt)
+[llms.txt](https://raw.githubusercontent.com/spy4x/ts-libs/main/llms.txt)
 
 </div>
 

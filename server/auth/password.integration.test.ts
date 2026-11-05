@@ -1,5 +1,5 @@
 /**
- * The password provider against a real Postgres (#57): the takeover cases and the sign-in timing
+ * The password provider against a real Postgres: the takeover cases and the sign-in timing
  * structure the unit tier shows on `MemoryAuthStore`, run here on `createPostgresAuthStore` and
  * `createPostgresSessionStore`, so they hold where the database enforces the rules itself.
  *

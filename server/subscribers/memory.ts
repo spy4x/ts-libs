@@ -1,3 +1,9 @@
+/**
+ * The in-memory subscriber store and send log, held to the shared contracts.
+ *
+ * @module
+ */
+
 import type {
   AddSubscriberInput,
   AddSubscriberResult,

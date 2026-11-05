@@ -1,3 +1,17 @@
+/**
+ * The words of `describeRrule` in Simplified Chinese. Pass them as the `translation` of a translator:
+ *
+ * ```ts
+ * import en from "@spy4x/time/rrule-words/en"
+ * import zhCN from "@spy4x/time/rrule-words/zh-CN"
+ * import { createTranslator } from "@spy4x/platform/universal/i18n"
+ *
+ * const t = createTranslator({ language: "zh-CN", catalogs: [{ source: en, translation: zhCN }] })
+ * ```
+ *
+ * @module
+ */
+
 /** The words of `describeRrule` in zh-CN, translated from `./en.ts`, which explains every key. */
 export default {
   "freq.daily": "每天",

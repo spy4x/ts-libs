@@ -1,20 +1,16 @@
 /**
  * One aggregate-keyed notify adapter, replacing nineteen per-handler files.
  *
- * Financy carried `websocket-notify-on-*` handlers — 530 lines across 19 files, each one a copy of
- * the same `event → onModelChange(model, [entity], CREATED)` shape. The aggregate is the only thing
- * that differed, so the aggregate is the key: a host registers one {@link RecipientResolver} per
+ * The aggregate is the key: a host registers one {@link RecipientResolver} per
  * aggregate and the transport stays out of the domain.
  *
- * Two failure modes from the source are designed out here, not fixed afterwards:
+ * Two failure modes are designed out:
  *
- * - **Unknown aggregate fails closed.** `getUsersForModel` ended in a `default:` clause that returned
- *   `Array.from(userBySocket.values())` — an unknown model broadcast to *every connected user*, which
- *   is a data leak the first time an aggregate is renamed or misspelled. Here an aggregate with no
- *   resolver produces zero recipients and never touches the fan-out.
- * - **A throwing resolver does not become a broadcast.** `sendToRelevantUsers` wrapped its lookup in
- *   `try { … } catch { websockets.sendToAll(message) }`, so a database error turned a scoped
- *   notification into a global one. Here a resolver that throws produces
+ * - **Unknown aggregate fails closed.** A broadcast fallback would leak data the first time an
+ *   aggregate is renamed or misspelled. An aggregate with no resolver produces zero recipients and
+ *   never touches the fan-out.
+ * - **A throwing resolver does not become a broadcast**, so a database error never turns a scoped
+ *   notification into a global one. A resolver that throws produces
  *   {@link NotifyStatus.Failed}, zero recipients and an `onError` callback. There is no code path in
  *   this module that can reach a broadcast: {@link UserFanout} only offers `sendToUsers`.
  *

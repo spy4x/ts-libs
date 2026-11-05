@@ -1,34 +1,24 @@
 /**
  * Connection registry: who is connected, on how many sockets, and are they still alive.
  *
- * Ported in behaviour from an earlier internal project's websocket service (registry and heartbeat)
- * and redesigned around a socket port, so this module imports no WebSocket library and every
- * behaviour below is testable with a fake socket and a fake clock.
+ * Built around a socket port, so this module imports no WebSocket library and every behaviour
+ * below is testable with a fake socket and a fake clock.
  *
- * What changed from the source, and why:
- *
- * - **Liveness is verified, not assumed.** The source pinged every socket every 30s and never
- *   looked for a pong, so a half-open socket stayed in the registry forever and every broadcast
- *   wrote to it. Here a socket that has not sent anything within `livenessTimeoutMs` is closed and
- *   reaped.
- * - **Reaping is eager.** Orphan cleanup happened only in the socket's own close handler, which by
- *   definition never runs for a socket that died silently. `#reap` removes the connection from both
- *   maps immediately; a later close event is a no-op.
- * - **A failing send does not abort a broadcast.** The source's `sendToAll` called `send`, which
- *   threw out of the loop, so one bad socket truncated fan-out for everyone after it. Here a
- *   throwing socket is reaped and the loop continues.
+ * - **Liveness is verified, not assumed.** A socket that has not sent anything within
+ *   `livenessTimeoutMs` is closed and reaped, so a half-open socket does not stay forever.
+ * - **Reaping is eager.** A socket that died silently never runs its own close handler, so `#reap`
+ *   removes the connection from both maps immediately; a later close event is a no-op.
+ * - **A failing send does not abort a broadcast.** A throwing socket is reaped and the loop
+ *   continues.
  * - **One interval, not one per socket**, so the timer count does not grow with connections.
  * - **Direction is enforced.** A client frame that decodes as a server frame is dropped as
  *   malformed instead of being dispatched.
- * - **Three limits neither source enforced (issue #65, finding 5).** A user id could open an
- *   unbounded number of sockets; an oversized text frame was handed straight to the codec and the
- *   validator before anything measured it; and nothing slowed delivery to a socket whose peer had
- *   stopped reading. `attach` now refuses past `maxConnectionsPerUser`, `#receive` measures a frame
+ * - **Three limits.** `attach` refuses past `maxConnectionsPerUser`, `#receive` measures a frame
  *   before decoding it and reaps the connection past `maxMessageBytes`, and `#deliver` skips a send
  *   past `maxBufferedBytes` instead of queueing without bound. All three limits are this package's
  *   own — the upgrade handler, rate limiting per IP and anything else the surrounding server does
- *   is outside it, same as the rest of the sync protocol (see README, "Explicitly not
- *   implemented").
+ *   is outside it, same as the rest of the sync protocol (see the module doc, "Explicitly
+ *   not implemented").
  * - **Requests are bounded, correlated and never dispatched by the registry.** A `client.command`
  *   or `client.query` is handed to the one dispatcher registered with
  *   {@link ConnectionRegistry.onRequest}; the registry only enforces `maxInFlightRequests` per
@@ -36,6 +26,64 @@
  *   answers with `server.result` or a typed `server.error`, and gives up on a dispatcher that
  *   outlives `requestTimeoutMs`. What a request name means — a command bus, a query bus,
  *   authorization — is the host's.
+ *
+ * ## Server wiring
+ *
+ * ```ts
+ * import { AggregateNotifier, ConnectionRegistry, createSystemClock } from "@spy4x/realtime"
+ *
+ * const clock = createSystemClock()
+ * const registry = new ConnectionRegistry({
+ *   clock,
+ *   // Defaults shown; override per deployment.
+ *   maxConnectionsPerUser: 20,
+ *   maxMessageBytes: 64 * 1024,
+ *   maxBufferedBytes: 1_000_000,
+ * })
+ * const notifier = new AggregateNotifier({
+ *   fanout: registry,
+ *   resolvers: new Map([
+ *     // Authorization lives in the resolver: it is the membership lookup, not a route middleware.
+ *     ["invoice", (change) => membership.readGroupMemberIds(change.groupId)],
+ *   ]),
+ *   onUnknownAggregate: (change) => logger.warn("unhandled aggregate", change),
+ * })
+ *
+ * // From the upgrade handler: authenticate once at the upgrade, then attach. `attach` returns `null`
+ * // — and has already closed the socket — once the user is at `maxConnectionsPerUser`.
+ * const handle = registry.attach(userId, adaptSocket(await upgrade(request)))
+ * if (!handle) logger.warn("refused a socket: user already at the connection cap", { userId })
+ *
+ * // From the worker that drains outbox_events, after the commit that stamped the sequence.
+ * await notifier.notify({
+ *   groupId,
+ *   aggregate: "invoice",
+ *   sequence: nextChangeSequence,
+ * })
+ * ```
+ *
+ * `registry.attach` owns heartbeats, liveness deadlines, orphan cleanup and
+ * fan-out; the host never tracks sockets itself. `registry.onFrame` is where a
+ * `client.sync` handshake is answered (the sync protocol is not part of this
+ * package, see below).
+ *
+ * ### Requests
+ *
+ * ```ts
+ * import { RealtimeRequestError } from "@spy4x/realtime"
+ *
+ * // One dispatcher per registry. The library does not know what a name means.
+ * registry.onRequest(async ({ userId, kind, name, payload, idempotencyKey, signal }) => {
+ *   const bus = kind === "command" ? commandBus : queryBus
+ *   const handler = handlers.get(name)
+ *   if (!handler) throw new RealtimeRequestError("not_found", `unknown ${kind}: ${name}`)
+ *   // Authorize inside the handler with `userId`; validate `payload` with the handler's own schema.
+ *   return await handler({ userId, payload, idempotencyKey, signal })
+ * })
+ * ```
+ *
+ * The registry options `maxInFlightRequests`, `requestTimeoutMs` and
+ * `onRequestError` are described in _Divergence_ above.
  *
  * @module
  */
@@ -252,8 +300,7 @@ export class ConnectionRegistry {
    * user id, and both must receive a hint. Returns a {@link ConnectionHandle} the caller keeps for
    * `send`, and registers the socket's own handlers so cleanup cannot be forgotten by the host.
    *
-   * Refuses past `maxConnectionsPerUser` (issue #65, finding 5: one user id was measured holding
-   * 50 000 sockets) — the socket is closed with `1013` ("try again later") and `null` is returned
+   * Refuses past `maxConnectionsPerUser` — the socket is closed with `1013` ("try again later") and `null` is returned
    * instead of a handle, before anything is added to either index.
    */
   attach(userId: string, socket: ManagedSocket): ConnectionHandle | null {
@@ -346,7 +393,7 @@ export class ConnectionRegistry {
   /**
    * Send to every connected socket.
    *
-   * Kept because the source had it and a server-wide notice legitimately needs it. The aggregate
+   * A server-wide notice needs it. The aggregate
    * notify adapter cannot reach it: it is handed a `sendToUsers` port, so an unknown aggregate
    * produces zero recipients rather than a broadcast.
    */
@@ -450,9 +497,7 @@ export class ConnectionRegistry {
    *
    * Any frame counts as liveness evidence, because a peer that is talking is a peer that is alive.
    * Size is measured before anything else — a frame past `maxMessageBytes` is refused and the
-   * connection reaped without ever reaching the codec or the validator (issue #65, finding 5: a
-   * single 6.9 MB message was decoded and validated, costing 81 ms of CPU it should never have
-   * spent). Ping is answered here; everything else either goes to the frame handlers or is dropped
+   * connection reaped without ever reaching the codec or the validator. Ping is answered here; everything else either goes to the frame handlers or is dropped
    * with a reason. Nothing is dispatched that the registry could not decode.
    */
   #receive(connection: Connection, data: string): void {
@@ -632,8 +677,7 @@ export class ConnectionRegistry {
    * Encode and send, reaping the socket when the send throws.
    *
    * A send is skipped — not queued — once `bufferedAmount` reports more than `maxBufferedBytes`
-   * still waiting to leave the socket (issue #65, finding 5: nothing previously slowed delivery to
-   * a client that had stopped reading). This is safe for a hint the same way a dropped frame always
+   * still waiting to leave the socket, so a client that stopped reading cannot grow the queue. This is safe for a hint the same way a dropped frame always
    * is: the client notices the gap itself and pulls, so skipping one delivery costs a redundant
    * pull, never divergence. `bufferedAmount` is optional on the port, so an adapter that cannot
    * report it — `FakeSocket` unless a test calls `setBufferedAmount` — is never throttled here.

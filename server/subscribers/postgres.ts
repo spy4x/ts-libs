@@ -1,3 +1,9 @@
+/**
+ * The Postgres subscriber store and send log, with the schema to migrate.
+ *
+ * @module
+ */
+
 import type { Sql } from "../db/index.ts"
 import type { SendLock, SendLog, SendLogEntry } from "./send-log.ts"
 import type {

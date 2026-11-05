@@ -1,3 +1,17 @@
+/**
+ * The words of `describeRrule` in German. Pass them as the `translation` of a translator:
+ *
+ * ```ts
+ * import en from "@spy4x/time/rrule-words/en"
+ * import de from "@spy4x/time/rrule-words/de"
+ * import { createTranslator } from "@spy4x/platform/universal/i18n"
+ *
+ * const t = createTranslator({ language: "de", catalogs: [{ source: en, translation: de }] })
+ * ```
+ *
+ * @module
+ */
+
 /** The words of `describeRrule` in de, translated from `./en.ts`, which explains every key. */
 export default {
   "freq.daily": "Täglich",

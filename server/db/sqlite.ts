@@ -1,29 +1,18 @@
 /**
  * The SQLite adapter.
  *
- * Ported from the SQLite layer of an earlier internal project, with three changes
- * and one omission:
- *
- *  - **the driver is a port.** The source imported `better-sqlite3` at the top of
- *    the module (`:9`), which put a native npm binary in the dependency graph of
- *    everything that touched the file. {@link SqliteDriver} is one interface with
- *    four methods, and {@link openSqliteDb} takes a factory for it, so the caller
- *    picks `node:sqlite`, `better-sqlite3` or a double. This package ships no
- *    driver.
- *  - **every method is async.** The source's driver is synchronous and the one
- *    `migrate.ts` needs is not; one async port serves both rather than a second
- *    runner. The cost is a `Promise.resolve` in a synchronous wrapper.
- *  - **the table name is a parameter.** The source's `runMigrations` hardcoded
- *    `stats_entries` and its legacy-table `INSERT ... SELECT` column list
- *    (`:72-95`), so the schema apply could not be reused by a second table. Here
- *    {@link SqliteSchema} takes the table name and lets a caller supply an upgrade
- *    step.
- *
- * The omission is the source's module-level singleton (`:18-19,41-69`). A package
- * cannot know when a consumer's process is done with the handle, and a module-level
- * `let db` makes a second open silently return the first one. {@link SqliteDb.close}
- * is exported and the caller owns the lifecycle, which is also what lets a test
- * drive the real driver twice in one process.
+ *  - **the driver is a port.** {@link SqliteDriver} is one interface with four methods, and
+ *    {@link openSqliteDb} takes a factory for it, so the caller picks `node:sqlite`,
+ *    `better-sqlite3` or a double, and no native binary enters the dependency graph. This
+ *    package ships no driver.
+ *  - **every method is async**, so one port serves both a synchronous driver and `migrate.ts`.
+ *    The cost is a `Promise.resolve` in a synchronous wrapper.
+ *  - **the table name is a parameter.** {@link SqliteSchema} takes the table name and lets a
+ *    caller supply an upgrade step.
+ *  - **no module-level singleton.** A package cannot know when a consumer's process is done
+ *    with the handle, and a module-level `let db` makes a second open silently return the first
+ *    one. {@link SqliteDb.close} is exported and the caller owns the lifecycle, which is also
+ *    what lets a test drive the real driver twice in one process.
  *
  * @module
  */
@@ -511,9 +500,8 @@ export class SqliteDb {
     const scoped = this.createScopedHandle()
     try {
       // The gate is claimed before `BEGIN` rather than after it, so two callers cannot
-      // both send a `BEGIN`. It is given straight back when `BEGIN` fails, which is the
-      // behaviour a flag set before the statement used to get wrong: one syntax error
-      // left the connection refusing every later transaction.
+      // both send a `BEGIN`. It is given straight back when `BEGIN` fails, so one syntax
+      // error cannot leave the connection refusing every later transaction.
       await scoped.exec(this.transactions.begin)
     } catch (error) {
       scoped.ended = true
@@ -547,8 +535,8 @@ export class SqliteDb {
    *
    * It goes through the gate like every other operation, so a `close` issued while
    * another caller's transaction is open waits for that transaction instead of pulling
-   * the connection out from under it — the transaction used to reject with "database is
-   * not open" at its next statement. A `close` called from *inside* a transaction
+   * the connection out from under it, which would fail its next statement with "database is
+   * not open". A `close` called from *inside* a transaction
    * callback is waiting for itself, so it fails after the bounded wait with
    * {@link SqliteTransactionWaitError}, as any other statement on the root handle does.
    *
@@ -650,11 +638,9 @@ export class SqliteDb {
  * Resolve the database path.
  *
  * An absolute value or `:memory:` is taken as it is; anything else is joined to
- * `root`. This is the source's `resolveDbPath` (`:22-27`) with the project-root
- * guess removed: the source derived a root from its own module position
- * (`new URL("../../../", import.meta.url)`, `:16`), which computes a different
- * directory for every install layout — under a published package it would be a path
- * inside the package cache. `root` is explicit and defaults to the process working
+ * `root`. A root derived from the module's own position would differ for every
+ * install layout — under a published package it would be a path inside the package
+ * cache. `root` is explicit and defaults to the process working
  * directory, and the environment variable stays as the override.
  */
 export function resolveSqlitePath(
@@ -684,7 +670,7 @@ export function resolveSqlitePath(
  * ignores.
  *
  * A failed open closes the driver before rethrowing, so a driver that published a
- * half-open handle cannot be leaked — the source did the same (`:61-68`).
+ * half-open handle cannot be leaked.
  */
 export async function openSqliteDb(options: OpenSqliteDbOptions): Promise<SqliteDb> {
   const path = resolveSqlitePath(options)
@@ -739,8 +725,8 @@ export interface SqliteSchema {
    */
   sql: string
   /**
-   * Upgrade a table that exists but is not the one {@link sql} declares. The
-   * source's `stats_entries` STRICT migration (`:74-93`) is the shape. Omitted, the
+   * Upgrade a table that exists but is not the one {@link sql} declares, such as a
+   * table created before it was `STRICT`. Omitted, the
    * schema SQL runs and any incompatibility is the engine's error.
    *
    * Raw SQL text like {@link sql}, and for the same reason.
@@ -751,12 +737,11 @@ export interface SqliteSchema {
 /**
  * Apply `schema` idempotently.
  *
- * Running it twice is safe, and that is the property the source's own comment
- * claimed while checking only a `strict` flag: a second apply throws on the first
+ * Running it twice is safe: a second apply throws on the first
  * statement unless the statements are themselves idempotent, so `IF NOT EXISTS` and
  * the engine's consistency check are what make a re-apply a no-op.
  *
- * The legacy check is `pragma_table_list`, as in the source: a table that exists and
+ * The legacy check is `pragma_table_list`: a table that exists and
  * is not `STRICT` is the pre-STRICT shape, so an upgrade step is needed. A table
  * whose name is absent runs the schema SQL directly.
  */
@@ -783,7 +768,7 @@ export async function applySqliteSchema(db: SqliteDb, schema: SqliteSchema): Pro
 /**
  * Delete a database file and its `-wal`/`-shm` sidecars.
  *
- * Ported from an earlier internal project. A missing file is not an error; every
+ * A missing file is not an error; every
  * other remove failure propagates, so a permission problem is never reported as
  * "already clean". Sidecars are a consequence of WAL: a leftover `-wal`
  * beside a fresh database is a set of unapplied frames, which is why a reset removes
@@ -843,7 +828,7 @@ export async function removeSqliteFiles(
  * (`<database>.migrate.lock`, `Deno.FsFile.lock()`) would not, because the kernel releases
  * it when the process dies.
  *
- * **That file lock is deliberately not built** (#110). It needs write permission next to
+ * **That file lock is deliberately not built**. It needs write permission next to
  * the database, it does not apply to `:memory:`, and no project this library serves runs
  * two processes against one SQLite file — a SQLite deployment here is one process with
  * Litestream behind it. Building it now would add a permission requirement and a second

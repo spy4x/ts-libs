@@ -26,10 +26,7 @@ interface Subscription {
  * `emit` schedules delivery on a microtask, after the call that raised the event returns, and
  * isolates listeners from each other: a listener that throws, or returns a promise that rejects,
  * is reported through {@link EventBusErrorHandler} instead of stopping the other listeners in the
- * same dispatch or crashing the process on an unhandled rejection. This differs from the template
- * this was ported from, whose `for` loop let the first throwing listener abort every listener
- * after it and surface as an uncaught exception inside the microtask — see `platform/README.md`
- * for the fix, verified with a listener that throws in `event-bus.test.ts`.
+ * same dispatch or crashing the process on an unhandled rejection.
  *
  * Each `EventBus` instance owns its own listener map; two instances never share state.
  *

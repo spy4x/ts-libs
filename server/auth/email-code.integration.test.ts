@@ -1,5 +1,5 @@
 /**
- * The email-code provider against a real Postgres (#57 finding 3 and the takeover script).
+ * The email-code provider against a real Postgres.
  *
  * The unit tests run the same flows on `MemoryAuthStore`. Here they run on the Postgres store and
  * session store, where a deleted key would also delete its sessions (`ON DELETE CASCADE`), so the

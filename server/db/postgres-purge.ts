@@ -1,27 +1,19 @@
 /**
  * Drop every table in the `public` schema.
  *
- * Ported from `template/libs/server/db/purge.ts`, with the CLI extracted from the
- * operation. The source read `getEnvVar("ENV")`, printed progress and called
- * `Deno.exit` inside its own `try` blocks (`:14,28,36,45`), and it read the table
- * list into `row.tableName` — a camelCase field that only exists because the
- * template client sets `transform: postgres.camel` (`template/libs/server/db/+index.ts:13`).
- * The table listing here is read through `.values()` rather than by that or any other
- * name, so it survives `postgres.camel`, `postgres.pascal`, `postgres.kebab` or a custom
+ * The table listing is read through `.values()` rather than by column name, so it survives `postgres.camel`, `postgres.pascal`, `postgres.kebab` or a custom
  * `transform.column.from` alike, including one that maps two different columns to the same
- * name; see `expectRowShape` in `postgres-migrate.ts` (#137).
+ * name; see `expectRowShape` in `postgres-migrate.ts`.
  *
  * **A table or schema name the same transform would rewrite is refused before any `DROP`
  * runs**, with {@link PostgresIdentifierTransformError}, whether `sql` is the pool client, a
  * `sql.begin` transaction handle or a `sql.reserve()` connection — see that error, exported
  * from `postgres-migrate.ts`, for why reconciling the two spellings is not attempted.
  *
- * **The guard is inverted from the source's.** The source refused only when `ENV` was
- * exactly `prod`, which meant it purged for `production`, for `PROD`, for `"prod "`
- * with a trailing space, and for an unset `ENV` — every way of spelling a production
- * deployment except the one spelling it knew. This refuses unless `ENV` names an
+ * **The guard is an allow-list.** Refusing only `ENV=prod` would purge for `production`, `PROD`,
+ * `"prod "` or an unset `ENV`, so this refuses unless `ENV` names an
  * environment on {@link SAFE_ENV_VALUES}, so an environment nobody listed is a refusal
- * rather than a purge. `--prod` still overrides it, and the check still runs before
+ * rather than a purge. `--prod` overrides it, and the check runs before
  * any query and against the caller's environment record, not `Deno.env`.
  */
 
@@ -106,7 +98,7 @@ export interface PurgeOptions {
  * `identifierRewrittenBy` in `postgres-migrate.ts`.
  *
  * **The listing is read through `.values()`, not by the `tablename` alias written above**
- * (#137) — see `expectRowShape` in `postgres-migrate.ts`. `postgres.camel` leaves a bare
+ * — see `expectRowShape` in `postgres-migrate.ts`. `postgres.camel` leaves a bare
  * lower-case word like `tablename` unchanged, but `postgres.pascal` upper-cases its first
  * letter regardless; a name-keyed read left `row.tablename` `undefined` on a
  * `postgres.pascal` client and the identifier splice below threw rather than dropping

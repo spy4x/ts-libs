@@ -9,6 +9,8 @@
  *
  * Commands: `encrypt`, `decrypt`, `status`, `keygen`. Always operates on `Deno.cwd()` — the task
  * runner's own working directory is the project root, and every command below takes it as `root`.
+ *
+ * @module
  */
 
 import { ageStatus, decryptEnvFiles, encryptEnvFiles, generateAgeKey } from "./mod.ts"

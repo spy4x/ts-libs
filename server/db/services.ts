@@ -1,38 +1,24 @@
 /**
  * The Postgres service base class.
  *
- * Ported from `template/libs/server/db/+index.ts:26-213`, with the cache helpers
- * kept and the transaction helper reconciled against one ported from an earlier
- * internal project.
+ * The client lives in a `protected sql` field, set through `setSql`, and a transaction is a
+ * clone of the service made with `Object.create(this)`.
  *
- * **Reconciliation.** Both sources have a `begin<T>()`, and they differ in two
- * ways. The template stores the client in a `protected sql` field and clones with
- * `Object.create(this)` plus a `protected setSql`; the other source stores it in a
- * `protected db` field and clones the same way, with a constructor that throws
- * when no client exists. The shapes are otherwise one mechanism, so this keeps the
- * template's shape and ports the other source's two improvements into it:
- *
- *  - `begin` recurses correctly. The template called `this.sql.begin(...)`, and a
- *    clone's `sql` is a transaction handle, which has no `begin` of its own. Neither
- *    source got the nested case right, and neither does calling `begin` on the client:
- *    measured against `postgres@3.4.7`, `sql.begin` inside an open transaction takes a
- *    *second connection* out of the pool and opens a *second, independent*
- *    transaction there, which commits on its own and survives the outer rollback. A
- *    nested `begin` here calls `savepoint` on the transaction handle instead, which is
- *    the only nesting `postgres` has.
- *  - the clone is created through `Object.create(this)` and nothing else. The clone's
- *    prototype is the instance it was made from, so every field of that instance is
- *    *readable* through the prototype chain — an earlier version of this comment said
- *    they were not, which is wrong. What does not carry is a *write*: assigning to a
- *    field on the clone creates an own property on the clone and leaves the original's
+ *  - `begin` nests correctly. `sql.begin` inside an open transaction takes a *second
+ *    connection* out of the pool and opens a *second, independent* transaction there, which
+ *    commits on its own and survives the outer rollback (measured against `postgres@3.4.7`).
+ *    A nested `begin` here calls `savepoint` on the transaction handle instead, which is the
+ *    only nesting `postgres` has.
+ *  - the clone's prototype is the instance it was made from, so every field of that instance
+ *    is *readable* through the prototype chain. What does not carry is a *write*: assigning
+ *    to a field on the clone creates an own property on the clone and leaves the original's
  *    untouched, which is exactly why `pendingCacheOperations` can be swapped per clone
  *    without disturbing the instance the callback was called on. A subclass that mutates
  *    a field inside the callback and expects the change to outlive the transaction is
  *    the case to avoid.
  *
- * The cache helper set is the template's `findOne`, `createOne`, `updateOne`,
- * `deleteOne` and `buildMethods`, unchanged apart from `RowCache` replacing the
- * domain cache class. Two behaviours are deliberate and are the reason the
+ * The cache helper set is `findOne`, `createOne`, `updateOne`,
+ * `deleteOne` and `buildMethods`, over a `RowCache`. Two behaviours are deliberate and are the reason the
  * deferred-write machinery exists at all: inside a transaction, cache writes are
  * queued and run only after the transaction commits, so a rolled-back transaction
  * cannot leave a cache holding a row the database never stored; and a failed cache
@@ -49,7 +35,7 @@
  *    (`notes = { ...this.buildMethods(...), findMany }`). `begin` gives the clone its own
  *    copy of that property, with the built-in methods built on the clone, so
  *    `tx.notes.createOne(...)` runs on the transaction and queues its cache write until the
- *    commit. This held only for the getter form until #230;
+ *    commit;
  *  - a getter that builds on every access (`get notes() { return this.buildMethods(...) }`)
  *    follows, because the getter runs with the clone as `this`;
  *  - a set built inside the callback through the clone (`tx.buildMethods(...)`) follows;
@@ -75,9 +61,8 @@
  * the handle at any depth. A transaction handle has no `begin`, `reserve` or `listen` of its
  * own; those throw a `TypeError`, live and retired alike. A query *built* through the clone
  * and awaited after the transaction is refused when it is sent, and a handle the driver
- * hands to a `savepoint` callback is retired when that savepoint returns — the two routes
- * #108 opened with. It is a guard against the mistake issue
- * #96 describes, a service that stores the clone and writes through it later, and **not a
+ * hands to a `savepoint` callback is retired when that savepoint returns. It is a guard against
+ * one mistake, a service that stores the clone and writes through it later, and **not a
  * security boundary**: code that deliberately reaches into the driver's internals is not
  * making that mistake, and could in any case import `postgres` and open a connection of
  * its own. One known route remains and is described on {@link PostgresScopeEndedError}.
@@ -107,7 +92,7 @@ import type { RowCache, Sql, Transaction } from "./ports.ts"
  *
  * **Two more moments are checked than a call through the clone**, because a call through
  * the clone is not the only way a statement reaches the transaction's connection. Both
- * were routes #108 measured, and both lose the row to the next rollback after reporting
+ * would lose the row to the next rollback after reporting
  * success:
  *
  *  1. a query *built* inside the callback and awaited afterwards. `postgres` queries are
@@ -116,7 +101,7 @@ import type { RowCache, Sql, Transaction } from "./ports.ts"
  *     first send once the scope has ended. A forgotten `await` is enough to write this
  *     one, which is why it is closed rather than written down;
  *  2. a handle the driver hands to a `savepoint` callback. That handle is built by the
- *     driver and passed in, so it never passed through this wrapper; the callback now
+ *     driver and passed in, so it never passes through this wrapper; the callback
  *     receives a scoped one that is retired when the savepoint returns.
  *
  * **One known route remains.** The driver's own internals ride on a value a call
@@ -125,8 +110,8 @@ import type { RowCache, Sql, Transaction } from "./ports.ts"
  * that connection. Return values are deliberately not wrapped — the driver recognises a
  * fragment or a parameter passed back into a query by its class, and a wrapper is not that
  * class — so this one cannot be closed by wrapping reads at all. Building a query out of
- * the driver's internals is not the mistake this guard is for, and the owner's decision on
- * #96 is that it ships recorded rather than chased.
+ * the driver's internals is not the mistake this guard is for, so the route is recorded rather
+ * than chased.
  */
 export class PostgresScopeEndedError extends Error {
   constructor() {
@@ -344,9 +329,9 @@ function scopeExecutor(executor: Transaction): ScopedExecutor {
    * `then`, `catch`, `finally`, `execute` and `forEach` all go through the query's
    * `handle()` method, and that is where the statement is put on the transaction's
    * connection (`postgres@3.4.7/src/query.js:123-161`). So a query built through a live
-   * clone and awaited after `begin()` has returned used to run inside whatever transaction
+   * clone and awaited after `begin()` has returned would run inside whatever transaction
    * that connection held by then. A forgotten `await` is enough to write it, which is why
-   * it is closed here rather than only written down (#108).
+   * it is refused here rather than only written down.
    *
    * The check goes on the query's own `handle`, shadowing the one it inherits, and only the
    * **first** send is checked: awaiting a query a second time sends nothing, so a result
@@ -385,7 +370,7 @@ function scopeExecutor(executor: Transaction): ScopedExecutor {
    *
    * `sql.savepoint(fn)` calls `fn` with a handle the driver built, so that handle never
    * passed through this wrapper and a caller who kept it held an open door onto the
-   * connection for the rest of the process (#108). Replacing the callback is the only
+   * connection for the rest of the process. Replacing the callback is the only
    * place it can be caught, because the driver hands the handle over rather than returning
    * it.
    *
@@ -697,10 +682,8 @@ export class DbServiceBase {
   /**
    * Read one row through the cache, or straight from the database inside a transaction.
    *
-   * A miss is `null` on both paths. It used to be `null` inside a transaction and
-   * `undefined` outside one, because the cached path returned whatever `wrap` handed
-   * back: `RowCache.wrap` is typed to return a row, and the only thing its compute can
-   * produce for a query that matched nothing is `undefined`.
+   * A miss is `null` on both paths, although `RowCache.wrap` hands back `undefined` for a
+   * query that matched nothing.
    */
   async findOne<T extends postgres.Row>(
     cache: RowCache<T>,
@@ -883,8 +866,8 @@ export class DbServiceBase {
    *
    * A helper set closes over the instance that built it, so one built in a class field
    * (`notes = this.buildMethods(...)`) closes over the root. The clone reads that field
-   * through its prototype, and without this step `tx.notes.createOne(...)` ran on the root
-   * client, outside the transaction, and wrote the cache before the commit (#230).
+   * through its prototype, and without this step `tx.notes.createOne(...)` would run on the root
+   * client, outside the transaction, and write the cache before the commit.
    *
    * The walk covers own and inherited properties, symbols included, and reads only data
    * properties, so no getter runs. A property is rebuilt when its value is an object with at

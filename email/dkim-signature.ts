@@ -40,17 +40,15 @@ const TAG_NAME_CHAR = /[A-Za-z0-9-]/
 /**
  * Scan a `tag-list` (RFC 6376 §3.2) into pairs.
  *
- * Hand-rolled rather than regex-driven. The source used
- * `/(?:^|;)\s*([a-z]+)=("[^"]*"|[^;]*)/gi`, whose `[^;]*` branch swallowed the
- * `=` of the following tag when a separator was missing and whose nested
- * quantifiers made matching quadratic. A single forward scan states the
+ * Hand-rolled rather than regex-driven: a tag regex swallows the `=` of the
+ * following tag when a separator is missing, and nested quantifiers make
+ * matching quadratic. A single forward scan states the
  * boundary exactly: a separator opens a new tag only when what follows parses
  * as `name=`.
  *
  * Duplicate tags throw, as RFC 6376 §3.2 forbids them; silently keeping the
  * last one let an attacker append `; b=<own signature>` and win. Unknown tags
- * do not throw: §3.5 permits extensions, and the source's own fixtures carry
- * one (`r=`).
+ * do not throw: §3.5 permits extensions, and real signatures carry one (`r=`).
  */
 export function scanTagList(raw: string): Map<string, TagValue> {
   const tags = new Map<string, TagValue>()
@@ -185,9 +183,7 @@ export function parseDkimSignatureHeader(raw: string, requireB = true): ParsedDk
 
   // §3.5 gives i= the grammar `[ Local-part ] "@" domain-name`, so a value with
   // no "@" carries no domain for §6.1.1 to compare against d= and is malformed.
-  // (An earlier revision rejected a `dt=` tag here instead, which no RFC defines:
-  // §3.2 says an unrecognised tag MUST be ignored, and the README documented the
-  // opposite of what the code did.)
+  // An unknown tag such as `dt=` is not rejected: §3.2 says it MUST be ignored.
   const identity = tags.get("i")?.value
   if (identity !== undefined && !identity.includes("@")) {
     throw new DkimParseError(`DKIM-Signature i= tag has no domain: ${identity}`)
@@ -280,8 +276,7 @@ function parseAlgorithm(value: string): DkimAlgorithm {
  *
  * The deletion is bounded by the parsed offsets of the value, so a folded `b=`,
  * a quoted `b=`, or an unrelated tag carrying the characters `b=` all behave the
- * same; an earlier revision re-scanned with `\bb=` and dropped everything after
- * it. Nothing after the value is touched: `b=` need not be the last tag, and a
+ * same. Nothing after the value is touched: `b=` need not be the last tag, and a
  * tag that follows it stays inside the signed bytes, where §3.7 leaves it.
  * `raw` is the field value, without the field name.
  */

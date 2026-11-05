@@ -1,5 +1,5 @@
 /**
- * The SMTP adapter against a real mail server (#74).
+ * The SMTP adapter against a real mail server.
  *
  * The audit's line about this adapter was "no real SMTP or STARTTLS exchange has
  * ever run on Deno": `email/smtp.test.ts` injects a transport factory and never

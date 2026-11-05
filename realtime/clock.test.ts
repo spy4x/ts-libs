@@ -5,7 +5,7 @@ import { createSystemClock } from "./clock.ts"
 import type { Clock, TimerClock } from "./mod.ts"
 
 describe("createSystemClock", () => {
-  it("reads Date.now() for now(), the same as @spy4x/platform's systemClock (#71)", () => {
+  it("reads Date.now() for now(), the same as @spy4x/platform's systemClock", () => {
     const clock = createSystemClock()
     const before = Date.now()
     const reading = clock.now()

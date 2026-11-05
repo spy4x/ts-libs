@@ -1,8 +1,7 @@
 /**
  * Cloudflare cache purge by URL.
  *
- * Ported from `purgeCloudflare()` in `antonshubin.com/scripts/cloudflare-purge.ts`
- * (spy4x/antonshubin.com#300). The app-specific parts stay in the app: waiting for a
+ * The app-specific parts stay in the app: waiting for a
  * build id, mapping `static/` paths to URLs, and the git diff.
  *
  * Behaviour:
@@ -17,6 +16,25 @@
  *    status and the error codes and messages Cloudflare returns, each with control characters
  *    removed, the token replaced by `<REDACTED:TOKEN>` and the length capped.
  *  - Answers are read under a 64 KiB cap; a larger or non-JSON body reports the status alone.
+ *
+ * `purgeUrls({ token, zoneName | zoneId, urls, fetch?, requestTimeoutMs? })` purges absolute URLs from
+ * a Cloudflare zone and returns `{ success, output, error }`. It never throws.
+ *
+ * - **Zone.** Give exactly one of `zoneName` (looked up with `GET /zones?name=`; no match fails and
+ *   names the zone; more than one match fails as ambiguous, so pass `zoneId` then) or `zoneId` (no
+ *   lookup call). The token needs Zone Read only for the lookup, and Cache Purge.
+ * - **Batches.** 30 URLs per `purge_cache` call, the API's limit. It stops at the first failed call
+ *   and reports how many URLs were purged before it.
+ * - **Timeout.** Each request runs under `AbortSignal.timeout(requestTimeoutMs)`, 10 s by default.
+ * - **Failures.** An HTTP error, a `200` with `success: false`, a timeout and a transport error all
+ *   fail. API failures carry Cloudflare's error codes and messages (at most 5, each cut to 200
+ *   characters, control characters removed, the token replaced by `<REDACTED:TOKEN>`); transport
+ *   failures carry only the error class. Answers are read under a 64 KiB cap. The token and headers
+ *   never appear in `error` or `output`.
+ * - **Empty list.** An empty `urls` succeeds with `output: "nothing to purge"` and sends no request.
+ * - **Fail open.** The caller decides what a failure means; a deploy script would normally log
+ *   `error` and carry on.
+ *
  * @module
  */
 

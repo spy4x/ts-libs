@@ -1,30 +1,24 @@
 /**
  * The Postgres side of the migration runner.
  *
- * `template/libs/server/db/migrate.ts` was an 88-line script: it hardcoded
- * `./libs/server/db/migrations` (`:6`), printed progress and called `Deno.exit`
- * from inside its own `try` blocks (`:35,47,61,80,84`). Here the same mechanics
- * live behind {@link MigrationDriver} in `migrate.ts`, so the folder is an
+ * The mechanics live behind {@link MigrationDriver} in `migrate.ts`, so the folder is an
  * argument, the report is a return value, and the SQLite adapter shares the file
  * discovery, the sort order, the history filter and the `.no_transaction` switch.
  *
  * Three schema decisions, all deliberate:
  *
- *  - `name` is `UNIQUE`. The template's `CREATE TABLE migrations`
- *    (`:24-30`) was not, and neither was the `migrations` table in template's
- *    `schema.sql:10-14`. Two runners starting together would therefore both see an
+ *  - `name` is `UNIQUE`. Without it, two runners starting together could both see an
  *    empty history, both apply the same file, and record it twice with no error.
  *    With the constraint the second insert fails and the second runner's
  *    transaction rolls back — a loud failure instead of a doubled migration. It is
  *    additive against an existing table only if that table has no duplicate names,
  *    which is exactly the state this constraint is meant to prevent. It is a backstop
- *    now rather than the whole defence: {@link PostgresMigrationDriver.withLock} is
+ *    rather than the whole defence: {@link PostgresMigrationDriver.withLock} is
  *    what stops the two runners racing in the first place.
  *  - `name` is `TEXT`, not `VARCHAR(100)`. Postgres stores the two identically and a
  *    hundred characters is an arbitrary ceiling on a file name. An existing table keeps
  *    the column it has; this changes newly created tables only.
- *  - `applied_at` is not stored separately. `created_at` in the template's shape
- *    already records when the row was inserted, and that insert is the last
+ *  - `applied_at` is not stored separately. `created_at` already records when the row was inserted, and that insert is the last
  *    statement of the migration's transaction, so it is the application time.
  *
  * `checksum` is added to an existing history table as well as to a new one, because a
@@ -97,8 +91,7 @@ export class PostgresMigrationLockError extends Error {
  * {@link PostgresMigrationDriver.withLock} points the instance at one reserved connection
  * for the length of a run, so a second run on the same object would send its statements on
  * the first run's connection. Both then hold an advisory lock, the winner's statements
- * queue behind the loser's, and the process hangs with nothing in the log — measured on
- * issue #109. Two concurrent runs are two driver objects, which is also what two
+ * queue behind the loser's, and the process hangs with nothing in the log. Two concurrent runs are two driver objects, which is also what two
  * application instances are.
  */
 export class PostgresMigrationRunInProgressError extends Error {
@@ -279,11 +272,10 @@ function describeUnexpectedRow(value: unknown): string {
  * `.values()` is what makes this survive any column-name transform: `postgres@3.4.7` sets
  * `query.isRaw = 'values'` and then builds each row as `new Array(query.statement.columns.length)`
  * indexed by position, never as `row[column.name] = value` (`postgres@3.4.7/src/query.js:134-136`,
- * `src/connection.js:489,505-509`). A name-keyed object is what every read here used to build,
- * which broke under `postgres.pascal` (every column's first letter rewritten, #137) and would
- * silently drop a column under a transform that maps two different names to the same one — a
- * `.values()` row was never built from names at all, so neither failure mode exists here: this
- * is what "survives any column transform" now actually means, built-in (`postgres.camel`,
+ * `src/connection.js:489,505-509`). A name-keyed object would break under `postgres.pascal` (every
+ * column's first letter rewritten) and silently drop a column under a transform that maps two
+ * different names to the same one — a `.values()` row is never built from names at all, so
+ * neither failure mode exists here: this is what "survives any column transform" means, built-in (`postgres.camel`,
  * `postgres.pascal`, `postgres.kebab`) or a custom `transform.column.from`.
  *
  * `transform.row.from` still runs on the array afterwards (`connection.js:513-514`), and a
@@ -310,7 +302,7 @@ export function expectRowShape(context: string, row: unknown, expectedLength: nu
  * **One run at a time per instance.** {@link withLock} pins a connection and points this
  * instance's statements at it for the length of the run, so a second run started on the
  * *same instance* while the first is still going would share that connection. That is now
- * refused with {@link PostgresMigrationRunInProgressError} rather than deadlocking (#109).
+ * refused with {@link PostgresMigrationRunInProgressError} rather than deadlocking.
  * Two concurrent runs are two instances, which is also what two application instances are.
  *
  * **A table or schema name the client's own transform would rewrite is refused at
@@ -378,10 +370,10 @@ export class PostgresMigrationDriver implements MigrationDriver {
    * two ran at the same time and one of them crashed inside Postgres's own catalogue.
    * {@link resolvedTableRef} has the one case the resolution cannot cover.
    *
-   * **The wait is bounded** (#109). `pg_try_advisory_lock` in a retry loop rather than
+   * **The wait is bounded**. `pg_try_advisory_lock` in a retry loop rather than
    * `pg_advisory_lock`, which waits for ever: a second runner starting during a migration
-   * should apply nothing and carry on, but one stuck runner used to stop every other
-   * instance from starting, with nothing in the log to say why. After
+   * should apply nothing and carry on, and one stuck runner must not stop every other
+   * instance from starting with nothing in the log to say why. After
    * {@link PostgresMigrationDriverOptions.lockWaitMs} the runner gives up with
    * {@link PostgresMigrationLockError}, having applied nothing. A runner that dies holding
    * the lock releases it when its connection closes, so there is no stale lock to clear by
@@ -396,7 +388,7 @@ export class PostgresMigrationDriver implements MigrationDriver {
    * nothing is applied twice because the run does not continue. What the caller sees is an
    * uncaught `TypeError: Cannot read properties of null (reading 'write')` raised from
    * inside `postgres@3.4.7/src/connection.js:250` on a timer the driver owns, not a
-   * rejected promise this method could wrap. Written down rather than dressed up (#109).
+   * rejected promise this method could wrap. Written down rather than dressed up.
    */
   async withLock<T>(run: () => Promise<T>): Promise<T> {
     // Before the first `await`, so two runs started together cannot both pass it.
@@ -444,7 +436,7 @@ export class PostgresMigrationDriver implements MigrationDriver {
    * on the same bug until its `max_lifetime` ends it (30 to 60 minutes by default, or
    * until the pool ends when `max_lifetime` is off). The run still finishes, but the pool
    * is one connection short meanwhile; nothing this driver owns can close that window,
-   * only the upstream fix proposed in #1220 does.
+   * only the upstream fix proposed in porsager/postgres#1220 does.
    */
   private async withReservedLock<T>(run: () => Promise<T>): Promise<T> {
     await this.sql`SELECT 1`
@@ -534,7 +526,7 @@ export class PostgresMigrationDriver implements MigrationDriver {
    * method can check.
    *
    * **A resolved value that is not a usable schema name throws**, rather than falling back
-   * to an empty string. An empty-string fallback used to turn a broken read silently into
+   * to an empty string. An empty-string fallback would turn a broken read silently into
    * `.table` instead of `public.table`: still a valid-looking key, just the wrong one, so two
    * runners that should lock each other out could take different keys instead and both apply
    * the same migration — worse than failing the run outright.
@@ -565,10 +557,10 @@ export class PostgresMigrationDriver implements MigrationDriver {
   /**
    * Create the history table when absent, leaving an existing one's rows untouched.
    *
-   * The existence probe is schema-aware. It used to ask `information_schema.tables` for
-   * the name alone, so a table of that name in any schema on the server — a second
-   * tenant's, another application's — answered yes and the driver created nothing, and
-   * the first history insert then failed on a table that was not there.
+   * The existence probe is schema-aware: asking `information_schema.tables` for the
+   * name alone would let a table of that name in any schema on the server (a second
+   * tenant's, another application's) answer yes, and the first history insert would then
+   * fail on a table that is not there.
    *
    * An existing table gains the `checksum` column, so a deployment upgrading to this
    * version gets the drift check on its next run. The one probe answers both questions —

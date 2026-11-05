@@ -97,7 +97,7 @@ export function createFakeSql(options: FakeSqlOptions = {}) {
       }
       const query = render(strings as unknown as TemplateStringsArray, values)
       record(query, handle)
-      // `withLock`'s own statements — the #156 warm-up query included — answer
+      // `withLock`'s own statements — the warm-up query included — answer
       // themselves and do not draw on the queue. A test scripts what its *driver
       // method* reads; padding the queue for statements the lock sends is a trap that
       // moves every answer along by one the moment the lock changes shape.

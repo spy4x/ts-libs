@@ -261,8 +261,7 @@ function initialOf(word: string): string {
  * sequence, and it would cost a platform probe for a runtime without it plus a type assertion for
  * the `Intl` typings. Availability is *not* the reason: `deno.jsonc` compiles against
  * `["ES2020", "DOM", "DOM.Iterable", "deno.ns"]`, and `deno.ns` supplies esnext `Intl`, so
- * `new Intl.Segmenter(...)` type-checks clean here — an earlier revision of this comment claimed
- * otherwise and was wrong.
+ * `new Intl.Segmenter(...)` type-checks clean here.
  *
  * @param name Full name, in any script. `null` and `undefined` are treated as empty.
  * @returns One or two upper-case characters, or `""` when the name has no usable initial.

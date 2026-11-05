@@ -8,6 +8,38 @@
  * across a year or a daylight-saving change can neither lose nor double a day.
  *
  * Out of scope: quarters, years and months that start on a day other than the 1st.
+ *
+ * `time/period` answers "which month or week is it for this household" and steps from there. Only
+ * the first step reads a zone: `currentPeriod` takes `now` and a `timeZone` from the caller, so a
+ * server total and the month a screen shows cover the same days, and a test pins the clock. At
+ * 2026-10-31T17:30Z that is November in `Asia/Ho_Chi_Minh` and October in `Europe/Berlin`. A period
+ * is an inclusive `DateRange` of plain dates with its `unit`, so stepping across a year or a
+ * daylight-saving change cannot lose or double a day.
+ *
+ * ```ts
+ * import {
+ *   currentPeriod,
+ *   periodLabel,
+ *   periodSoFar,
+ *   PeriodUnit,
+ *   samePartOf,
+ *   shiftPeriod,
+ * } from "@spy4x/time/period"
+ *
+ * const clock = { now: new Date(), timeZone: "Asia/Ho_Chi_Minh" }
+ * const month = currentPeriod(PeriodUnit.Month, clock) // { from: "2026-11-01", to: "2026-11-30" }
+ * const soFar = periodSoFar(month, clock) // 1 to 3 November, or null before the month starts
+ * const before = soFar && samePartOf(shiftPeriod(month, -1), soFar) // 1 to 3 October
+ * periodLabel(month, "en-GB") // "November 2026"
+ * periodLabel(currentPeriod(PeriodUnit.Week, { ...clock, firstWeekday: 7 })) // "1–7 Nov 2026"
+ * ```
+ *
+ * A week starts on `firstWeekday`, `1` for Monday (the default) to `7` for Sunday; `localeFirstWeekday`
+ * in `time/locale` reads it from a locale. `samePartOf` stops at the other period's last day, so all
+ * of March compares with all of February. Quarters, years and months that start on another day than
+ * the 1st are not here.
+ *
+ * @module
  */
 
 import {

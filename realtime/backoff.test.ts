@@ -88,7 +88,7 @@ describe("nextBackoffDelay", () => {
   })
 
   it("never returns more than a non-integer maxMs when the jitter ratio is zero", () => {
-    // #71: an earlier extraction of this function's arithmetic rounded the capped delay, which
+    // An earlier extraction of this function's arithmetic rounded the capped delay, which
     // returned 101 here, above maxMs.
     expect(
       nextBackoffDelay({ attempt: 10, baseMs: 100, maxMs: 100.6, jitterRatio: 0 }),
@@ -140,7 +140,7 @@ describe("nextBackoffDelay", () => {
   })
 
   it("still clamps to the cap when a misbehaving random source returns 1 or more", () => {
-    // #74: with a well-behaved `random` in [0, 1), the inner clamp on `capped` already keeps every
+    // With a well-behaved `random` in [0, 1), the inner clamp on `capped` already keeps every
     // value at or under `maxMs`, which makes the final `Math.min(maxMs, …)` in the implementation
     // look redundant — it survived a mutation because nothing exercised the one case it actually
     // guards: a caller whose `random` breaks the documented `[0, 1)` contract. Attempt 5 with

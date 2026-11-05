@@ -1,5 +1,5 @@
 /**
- * IP address parsing and CIDR range checks (#221).
+ * IP address parsing and CIDR range checks.
  *
  * `parseIp` accepts exactly one bare IPv4 or IPv6 address and nothing around it: no port, no
  * brackets, no zone id, no whitespace. It returns the address in one canonical spelling, so two
@@ -9,6 +9,52 @@
  * URL's host is the machine itself, as a browser decides it.
  *
  * Pure: no DNS, no I/O, no permissions.
+ *
+ * ```ts
+ * import { ipInRanges, normalizeIp } from "@spy4x/net/ip"
+ *
+ * normalizeIp("::FFFF:192.0.2.1") // "192.0.2.1"
+ * normalizeIp("2001:0DB8::0001") // "2001:db8::1"
+ * normalizeIp("192.0.2.1:8080") // null
+ *
+ * const proxies = ["173.245.48.0/20", "2400:cb00::/32"] // the caller's own list
+ * ipInRanges("173.245.63.255", proxies) // true
+ * ```
+ *
+ * `parseIp` takes exactly one bare address. It refuses a port, brackets, a zone id
+ * (`fe80::1%eth0`), surrounding whitespace, an IPv4 octet with a leading zero, and
+ * anything longer than 45 characters, and returns `null` for each. What it accepts
+ * comes back in one canonical spelling — dotted decimal, or RFC 5952 for IPv6 — so
+ * two spellings of one address are one string. An IPv4-mapped IPv6 address
+ * (`::ffff:192.0.2.1`) comes back as the IPv4 address it carries.
+ *
+ * `ipInRanges(ip, cidrs)` is `false` for anything `parseIp` refuses. An address is
+ * compared only with ranges of its own family, and a mapped address counts as
+ * IPv4, so write IPv4 ranges in IPv4 notation. A bare address in the list means
+ * that one address. A malformed range throws a `RangeError` on every call, whether
+ * or not an earlier range matched: a typo in a trusted-proxy list should break
+ * loudly, not quietly trust nobody. No provider's range list ships here; those
+ * change, so the caller passes its own.
+ *
+ * ## Is this address the machine itself?
+ *
+ * ```ts
+ * import { isLoopbackHost } from "@spy4x/net/ip"
+ *
+ * const url = new URL(publicUrl)
+ * if (url.protocol !== "https:" && !isLoopbackHost(url.hostname)) {
+ *   throw new Error("PUBLIC_URL must be https, or http on this machine")
+ * }
+ * ```
+ *
+ * `isLoopbackHost(host)` is true for `localhost`, any name under `.localhost`, an
+ * address in `127.0.0.0/8` and `::1`: the hosts a browser treats as secure over
+ * plain `http:`, so it keeps a `Secure` cookie there. Use it where `https:` is
+ * required but a development address must still work. It is false for `0.0.0.0`,
+ * a private network address and a `.local` name. It reads the name and resolves
+ * nothing, so it is not an SSRF check; that is `validatePublicUrl`.
+ *
+ * @module
  */
 
 import { parseIpv6Groups } from "./_ipv6.ts"

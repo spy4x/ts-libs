@@ -16,7 +16,7 @@
  *    `TS2322: Type 'Timeout' is not assignable to type 'number'` error in
  *    `server/healthcheck.ts:109`, because `@types/node`'s `setTimeout` returns
  *    `Timeout` while `deno.ns` declares `number`. `mcp/http.ts` and `media/timers.ts`
- *    hit the same collision before `mcp/` and `media/` were removed (#64, #66).
+ *    hit the same collision before `mcp/` and `media/` were removed.
  *    `loadNodeSqlite` below avoids it by not being a literal at the `import()` site.
  *    Re-measured after those removals: literal → 1 error, non-literal → 0, same
  *    runtime behaviour. `node:events` cost an earlier agent the same afternoon.

@@ -1,8 +1,8 @@
 /**
  * Number formatting for display.
  *
- * {@link round} replaces the source's `Math.round(value * factor) / factor`, which is wrong for any
- * value whose decimal digits are not exactly representable in binary: `round(1.005)` returned `1`
+ * {@link round} does not use `Math.round(value * factor) / factor`, which is wrong for any
+ * value whose decimal digits are not exactly representable in binary: that gives `1` for `1.005`
  * because `1.005 * 100` is `100.49999999999999` in IEEE 754. Rounding through the number's own
  * decimal representation (the same approach the platform spec takes) removes the class of bug.
  *

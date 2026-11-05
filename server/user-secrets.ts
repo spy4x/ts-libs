@@ -30,6 +30,68 @@
  * The mask and the cipher have exactly one implementation in this package (`./crypto.ts`); this
  * module never re-implements AES or masking.
  *
+ * `createUserSecretStore`, `UserSecretError`, `UserSecretErrorCode`, `UserSecretPort`,
+ * `StoredUserSecret`, `SaveUserSecretInput`, `UserSecretSummary`, `UserSecretStoreOptions`,
+ * `PROVIDER_PATTERN`, `MIN_API_KEY_LENGTH`, `MAX_API_KEY_LENGTH`, `MAX_PROVIDER_LENGTH`,
+ * `MAX_MODEL_LENGTH`.
+ *
+ * The BYOK pattern: validate → `cipher.encrypt` at rest → keep `maskKey`'s hint → upsert per
+ * `(user, provider)` → delete, with persistence behind an injected `UserSecretPort` (no SQL, no driver)
+ * and the cipher behind `SecretCipher`. `save` returns a summary, `list` returns summaries only — the
+ * ciphertext has no field to travel in — and `openSecret` is the single call that yields a plaintext,
+ * for the outbound provider request. The port's `upsert` contract is an SQL
+ * `ON CONFLICT (user_id, provider) DO UPDATE`: replace the secret and hint, force `isActive`, bump
+ * `updatedAt`, preserve `createdAt`. Neither the cipher nor the mask is re-implemented here; both come
+ * from `server/crypto.ts`.
+ *
+ * A `model` longer than `MAX_MODEL_LENGTH` (256) or carrying a control character is refused as
+ * `InvalidModel`. A cipher that rejects while encrypting is `EncryptionFailed`, while decrypting
+ * `DecryptionFailed`; a port that rejects is `PortFailure`.
+ *
+ * **A base URL is an outbound destination, so it is checked like one.** A non-empty `baseUrl` must be
+ * an absolute `http:`/`https:` URL with no user name or password and no control characters — the
+ * store's own rules, which run first and always — and then passes `validatePublicUrl` from
+ * `@spy4x/net/url-policy`, which resolves the host and refuses loopback, link-local (including the
+ * cloud metadata address `169.254.169.254`), private and special-use destinations. The store keeps its
+ * own constant `baseUrl is invalid` message for every rejection: the guard's message names the
+ * resolver's failure and the address family it disliked, which is information about the installation's
+ * network. The absolute-URL check is first on purpose, because the guard completes a missing scheme
+ * with `https://` and would otherwise accept a half-written `api.example.com/v1`.
+ *
+ * ```ts
+ * const store = createUserSecretStore({
+ *   port,
+ *   cipher: CryptoService.fromHexKey(hexKey),
+ *   resolver: defaultResolver, // injected: a test without --allow-net supplies its own
+ *   allowInternalBaseUrl: false, // the default; true only where localhost is a real endpoint
+ * })
+ * ```
+ *
+ * `allowInternalBaseUrl` exists because a self-hosted model server on `http://localhost:11434/v1` is a
+ * real configuration. Only the literal `true` turns it on, so a config value that arrives as
+ * `undefined` cannot flip the default. With it on there is no SSRF guard for this field at all — the
+ * guard has no switch for "internal but not everything" — and only the store's own rules apply;
+ * `https://user:pw@localhost/v1` is still refused.
+ *
+ * **Checking at save time does not make the call safe.** A host name that resolves to a public address
+ * today can resolve to `127.0.0.1` tomorrow, and a stored URL is checked once. The outbound request
+ * has to go through `safeFetch` from `@spy4x/net/safe-fetch`, which re-checks at connect time and
+ * follows redirects under the same policy. A store that validates and then calls `fetch` directly is
+ * still vulnerable.
+ *
+ * **Every row the port returns is checked against what was asked for.** `openSecret`, `list` and
+ * `save`'s re-read refuse a row whose `userId` or `provider` differs, with
+ * `UserSecretErrorCode.RowMismatch`, rather than decrypting it. The port is injected, so a mis-written
+ * `WHERE` clause, a cache keyed on the provider alone or a test double that ignores its arguments all
+ * produce somebody else's row, and the store does not rely on a check it cannot see.
+ *
+ * **Every secret is bound to its row.** The store passes
+ * `user-secret:v1:<len>:<userId>:<len>:<provider>` — length-prefixed, so no two pairs encode the same
+ * way — as the cipher's context, which AES-GCM authenticates. A ciphertext copied into another user's
+ * row, or into another provider's, no longer opens. **Values stored before this change cannot be
+ * opened**, because they carry no bound context; no project uses this store yet, so there is nothing
+ * to migrate.
+ *
  * @module
  */
 
@@ -79,11 +141,9 @@ export enum UserSecretErrorCode {
  * The message is deliberately not parameterised: a caller value in a message is how a provider
  * name or a raw driver message ends up rendered to a user next to secret material. The error
  * therefore carries **no `cause`** either: `cause` is a live handle on
- * a rejection that a driver or cipher may have populated with the value it failed on, and the
- * reviewer recovered a plaintext api key from exactly that handle. The house rule is that only the
+ * a rejection that a driver or cipher may have populated with the value it failed on, such as a
+ * plaintext API key. The house rule is that only the
  * error's *type* crosses a boundary, never `message`, `stack`, `cause` or any field of the error.
- * (It used to be stated by `server/http/redact.ts`, which was deleted with `server/jwt.ts` in
- * #60/PR #79; the rule outlived the file.)
  *
  * What a caller gets for an underlying failure is {@link UserSecretError.rejectionName}: one of a
  * closed set of known type identities, or a primitive `typeof` for a non-`Error` throw (see
@@ -452,9 +512,8 @@ async function callPort<T>(
  * error type, resolved by `instanceof` against a closed whitelist.
  *
  * Never a string the injected implementation supplies. `error.name` is attacker-controlled text —
- * a driver can set it to the api key it failed on, and an earlier revision of this helper filtered
- * `name` to `[A-Za-z0-9_]`, which stopped punctuation but let an alphanumeric-only secret straight
- * through. Identity cannot carry a payload: the result is always one of `"CryptoError"`,
+ * a driver can set it to the api key it failed on, and a character filter would let an
+ * alphanumeric-only secret straight through. Identity cannot carry a payload: the result is always one of `"CryptoError"`,
  * `"DOMException"`, `"TypeError"`, `"RangeError"`, `"SyntaxError"`, `"Error"`, or a primitive
  * `typeof` such as `"string"`.
  *

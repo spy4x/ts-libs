@@ -1,3 +1,17 @@
+/**
+ * The words of `describeRrule` in Japanese. Pass them as the `translation` of a translator:
+ *
+ * ```ts
+ * import en from "@spy4x/time/rrule-words/en"
+ * import ja from "@spy4x/time/rrule-words/ja"
+ * import { createTranslator } from "@spy4x/platform/universal/i18n"
+ *
+ * const t = createTranslator({ language: "ja", catalogs: [{ source: en, translation: ja }] })
+ * ```
+ *
+ * @module
+ */
+
 /** The words of `describeRrule` in ja, translated from `./en.ts`, which explains every key. */
 export default {
   "freq.daily": "毎日",

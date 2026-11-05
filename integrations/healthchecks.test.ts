@@ -220,8 +220,8 @@ describe("HealthchecksClient.ping", () => {
     expect(result.ok === false && result.message).toBe("500")
     expect(result.ok === false && result.attempts).toBe(10)
     expect(transport.requests.length).toBe(10)
-    // The prose in integrations/README.md quotes a total. Assert it from the
-    // schedule itself so the two cannot drift apart again.
+    // `healthchecks.ts` quotes a total. Assert it from the schedule itself so the
+    // two cannot drift apart.
     const waitedMs = result.ok === false ? result.waitedMs : 0
     expect(waitedMs).toBe(2_220_000)
     expect(waitedMs / 60_000).toBe(37)
@@ -239,7 +239,7 @@ describe("HealthchecksClient.ping", () => {
   })
 
   it("needs 65 minutes across 9 retries if the per-wait cap were 10 minutes", async () => {
-    // The comparison figure quoted in `integrations/README.md` and `policy.ts`.
+    // The comparison figure quoted in `policy.ts`.
     // It was prose only; asserting it is what makes "both figures are asserted"
     // true rather than an overclaim about this suite's own coverage.
     const transport = fakeTransport([{ status: 500 }])
@@ -488,9 +488,8 @@ describe("HealthchecksClient.ping", () => {
 
   it("gives two default-configured clients different delays under the settings that ship", async () => {
     // No `retry` override and no injected `random`: exactly what a caller who
-    // configures nothing gets. This is the test #68 asks for — "at least one
-    // retry test runs with the shipped delay settings, and two processes do
-    // not get identical delays" — and it is what makes DEFAULT_RETRY_POLICY's
+    // configures nothing gets. At least one retry test runs with the shipped
+    // delay settings, and two processes do not get identical delays; it is what makes DEFAULT_RETRY_POLICY's
     // jitterRatio: 0.2 matter, rather than only the mechanism being capable of
     // randomness. `sleep`/`clock` are still injected so the test never waits
     // on wall-clock time; only the randomness is real.

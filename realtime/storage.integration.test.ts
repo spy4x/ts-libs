@@ -1,6 +1,6 @@
 /**
  * Deno's real `localStorage` against the `KeyValueStore` contract that `MemoryKeyValueStore` is
- * written to (issue #74). `MemoryKeyValueStore` stands in for `localStorage` in every other test
+ * written to. `MemoryKeyValueStore` stands in for `localStorage` in every other test
  * of this package, so this file is what keeps that stand-in honest.
  *
  * `localStorage` is shared by every run of the tier on this machine, so each case writes only keys

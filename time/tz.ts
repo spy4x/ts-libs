@@ -28,6 +28,211 @@
  *
  * Out of scope: date parsing, durations, recurring rules, `Date` arithmetic in
  * the host zone, and anything that needs sub-minute offset precision.
+ *
+ * ```ts
+ * import { formatDateTimeLong, zonedDateTime } from "@spy4x/time/tz"
+ *
+ * // A stored booking: a wall clock, the zone it was made in, the guest's zone.
+ * const instant = zonedDateTime("2026-08-28", "10:00", "Europe/Berlin")
+ * formatDateTimeLong("2026-08-28", "10:00", "Europe/Berlin") // "Friday, 28 August 2026 at 10:00"
+ * ```
+ *
+ * ## Why `Intl` and not a date library
+ *
+ * Everything in `time/tz` is built on `Intl.DateTimeFormat`, not `Temporal`.
+ * `Temporal` is newer, has a cleaner API, and is already built into Deno (2.9.7
+ * needs no flag) — but this module is meant to run in browsers too, and browser
+ * support for `Temporal` is not yet reliable enough to depend on. `Intl` is what
+ * every target runtime already has. Revisit this once `Temporal` is broadly
+ * available in browsers; until then, `Intl` stays.
+ *
+ * Three more consequences of the `Intl` choice:
+ *
+ * - **Zero dependencies, zero bundled tzdata.** `Intl` reads the runtime's own
+ *   tzdata, which is already installed, already patched when a government changes
+ *   its rules, and already correct for historical dates outside the fractional-
+ *   minute LMT era (see [Not in scope](#not-in-scope)). The alternatives —
+ *   `date-fns-tz`, Luxon — each carry a copy of the tz database and a release
+ *   cadence to match. This module retires that dependency class rather than
+ *   adding to it.
+ * - **A display-locale parameter is genuinely safe to add, because two other
+ *   formatters can never see it.** The display formatters (`formatDateTimeLong`
+ *   and friends, including `isoDateInTz`/`hhmmInTz`) are built on locale data,
+ *   not string assembly, so the same code could produce
+ *   `"Friday, 28 August 2026 at 10:00"` in `en-GB` and
+ *   `"Freitag, 28. August 2026 um 10:00"` in `de-DE` if a locale parameter were
+ *   added — the locale tag is fixed inside each formatter today because nothing
+ *   yet consumes a second one, not because it would be hard to add. Two
+ *   computations must never see that parameter, because they turn `Intl`'s
+ *   output back into data instead of displaying it, and `Intl` renders both
+ *   differently per locale: the UTC offset `zonedDateTime` derives its instant
+ *   from (`en-GB` renders `Asia/Kolkata`'s offset as `"GMT+5:30"`, `fr-FR` as
+ *   `"UTC+5:30"`, `ar-EG` with Arabic-indic digits — an unread offset silently
+ *   becomes zero), and the wall clock `zonedDateTime` screens its candidates
+ *   against (the same digit substitution would apply to a year, month, day,
+ *   hour and minute compared as ASCII text). Both live in their own formatters
+ *   — `time/tz.ts`'s `offsetFormatter` and `canonicalWallClockFormatter`, both
+ *   pinned to `en-GB` — outside the option-set table `formatDateTimeLong` and
+ *   `isoDateInTz`/`hhmmInTz` share, so a locale parameter added to that table
+ *   cannot reach either one. Verified by forcing `zonedFormatter`'s own locale
+ *   to `ar-EG`: `zonedDateTime` keeps resolving every case in its test suite
+ *   correctly, because it depends on neither `zonedFormatter` nor the display
+ *   functions built on it.
+ * - **Determinism is the caller's job, and here it is enforced.** The runtime's
+ *   tzdata is the ICU build, not the host. Every function takes an explicit IANA
+ *   zone and none of them read the host `TZ` or the host clock, so the suite
+ *   produces identical results on a laptop in Asia/Bangkok and in a UTC CI
+ *   container. The only two functions that read the clock are `todayInTz`, and
+ *   `isoDateInTz`/`hhmmInTz` when given a `Date` the caller made.
+ *
+ * Cost: output text is ICU's, not yours. A different ICU version can change a
+ * separator or an abbreviation. Where that matters, the tests pin the exact string
+ * — `formatInstantLong` asserting `" at "` is a pinned contract, not decoration.
+ *
+ * ## Two things that are not the same thing
+ *
+ * Most timezone bugs are one of these being used as the other.
+ *
+ * **A wall clock in `tz`** is a `YYYY-MM-DD` plus `HH:MM` that a human in that zone
+ * reads off a calendar and a clock face: `"2026-08-28"` `"10:00"` in
+ * `Europe/Berlin`. It is _not_ an instant until a zone is attached to it — the same
+ * pair means a different moment in every zone, and there is no tzdata-independent
+ * answer. `zonedDateTime(date, time, tz)` attaches the zone and returns the UTC
+ * `Date`. All the formatters that take a `date` + `time` + `tz` triple are built on
+ * it, and `addDays`, `dayOfWeek`, `formatDateLong` anchor at noon for the same
+ * reason.
+ *
+ * **An instant** is a `Date`: one unambiguous point on the timeline, no zone
+ * attached. `formatInstantLong` / `formatInstantShort` render an instant _as_ a
+ * particular zone — the guest's, the host's, the recipient's. The rendering is a
+ * display choice and the instant is unchanged by it. `isoDateInTz` and `hhmmInTz`
+ * are the raw pieces of that rendering when you need the value rather than a
+ * sentence.
+ *
+ * So: `zonedDateTime` goes wall clock → instant. `formatInstant*` goes instant →
+ * wall clock. `formatDateTimeLong` composes both and is a no-op round trip, which
+ * is exactly what makes it a good assertion in a test.
+ *
+ * ## DST anchoring
+ *
+ * Two functions depend on an anchor, and both would be subtly wrong without it.
+ *
+ * **`addDays` anchors at noon**, and that anchoring _is_ the DST fix. Calendar days
+ * are not 86,400 seconds: on a transition day a day is 23 or 25 hours long.
+ * Adding `n * 86_400_000` to a local midnight crosses the transition and lands an
+ * hour into the wrong day — Berlin's `2026-03-28 00:00` is 23:00Z on the 27th, and
+ * `+ 86_400_000` from there is 01:00 on the 29th, so the 29th gets skipped
+ * entirely. Anchoring at local noon and moving the _UTC_ date by `n` stays within
+ * 12 hours of the transition in either direction, so the resulting instant is
+ * always inside the intended local day, and re-reading that day in `tz` yields the
+ * neighbouring calendar date. Midday is the anchor because no populated zone
+ * transitions at noon, so no date arithmetic can land in a gap. The tests cover
+ * both directions — forward over the spring transition and backward over the
+ * fall-back transition — because the bug is directional and a test that only
+ * walks one way passes with the anchor removed.
+ *
+ * **`dayOfWeek`, `formatDateLong` anchor at noon** for the same reason, one step
+ * weaker. Nothing transitions at noon, so a date-only conversion anchored there
+ * has twelve hours of margin on either side and can never land in a gap; anchored
+ * at `00:00` it would be inside the gap for a zone that jumps at or near midnight.
+ * `America/Santiago` does: its `2026-09-06 00:00` does not exist, and a
+ * date-anchored conversion there reports `01:00`.
+ *
+ * **`zonedDateTime` has no anchor, because a booking time cannot be moved.** It
+ * resolves the requested wall clock by screening candidates rather than shifting
+ * to a safe hour. Where the wall clock is ambiguous or nonexistent, the convention
+ * is explicit and tested:
+ *
+ * | Case                                        | Example                   | Result                                              |
+ * | ------------------------------------------- | ------------------------- | --------------------------------------------------- |
+ * | Fall-back overlap, wall clock occurs twice  | Berlin `2026-10-25 02:30` | earlier instant, `00:30Z` (CEST)                    |
+ * | Spring-forward gap, wall clock never occurs | Berlin `2026-03-29 02:30` | shifted forward by the gap, `01:30Z`, reads `03:30` |
+ * | Ordinary wall clock                         | Berlin `2026-08-28 10:00` | the only instant reading it, `08:00Z`               |
+ *
+ * That is Temporal's `"compatible"` disambiguation in both branch cases. A
+ * single-pass conversion, reading the zone offset at the wall clock treated as UTC,
+ * would be an hour late or early for the weeks around a transition.
+ *
+ * **`resolveWallClock` says which case applies.** A caller that must know whether
+ * a wall clock is skipped or repeated — a booking page hiding slots in the gap, a
+ * range picker offering both occurrences of a repeated hour — asks
+ * `resolveWallClock(date, time, tz)`. It shares `zonedDateTime`'s candidate
+ * screening, so its `instant` is always `zonedDateTime`'s answer and its errors
+ * are the same `RangeError`s:
+ *
+ * ```ts
+ * import { resolveWallClock, WallClockKind } from "@spy4x/time/tz"
+ *
+ * resolveWallClock("2026-10-25", "02:30", "Europe/Berlin")
+ * // { kind: WallClockKind.Overlap, instant: 00:30Z, later: 01:30Z }
+ * resolveWallClock("2026-03-29", "02:30", "Europe/Berlin")
+ * // { kind: WallClockKind.Gap, instant: 01:30Z } — the shifted-forward instant only
+ * ```
+ *
+ * `Gap` means a forward clock change skipped the wall clock, and `Overlap` means a
+ * backward clock change repeats it. The change need not be daylight saving: Apia
+ * skipped 2011-12-30 and Kwajalein 1993-08-21 by changing their standard offset.
+ * A gap carries only the shifted-forward instant; a caller who wants the reading
+ * before the change subtracts the gap itself.
+ *
+ * `zonedDateTime` also rejects a `date` + `time` that does not exist on the
+ * Gregorian calendar — `"2026-02-30"`, `"2026-13-01"`, `"25:00"`, and a year
+ * `Date.UTC` would fold into 19xx (`"0099"` becomes 1999) all throw a
+ * `RangeError` rather than silently landing on the nearest date `Date.UTC`
+ * happens to roll over into. It separately rejects a historical wall clock whose
+ * zone offset is not aligned to a whole minute (`Africa/Monrovia` before 1972,
+ * for example): this module is minute resolution only, so such a request is
+ * refused rather than answered up to a minute wrong.
+ *
+ * **`time/tz` — timezone features.**
+ *
+ * - **Durations and arithmetic in the host zone.** `addDays` moves a calendar date. Elapsed-time math
+ *   belongs on epoch milliseconds where no zone can interfere.
+ * - **Sub-minute offsets.** `tzOffsetMinutes` is minute resolution, so historical LMT offsets (which
+ *   carry seconds) are not resolved to the minute; `zonedDateTime` rejects a wall clock that would need
+ *   one rather than answering up to a minute wrong. A scheduling library does not need them.
+ * - **Validation of anything but a zone name.** `isValidTimeZone` answers whether the runtime knows the
+ *   zone; it does not check that a date and time exist — that is `zonedDateTime`'s own, separate check.
+ * - **Localisation of the display locale, never the two formatters `zonedDateTime` reads back as
+ *   data.** The display formatters' locale tag — including `isoDateInTz`'s and `hhmmInTz`'s — is
+ *   fixed to `"en-GB"` today, and adding a parameter is genuinely straightforward: `zonedDateTime`
+ *   does not call either of them. It reads its own offset formatter and its own wall-clock
+ *   formatter, both pinned to `en-GB` permanently and on purpose, because parsing `Intl`'s output
+ *   back into data only works for the one locale the parser was written against — see
+ *   [Why `Intl` and not a date library](#why-intl-and-not-a-date-library).
+ * - **`Date` objects as the public currency for wall clocks.** They cannot represent one, which is the
+ *   whole point.
+ *
+ * ## Naming a zone
+ *
+ * ```ts
+ * import { canonicalTimeZoneOr, zoneCity, zoneLabel, zoneOffsetLabel } from "@spy4x/time/tz"
+ *
+ * canonicalTimeZoneOr("japan", "UTC") // "Asia/Tokyo"
+ * zoneCity("America/New_York") // "New York"
+ * zoneOffsetLabel("Asia/Kolkata", new Date("2026-01-15T12:00:00Z")) // "UTC+5:30"
+ * zoneOffsetLabel("America/New_York", new Date("2026-07-15T12:00:00Z")) // "UTC-4"
+ * zoneLabel("Europe/Berlin", new Date("2026-07-15T12:00:00Z")) // "Berlin, Europe · GMT+2"
+ * zoneLabel("Mars/Base", new Date()) // "Mars/Base": an unknown zone comes back as its name
+ * ```
+ *
+ * `zoneLabel` takes the offset word (`prefix`) and a `join` function for a language that writes the
+ * city, area and offset in another order. Neither it nor `zoneOffsetLabel` throws for a zone this
+ * runtime does not know: both return the name, because a stored zone from another device must not
+ * break the page that shows it.
+ *
+ * `canonicalTimeZone` renames only a slash-less alias. It returns a name the runtime lists as it is,
+ * resolves slash-less aliases (`Japan` becomes `Asia/Tokyo`, `GMT` becomes `UTC`), and fixes letter case when `Intl` spells the same name
+ * (`america/new_york`); a miscased name that `Intl` would rename (`asia/kolkata`) comes back unchanged.
+ * For any other spelling it asks `Intl` and keeps
+ * the answer only if it is the same name in other casing; otherwise it returns the input unchanged.
+ * ICU decides which name is canonical, and Deno's answers `Asia/Calcutta` for `Asia/Kolkata`, so
+ * following it would turn modern names into legacy ones. The consequence: `US/Eastern` and
+ * `Asia/Calcutta` stay as written. To ask whether two names mean the same rules, compare their
+ * offsets. `zoneOffsetLabel` needs an instant because daylight saving time moves the offset; pass a
+ * fixed `Date` in tests.
+ *
+ * @module
  */
 
 import { formatIsoDate, parseIsoDate } from "./date.ts"
@@ -119,7 +324,7 @@ function requiredPart(
 /**
  * True when `tz` is a zone this runtime's tzdata knows.
  *
- * The one home for this probe (#71): `@spy4x/platform/validation/predicates`'s
+ * The one home for this probe: `@spy4x/platform/validation/predicates`'s
  * `isValidTimeZoneName` delegates here and is `@deprecated`.
  */
 export function isValidTimeZone(tz: string): boolean {
@@ -387,7 +592,7 @@ function screenCandidates(date: string, time: string, tz: string): ScreenedCandi
   if (earliestMs === Infinity) {
     // Reachable, not a bug on its own: a handful of zones carry a historical
     // offset with a fractional minute (Africa/Monrovia's LMT was -00:44:30),
-    // and this module is minute resolution only (see the README). No
+    // and this module is minute resolution only. No
     // candidate then rounds back to exactly the requested wall clock, so the
     // request is rejected rather than answered up to a minute wrong.
     throw new RangeError(

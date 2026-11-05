@@ -1,39 +1,23 @@
 /**
  * AES-256-GCM at-rest encryption for secrets (OAuth tokens, provider API keys).
  *
- * The scheme is `template/libs/server/crypto`'s scheme, folded in unchanged: the
- * IV is 12 random bytes generated per call and prepended to the
- * ciphertext-plus-16-byte-tag, and the wire format is standard base64 (with `+`,
- * `/` and padding — **not** base64url) of `[IV (12 bytes)][ciphertext + tag]`.
- * A ciphertext produced by that module stays readable here and vice versa.
- * Nothing in this file is a second scheme, so no format negotiation, version
- * byte or algorithm tag is needed.
+ * The IV is 12 random bytes generated per call and prepended to the ciphertext-plus-16-byte-tag,
+ * and the wire format is standard base64 (with `+`, `/` and padding — **not** base64url) of
+ * `[IV (12 bytes)][ciphertext + tag]`. There is one scheme, so no format negotiation, version byte or
+ * algorithm tag is needed.
  *
- * `encrypt` and `decrypt` take an optional `context` that is passed to AES-GCM
- * as additional authenticated data. It binds a blob to where it is stored — a
- * ciphertext sealed for one row cannot be opened as another — and it changes no
- * bytes of the wire format, because additional data is authenticated rather than
- * stored. A call that passes no context produces exactly the bytes the template's
- * module produces, so values written before this existed stay readable.
+ * `encrypt` and `decrypt` take an optional `context` that is passed to AES-GCM as additional
+ * authenticated data. It binds a blob to where it is stored — a ciphertext sealed for one row cannot
+ * be opened as another — and it changes no bytes of the wire format, because additional data is
+ * authenticated rather than stored, so a value sealed without a context stays readable.
  *
  * The key material has two entry points, and they are not interchangeable:
- * `new CryptoService(secret)` hashes the passphrase with SHA-256 (template's
- * derivation), while `CryptoService.fromHexKey(hex)` decodes 64 hex characters
- * to the 32 raw AES-256 key bytes and imports them as they are (the key path
- * of an earlier internal project). Same wire format, two keys — see the
- * {@link CryptoService} JSDoc.
- *
- * Two documented defects of the sources are fixed here rather than ported:
- *
- * - The hex-key source accepted a 32-hex-character
- *   (16-byte, AES-128) `ENCRYPTION_KEY` next to a 64-hex-character AES-256 one,
- *   so the same deployment could silently run one of two key sizes.
- *   `CryptoService.fromHexKey` now demands exactly 32 key bytes
- *   (`HEX_KEY_LENGTH` = 64 hex characters) and rejects AES-128 matter.
- * - The same source classified failures with
- *   `msg.includes("abort") || msg.includes("timeout")`. Nothing here inspects
- *   message text: every failure leaves as a {@link CryptoError} with a
- *   {@link CryptoErrorCode}, and caught values are narrowed with `instanceof`.
+ * `new CryptoService(secret)` hashes the passphrase with SHA-256, while
+ * `CryptoService.fromHexKey(hex)` decodes 64 hex characters to the 32 raw AES-256 key bytes and
+ * imports them as they are. Same wire format, two keys — see the {@link CryptoService} JSDoc.
+ * `fromHexKey` rejects a 32-hex-character AES-128 key, so a deployment cannot silently run one of two
+ * key sizes. Nothing here inspects error message text: every failure leaves as a {@link CryptoError}
+ * with a {@link CryptoErrorCode}, and caught values are narrowed with `instanceof`.
  *
  * The secret is injected rather than read from the environment: reading
  * `ENCRYPTION_KEY` is `server/user-secrets`' job (`CryptoService.fromHexKey` is
@@ -41,6 +25,41 @@
  * reusing the same secret as, say, a password pepper is the weak point, not this
  * module. Prefer a dedicated secret and migrate to HKDF with a distinct info
  * label when that reuse cannot be avoided.
+ *
+ * `CryptoService`, `CryptoError`, `CryptoErrorCode`, `SecretCipher`, `maskKey`, `isHexKey`,
+ * `AES_ALGORITHM`, `AES_KEY_BYTES`, `KEY_BITS`, `IV_LENGTH`, `HEX_KEY_LENGTH`, `DEFAULT_MASK_VISIBLE`,
+ * `MAX_MASK_VISIBLE`, `MASK_VISIBLE_DIVISOR`, `MASK_LENGTH`.
+ *
+ * `new CryptoService(secret)` derives the key as `SHA-256(utf8(secret))`. `CryptoService.fromHexKey`
+ * is the second entry point: 64 hex characters are decoded and imported as the 32 raw key bytes, never hashed, so the
+ * two constructors produce different keys for the same characters. AES-128 (32 hex characters) is
+ * rejected with `CryptoErrorCode.InvalidHexKey`.
+ *
+ * **Prefer `fromHexKey` with 32 random bytes** — `encodeHex(crypto.getRandomValues(new Uint8Array(32)))`
+ * — over a passphrase. The passphrase path is one SHA-256 pass, which is a derivation and not a key
+ * derivation function: it inherits whatever guessing resistance the passphrase has, and a passphrase
+ * reused as, say, a password pepper weakens both. A random 32-byte key has none of those questions.
+ *
+ * **The secret is not a property of the service.** It is read by the constructor, closed over by the
+ * key derivation, and unreachable afterwards, so `JSON.stringify`, `Deno.inspect` (with `showHidden`
+ * too), `Object.keys` and `structuredClone` of an instance show nothing. Logging a service object, or
+ * an object holding one, cannot print the key.
+ *
+ * **`encrypt(plaintext, context?)` binds a ciphertext to where it is stored.** The context is passed to
+ * AES-GCM as additional authenticated data: it is not stored, cannot be recovered from the blob, and
+ * the same string has to be supplied to `decrypt`. A wrong context fails exactly as a wrong key does,
+ * with `CryptoErrorCode.DecryptionFailed`. Passing no context produces the byte-identical format the
+ * template's module reads, so the format is unchanged for anything written before this existed.
+ *
+ * **`maskKey` is a display hint, not a shortened key.** Every non-empty hint is `MASK_LENGTH` code
+ * points wide whatever the key's length, and it shows at most `MAX_MASK_VISIBLE` trailing code points
+ * and at most one per `MASK_VISIBLE_DIVISOR` code points of the key — so an eight-character key shows
+ * two characters, and a 400-character one still shows four. The `visible` argument is a request that
+ * those two ceilings override; a caller cannot widen a hint into something usable.
+ *
+ * **Deliberately not added:** a key version byte and a stronger passphrase derivation. Both change the
+ * stored format or the key, and both would make values already stored unreadable. A deployment that wants a derivation with a
+ * work factor should use `fromHexKey` with a key its own key management produced.
  *
  * @module
  */
@@ -151,11 +170,9 @@ export interface SecretCipher {
  *
  * - `new CryptoService(secret)` treats the argument as a passphrase and derives
  *   the key as `crypto.subtle.digest("SHA-256", utf8(secret))`, then
- *   `importKey("raw", digest, { name: "AES-GCM", length: 256 })` — the scheme
- *   from `template/libs/server/crypto`.
+ *   `importKey("raw", digest, { name: "AES-GCM", length: 256 })`.
  * - {@link CryptoService.fromHexKey} treats the argument as 32 hex-encoded raw
- *   key bytes and imports those bytes unchanged, with no hashing — the key path
- *   ported from an earlier internal project.
+ *   key bytes and imports those bytes unchanged, with no hashing.
  *
  * The two are not interchangeable: `fromHexKey(h)` does not read a ciphertext
  * produced by `new CryptoService(h)`. Whichever entry point a deployment picks
@@ -196,8 +213,6 @@ export class CryptoService implements SecretCipher {
    * hex is decoded to bytes and imported raw, never hashed, so
    * `fromHexKey(h)` and `new CryptoService(h)` — the same 64 characters —
    * produce different keys and neither can decrypt the other's ciphertext.
-   * This matches the source's key path while dropping its acceptance of a
-   * 16-byte/AES-128 key.
    *
    * Accepts exactly {@link HEX_KEY_LENGTH} hex characters — no 16-byte/AES-128
    * key, no `0x` prefix, no separators, no padding. Upper-case and lower-case

@@ -2,9 +2,7 @@
  * Web Push wire schemas: what a browser's `PushSubscription` serialises to, and the two requests a
  * server accepts to subscribe or unsubscribe a device.
  *
- * Moved from `template/libs/platform/types/+index.ts`, unchanged apart from the `"+": "reject"`
- * decision below. The Web Push service that sends the notification these schemas describe is not
- * part of this wave.
+ * The Web Push sender is `@spy4x/integrations/push`.
  *
  * **`"+": "reject"` decision: every schema in this file declares it, on its own top level.**
  * Unlike the base model schemas in `base-model.ts`, nothing here is composed with `.and()` — a

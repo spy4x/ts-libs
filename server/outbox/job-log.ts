@@ -1,8 +1,6 @@
 /**
  * Log lines and a multi-step job for a worker that runs the outbox processor.
  *
- * Ported from `template/libs/server/jobs/job-failures.ts` (`logAttemptFailure`, `cleanupJob`).
- *
  * @module
  */
 

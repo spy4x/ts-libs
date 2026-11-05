@@ -18,7 +18,6 @@
  * printf %s "$PASSWORD" | deno task password:hash
  * ```
  *
- * Ported from caldav-tasks-web's `infra/scripts/password-hash.ts`.
  * @module
  */
 

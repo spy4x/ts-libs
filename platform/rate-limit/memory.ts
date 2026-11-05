@@ -1,9 +1,6 @@
 /**
  * Sliding-window rate limiter with an injected clock and bounded memory.
  *
- * Ported from `mig/lib/ratelimit.ts` (booking submissions) and `caldav-mcp/main.ts` (per-IP
- * limiter), with two source bugs fixed — see {@link MemoryRateLimiter} and `README.md`.
- *
  * **Window semantics: sliding, not fixed.** A bucket holds one timestamp per accepted request and
  * only the timestamps newer than `now - windowMs` count, so a client that spends its whole budget
  * at second 0 still has to wait a full window from its *oldest* request before the next one lands.
@@ -17,12 +14,90 @@
  *   for a rejected one, so a client that hammers the endpoint cannot grow its own bucket;
  * - across buckets, by the sweep: a bucket whose newest event is older than
  *   `windowMs + idleMs` is dropped, so a client rotating its source address cannot grow the map
- *   forever. `caldav-mcp`'s map never evicted, which is a memory-exhaustion vector.
+ *   forever: a map that never evicts is a memory-exhaustion vector.
  *
  * Eviction never targets a bucket that is still holding events inside its window, and it is
  * triggered by time rather than by insertion, so a request from a brand-new key can never free a
  * slot by pushing out an active bucket. A brute-forcer cannot reset its own counter by rotating
  * keys; the counter only decays by waiting.
+ *
+ * ## Sliding window, not fixed
+ *
+ * A bucket holds one timestamp per _accepted_ request; only timestamps newer than `now - windowMs`
+ * count, so an event expires exactly `windowMs` after it happened. A fixed window would let a caller
+ * spend the whole budget in the last millisecond of one window and the whole budget again in the next
+ * — `2 * limit` in a hair over one window, which is precisely the burst this module exists to absorb.
+ * The boundary is half-open: an event exactly `windowMs` old no longer counts, so a 1000 ms / 1-per
+ * limiter allows again at exactly `t0 + 1000`, denies at `t0 + 999`, and allows at `t0 + 1001`.
+ *
+ * ## Eviction policy: idle sweep, never LRU-on-insert
+ *
+ * A bucket is dropped only when **both** hold:
+ *
+ * - nothing has been checked against the key for `idleMs` (`seenAt <= now - idleMs`), and
+ * - its newest recorded event is older than `now - windowMs - idleMs`.
+ *
+ * So a bucket that ever recorded an event is retained for `windowMs + idleMs`, and the idle grace
+ * alone only retires a bucket that has no events left (every recorded event already outside its
+ * window). The sweep runs when `windowMs` has elapsed since the last one, or every
+ * `SWEEP_EVERY_CHECKS` (512) checks, whichever comes first — so a client that sends one request per key
+ * cannot outrun it.
+ *
+ * **Memory envelope.** At the defaults (`windowMs` 60 s, `idleMs` 600 s) a bucket lives 660 s, so
+ * steady-state retention is `request_rate × (windowMs + idleMs)` keys — about 660k keys at 1,000 req/s.
+ * **Measurement**: `MemoryRateLimiter`, one accepted event per rotated key, fixed injected clock, GC
+ * forced then `Deno.memoryUsage().heapUsed` read against an empty-limiter baseline, two runs.
+ *
+ * | keys    | heap delta | per bucket |
+ * | ------- | ---------- | ---------- |
+ * | 200,000 | 59.86 MB   | 299.3 B    |
+ * | 660,000 | 143.2 MB   | 217.0 B    |
+ *
+ * So budget **roughly 140 MiB (147 MB) at 1,000 req/s**; per-bucket cost falls as the map grows (299 B
+ * at 200k keys, 217 B at 660k) because the `Map`'s own overhead is amortised. One caveat the bound does
+ * not capture: the key is caller-supplied and unbounded, so a resolver returning a long header-derived
+ * string retains it for 660 s per distinct value.
+ *
+ * `idleMs` is the knob: lowering it towards `windowMs` trades memory for extra sweep churn.
+ *
+ * Two consequences worth stating, because both are security properties:
+ *
+ * - **No insertion-time eviction.** Eviction is time-driven, so a request from a brand-new key can
+ *   never free space by pushing out an active bucket. Rotating keys does not reset an attacker's own
+ *   counter; only waiting does.
+ * - **A busy bucket is never swept.** `seenAt` alone would be wrong: a bucket whose most recent check
+ *   was a _rejection_ stores no event and would look idle. Both conditions are therefore required.
+ * - **No wall clock, and no per-event shifting.** Every timing decision goes through the injected
+ *   `clock`, including the seed for the automatic sweep, and a prune costs one binary search plus one
+ *   `slice` rather than a `shift()` per stale event. Tests guard both: seeding
+ *   `lastSweepAt` from `Date.now()` fails `schedules its automatic sweep from the injected clock, never
+ *   the wall clock`, and restoring the loop fails the array-operation guard.
+ *
+ * **A hard cap: `maxBuckets`.** The sweep bounds memory by time, which is not enough when a client can
+ * send keys faster than they expire. Set `maxBuckets` to bound the count as well:
+ *
+ * ```ts
+ * const limiter = createMemoryRateLimiter({ windowMs: 60_000, limit: 10, maxBuckets: 100_000 })
+ * ```
+ *
+ * When a request arrives for a **new** key and the limiter is full, it first drops every bucket with no
+ * accepted request inside the window. Such a bucket counts nothing, so dropping it early resets no one's
+ * limit. If the limiter is still full, the new key is **refused**: the decision is `allowed: false`,
+ * `remaining: 0`, and `retryAfterMs` is the time until the first held bucket falls idle; no bucket is
+ * created for it. A key the limiter already holds is served as usual. A bucket with a request inside its
+ * window is never evicted to make room, so the promise above holds with the cap too: a flood of new keys
+ * cannot push out the bucket of a client that is being limited, and so cannot reset it. The price is
+ * that during such a flood, first-time clients are turned away until a bucket falls idle. The drop pass
+ * walks every bucket, so it runs at most once until the earliest held bucket can fall idle; refusals in
+ * between cost no walk.
+ *
+ * Per-bucket memory is bounded by `limit` — nothing is stored for a rejected request — so a client
+ * hammering one key grows nothing. Across keys, the sweep is the bound.
+ *
+ * Rejected requests are not recorded, which is what stops a blocked client from extending its own
+ * window by retrying.
+ *
+ * @module
  */
 
 import { type NowFn, systemNow } from "../universal/time.ts"
@@ -30,12 +105,9 @@ import { type NowFn, systemNow } from "../universal/time.ts"
 /**
  * Monotonic millisecond clock. Inject a fake in tests; never read `Date.now()` behind one.
  *
- * @deprecated The same type as `NowFn` from `@spy4x/platform/universal/time` (`#71`), which is
- * now the home for this shape. Use that instead in new code. Kept as its own
- * `type Clock = () => number` declaration, not a `= NowFn` reference, because `deno doc`'s text
- * rendering renders a reference to another named
- * type differently from an inline function type; the two are already structurally
- * interchangeable, so nothing is lost by keeping this declaration's own text.
+ * @deprecated The same type as `NowFn` from `@spy4x/platform/universal/time`, which is
+ * now the home for this shape. Use that instead in new code. Kept as its own declaration, not a
+ * `= NowFn` alias, so its published signature stays as it was; the two are interchangeable.
  */
 export type Clock = () => number
 
@@ -107,7 +179,7 @@ export interface MemoryRateLimiterOptions extends RateLimitOptions {
   /** Notified with the number of buckets removed each time a sweep runs. */
   onSweep?: (removed: number) => void
   /**
-   * The most buckets the limiter may hold (#220). Left out, the idle sweep is the only bound.
+   * The most buckets the limiter may hold. Left out, the idle sweep is the only bound.
    *
    * When a request arrives for a new key and the limiter is full, it first drops every bucket with
    * no accepted request inside the window — those count nothing, so dropping one resets no one's
@@ -162,11 +234,8 @@ function storeTtlMs(events: number[], windowMs: number, now: number): number {
  * what the middleware path wants. For several instances, use `createStoreLimiter` from `kv.ts`
  * with a shared store — the two are interchangeable through {@link RateLimitStore}.
  *
- * Source fix 1: the source read `Date.now()` inline for `lastPrune`, so the sweep could not be
- * tested or advanced; the clock is now injected.
- * Source fix 2: the source pruned with `while (events[0] <= cutoff) events.shift()`, which is
- * O(n²) on a full bucket; a binary search plus `slice` makes the per-request work independent of
- * how full the bucket is.
+ * The clock is injected so a test can advance the sweep, and a prune is a binary search plus
+ * `slice`, not a `shift()` per event, so the per-request work does not grow with the bucket.
  */
 export class MemoryRateLimiter {
   private readonly buckets = new Map<string, EventBucket>()
@@ -607,7 +676,7 @@ export function failOpenLimiter(
  * Build a limiter key from an identity.
  *
  * Prefixed so one backend can host several limiters (`chart:user:42`) without their counters
- * colliding, matching the `user:<id>` / `ip:<addr>` shape the source middleware used.
+ * colliding, in the `user:<id>` / `ip:<addr>` shape.
  */
 export function rateLimitKey(kind: RateLimitKind, id: string, prefix = ""): string {
   const scope = kind === RateLimitKind.User ? "user" : "ip"

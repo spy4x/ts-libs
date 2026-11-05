@@ -6,6 +6,8 @@
  * events say the page is back: `visibilitychange` to visible, `online`, and `pageshow` of a page
  * restored from the back-forward cache. This module only listens; what to do is the caller's
  * (usually {@link ClientTransport.resume}).
+ *
+ * @module
  */
 
 /** The parts of `window` and `document` the watcher uses, so a test or a worker can supply them. */

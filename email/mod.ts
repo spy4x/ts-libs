@@ -8,6 +8,51 @@
  *
  * The four `Send*` names are re-exported from `./sender.ts` only. `./smtp.ts`
  * re-exports them too, so naming both origins here would be a duplicate export.
+ *
+ * ```ts
+ * import { createSmtpSender } from "@spy4x/email/smtp"
+ * import { escapeHtml, htmlWrap } from "@spy4x/email/html"
+ *
+ * const sender = createSmtpSender({
+ *   host: "smtp.example.com",
+ *   port: 587,
+ *   user: "user@example.com",
+ *   pass: "test-password-not-real",
+ *   from: "Booking <booking@example.com>",
+ * })
+ *
+ * const html = htmlWrap({
+ *   brand: "Booking",
+ *   brandUrl: "https://book.example.com",
+ *   body: `<p>Hi ${escapeHtml(guestName)},</p>`,
+ * })
+ *
+ * const result = await sender.send({
+ *   to: ["guest@example.com", "host@example.com"],
+ *   subject: "Booking confirmed",
+ *   text: "Your meeting is booked.",
+ *   html,
+ * })
+ *
+ * if (!result.ok) console.error(result.error, result.rejected)
+ * ```
+ *
+ * ## Out of scope
+ *
+ * - **Templates.** Guest/owner confirmation pairs, booking copy, cancellation
+ *   wording and every other domain string stay in the application. This package owns
+ *   the transport, the escaping, the HTML shell, timezone framing and ICS
+ *   attachment plumbing; it does not own your words.
+ * - **An SES adapter.** The {@link EmailSender} port makes one a small `fetch` against the SES
+ *   API, without `@aws-sdk/client-sesv2`, when a caller needs it; until
+ *   then it is unbuilt surface.
+ * - **Binary attachments.** `EmailAttachment.content` is UTF-8 text, which is what
+ *   an ICS file and a rendered HTML part need. A `Uint8Array` variant is the change
+ *   to make when a caller needs one.
+ * - **Inbound mail.** Receiving mail is not planned; DKIM verification lives in the
+ *   `./dkim-verify` subpath of this package, not here.
+ *
+ * @module
  */
 
 export {

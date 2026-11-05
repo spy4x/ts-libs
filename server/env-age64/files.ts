@@ -3,7 +3,7 @@
  * reading and generating the `.age/key.txt`, and the atomic, permission-checked writes that turn
  * one root's plaintext into ciphertext and back.
  *
- * Safety features moved from the template's `infra/scripts/env/age.ts`: an atomic write through a
+ * Safety features: an atomic write through a
  * temp file and rename, fixed file modes (`0600` for `.env`/`key.txt`, `0644` for `.env.age`), and
  * refusing to write through a symlink or over a non-regular file.
  */

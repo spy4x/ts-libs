@@ -176,7 +176,7 @@ describe("apiFetch — header merge", () => {
   })
 })
 
-describe("apiFetch — content-type by body shape (#132)", () => {
+describe("apiFetch — content-type by body shape", () => {
   it("still sends application/json for a JSON string body", async () => {
     let seen: Headers | undefined
     await withFakeFetch(

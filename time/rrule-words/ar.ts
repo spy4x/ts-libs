@@ -1,3 +1,17 @@
+/**
+ * The words of `describeRrule` in Arabic. Pass them as the `translation` of a translator:
+ *
+ * ```ts
+ * import en from "@spy4x/time/rrule-words/en"
+ * import ar from "@spy4x/time/rrule-words/ar"
+ * import { createTranslator } from "@spy4x/platform/universal/i18n"
+ *
+ * const t = createTranslator({ language: "ar", catalogs: [{ source: en, translation: ar }] })
+ * ```
+ *
+ * @module
+ */
+
 /** The words of `describeRrule` in ar, translated from `./en.ts`, which explains every key. */
 export default {
   "freq.daily": "يوميًا",

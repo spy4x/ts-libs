@@ -1,19 +1,465 @@
-// DKIM signature verification per RFC 6376.
-//
-// Pure verifier: given a raw RFC 5322 message and a DKIM public key it decides
-// whether the message's DKIM-Signature verifies against that key. It fetches
-// nothing on its own unless a caller injects a DNS TXT resolver.
-//
-// This file runs the verification and is the package's public entry point.
-// Each step lives in a sibling module of this same package, re-exported here:
-// `dkim-signature.ts` (parse the field), `dkim-canonicalize.ts`,
-// `dkim-key.ts` (key record and DNS lookup), `dkim-message.ts` (split the
-// message, refuse ambiguous header bytes), `dkim-headers.ts` (select signed
-// fields), `dkim-crypto.ts` (hash and signature check), `dkim-types.ts` and
-// `dkim-body-hash.ts`. Together they use Web Crypto (`crypto.subtle`),
-// platform primitives (`TextEncoder`), `@std/encoding` for base64 only (#674),
-// and `resolveTxt` of `@spy4x/net/dns` for the default key lookup on Deno,
-// Node and Bun.
+/**
+ * DKIM signature verification per RFC 6376.
+ *
+ * Pure verifier: given a raw RFC 5322 message and a DKIM public key it decides
+ * whether the message's DKIM-Signature verifies against that key. It fetches
+ * nothing on its own unless a caller injects a DNS TXT resolver.
+ *
+ * This file runs the verification and is the package's public entry point.
+ * Each step lives in a sibling module of this same package, re-exported here:
+ * `dkim-signature.ts` (parse the field), `dkim-canonicalize.ts`,
+ * `dkim-key.ts` (key record and DNS lookup), `dkim-message.ts` (split the
+ * message, refuse ambiguous header bytes), `dkim-headers.ts` (select signed
+ * fields), `dkim-crypto.ts` (hash and signature check), `dkim-types.ts` and
+ * `dkim-body-hash.ts`. Together they use Web Crypto (`crypto.subtle`),
+ * platform primitives (`TextEncoder`), `@std/encoding` for base64 only,
+ * and `resolveTxt` of `@spy4x/net/dns` for the default key lookup on Deno,
+ * Node and Bun.
+ *
+ * ```ts
+ * import { fetchDkimPublicKey, verifyDkim } from "@spy4x/email"
+ *
+ * // Key supplied by the caller — no permissions needed.
+ * const key = await fetchDkimPublicKey("example.com", "sel", { resolver })
+ * const offline = await verifyDkim(rawMessage, key ?? undefined)
+ *
+ * // Key fetched from DNS by the default resolver — needs --allow-net.
+ * const live = await verifyDkim(rawMessage)
+ * if (!live.valid) console.warn(live.reason)
+ * ```
+ *
+ * `rawMessage` may be a `string` or a `Uint8Array`. DKIM is defined over octets
+ * (RFC 6376 §2.4), and a `string` cannot represent 8-bit content that is not
+ * valid UTF-8 — decoding it as UTF-8 rewrites the bytes, and decoding it as
+ * `latin1` actually runs windows-1252 and remaps 0x80-0x9F. Pass the raw bytes
+ * for mail that might not be UTF-8; a `string` keeps working exactly as before,
+ * UTF-8 encoded first. `maxMessageLength` and the message-too-large reason both
+ * count octets, not UTF-16 code units, either way.
+ *
+ * ## What this verifies
+ *
+ * Given a raw RFC 5322 message and a DKIM public key, `verifyDkim` answers one
+ * question: **does this message's `DKIM-Signature` verify against this key?**
+ *
+ * - Signature-header parsing (`parseDkimSignature`), including folded values.
+ * - `simple` and `relaxed` canonicalization, for headers and for bodies.
+ *   `canonicalizeHeader`, `canonicalizeBody`, `splitMessage`, `sha256Base64` and
+ *   `refuseHeaderLineEndings` are deprecated: they are internal steps of
+ *   `verifyDkim` and go in 2.0.
+ * - The body hash (`bh=`), computed over the canonicalized body truncated to the
+ *   `l=` bound when one is present, as RFC 6376 §3.7 step 1 requires. Canonicalized
+ *   and hashed at most once per distinct `(c=, l=)` combination for the whole
+ *   message, however many `DKIM-Signature` fields share it (§6.1 verifies every
+ *   field independently, and most real mail signs the body once).
+ * - `rsa-sha256` (RSASSA-PKCS1-v1_5) and `ed25519-sha256`, the latter signing
+ *   `SHA-256` of the canonical input as RFC 8463 §3 requires.
+ * - `parseDkimPublicKey` from a DNS TXT record, including revoked keys (`p=`).
+ * - Expiry (`x=`) against an injectable clock, and that `x=` is later than `t=`.
+ * - **That `h=` names `From`** (§6.1.1), and that the message has a `From` field to
+ *   sign. A signature that does not cover `From` says nothing about who sent the
+ *   mail, so it is never called valid.
+ * - **That `d=` is the `i=` domain or a parent of it** (§6.1.1), and exactly `d=`
+ *   when the key record carries `t=s`.
+ * - **The key record's own tags** (§3.6.1): `v=` must be `DKIM1` and come first,
+ *   `h=` must allow `sha256`, `s=` must name `email` or `*`, and `t=y` — the domain
+ *   is only testing DKIM — never produces a valid verdict.
+ * - **RSA keys of at least 1 024 bits** (RFC 8301 §3.2). A 512-bit key is refused
+ *   however well its signature verifies. The bits are counted from the modulus
+ *   itself: `CryptoKey.algorithm.modulusLength` reports an imported key's modulus
+ *   rounded up to a whole byte, so a 1 023-bit key claims 1 024 there.
+ * - **Every `DKIM-Signature` field**, not just the first (§6.1). `verifyDkim`
+ *   reports the first valid one; `verifyDkimSignatures` returns one result per
+ *   field, so a caller can see which domains signed.
+ * - The header/body boundary, which RFC 5322 §2.2 puts at the **first** empty line.
+ *   A body whose first line begins with SP or HTAB is body, not a folded header —
+ *   reading it as a header left those octets outside the body hash entirely.
+ * - **That the header block's line endings are uniform.** A block carrying a
+ *   carriage return that no line feed follows is refused before a single field is
+ *   parsed, and so is a block that ends some lines with CRLF and others with a bare
+ *   LF. A block that uses a bare LF throughout keeps verifying: that is what mailbox
+ *   storage produces, and RFC 6376's own example message is stored that way. **The
+ *   body's line endings are a separate, looser rule:** only CRLF and a bare LF end a
+ *   body line; a lone CR there is an ordinary octet, hashed as one, matching RFC
+ *   6376 §3.4.3/§3.4.4 and how dkimpy and OpenDKIM canonicalize a body. A CR in the
+ *   body cannot hide a header field, so the header block's stricter refusal has no
+ *   reason to apply there, and treating a lone CR as a line ending would report
+ *   an honestly signed body that carries one as tampered with.
+ * - **That the message did not grow an instance of a header the signature covers**
+ *   (§5.4.2). A signer lists a name in `h=` as many times as the message carried it,
+ *   so an instance left over after the pairing means the message gained one after
+ *   signing. The trace fields in `TRANSIT_ADDED_HEADER_NAMES` are exempt, because a
+ *   relay adds those on the way; every other name, `From` above all, is refused.
+ * - The DKIM-Signature field **name the message actually spells**. §3.7 step 2
+ *   hashes "the DKIM-Signature header field that exists", and under `simple`
+ *   canonicalization the name's case is part of the signed bytes.
+ *
+ * Every result that hashed a body also carries `bodyCoverage`: how many canonical
+ * octets the signature covers, how many the body has, and whether they are the same.
+ * A signer may bound the body hash with `l=`, and with `l=0` the signature covers no
+ * body at all — the verdict is still `valid`, because RFC 6376 §3.5 allows it, so
+ * **a caller that shows the body to a person must check `bodyCoverage.complete`**.
+ *
+ * The signature input follows §3.7 step 2 exactly: every header named in `h=`, in
+ * the order `h=` declares (so repeated fields are consumed from the bottom of the
+ * header block upwards, §5.4.2), then the `DKIM-Signature` field with its `b=`
+ * value deleted and **without a trailing CRLF**. Nothing follows that field — the
+ * body hash the signer covered is the `bh=` tag inside it. Names in `h=` that match
+ * no header in the message contribute nothing, as §3.5 allows.
+ *
+ * Correctness is checked against implementations other than this one: RFC 8463's
+ * Appendix A.3 Ed25519 example, RFC 6376's example message signed with a known key,
+ * eighteen messages built with dkimpy 1.1.8's canonicalizers plus OpenSSL, and five
+ * signed by an OpenSSL-only script whose canonicalizer is written from the RFC text
+ * (`openssl-*`: the §2.2 boundary cases and a lower-case field name). Every one is
+ * confirmed by `openssl dgst -sha256 -verify` against the §3.7 reconstruction. See
+ * `fixtures/SOURCES.md`, which also records what these vectors are _not_.
+ *
+ * ## What this does not do
+ *
+ * - **It does not fetch the key for you** unless you inject a resolver or accept
+ *   the default one. The default is `resolveTxt` of `@spy4x/net/dns`, which works
+ *   on Deno, Node and Bun and needs `--allow-net` on Deno. Everything in this package's own test suite runs through an
+ *   injected resolver and therefore needs no permissions.
+ * - **No DMARC, SPF, ARC or DKIM alignment.** A verified signature is not an
+ *   authorized sender. DMARC needs `d=`/`i=` alignment against the visible `From:`
+ *   field, which is a policy decision rather than a cryptographic one, and this
+ *   package never inspects `From:` for that purpose.
+ * - **No deliverability policy.** It does not decide what to do with a message
+ *   that fails: no quarantine, no scoring, no reporting. That belongs in the
+ *   caller.
+ * - **No replay, freshness or `Received`-chain protection.** A valid signature
+ *   stays valid unless `x=` says otherwise. `t=` is parsed, and the only rule
+ *   applied to it is §3.5's: `x=` must be later than `t=` when both are present.
+ *   Nothing here refuses a signature for being old.
+ * - **No signature generation.** Verification only; there is no signer here.
+ *
+ * ## Injected resolver contract
+ *
+ * ```ts
+ * interface DnsTxtResolver {
+ *   resolveTxt: (name: string) => Promise<string[][]>
+ * }
+ *
+ * interface DkimVerifyOptions {
+ *   now?: bigint
+ *   resolver?: DnsTxtResolver
+ *   maxMessageLength?: number // default DEFAULT_MAX_MESSAGE_LENGTH, 10 MiB of octets
+ *   maxSignatures?: number // default DEFAULT_MAX_SIGNATURES, 10
+ *   maxHeaderFields?: number // default DEFAULT_MAX_HEADER_FIELDS, 1000
+ *   maxSignedHeaderNames?: number // default DEFAULT_MAX_SIGNED_HEADER_NAMES, 200
+ * }
+ * ```
+ *
+ * - The queried name is `` `${selector}._domainkey.${domain}` ``.
+ * - The shape is one array of strings per TXT record. RFC 6376 §3.6.2.2 requires a
+ *   record's strings to be concatenated with no separator, and
+ *   `fetchDkimPublicKey` does that before parsing.
+ * - An empty answer throws `DkimParseError` rather than reporting a revoked key,
+ *   so a broken resolver cannot be mistaken for a revoked key. A resolver
+ *   rejection propagates out of `fetchDkimPublicKey` and becomes
+ *   `result.reason` in `verifyDkim`.
+ * - `p=` present but empty is a revoked key: `fetchDkimPublicKey` returns `null`
+ *   and `verifyDkim` reports `"DKIM key revoked (p= is empty)"`.
+ * - `publicKey` wins over `resolver` in `verifyDkim`: pass a key and no lookup
+ *   happens at all.
+ * - Several records come back for one name often enough — a domain publishes what it
+ *   likes beside its key — so each is tried and the first that parses is the key.
+ *   When none parses, the first record's own error is what the caller sees.
+ * - `d=` and `s=` are checked against §3.1's grammar before the name is built, so a
+ *   resolver that puts the name into a URL or a command line cannot be handed
+ *   anything but letters, digits, hyphens and dots. Three spellings a verifier
+ *   without that check would have looked up are refused with
+ *   `"DKIM d= tag is not a domain name"` (or `s=`): an **underscore**
+ *   (`s=sel_1`), a **trailing dot** (`d=example.com.`), and **non-ASCII letters**
+ *   (`d=münchen.example`, which RFC 8616 permits — publish the A-label
+ *   `xn--mnchen-3ya.example` instead). The check reads `d=` and `s=` separately, so
+ *   the `_domainkey` label the lookup itself adds is unaffected, and ordinary
+ *   selectors (`selector1`, `hs1-12345`, `2026`) are unaffected too.
+ *
+ * `verifyDkim` returns a result for every message-shaped failure — missing header,
+ * bad grammar, expiry, unsigned `From`, body mismatch, unverifiable signature — and
+ * for a resolver that throws, whose message becomes `result.reason`. Nothing escapes
+ * it.
+ *
+ * One consequence is worth knowing: the result says `valid: false` for a DNS lookup
+ * that failed, and does not distinguish that from a signature that is wrong. RFC
+ * 6376 §6.1.2 calls the first TEMPFAIL and the second PERMFAIL, and a caller that
+ * needs to tell them apart should fetch the key itself with `fetchDkimPublicKey`,
+ * which propagates the resolver's rejection instead of reporting it.
+ *
+ * ## Decisions a reviewer should weigh
+ *
+ * - **Errors are results, not exceptions.** A malformed message does not throw, so
+ *   a caller cannot lose a diagnosis to a `catch`. `reason` distinguishes the
+ *   cases and `parsed` is populated whenever the header parsed at all.
+ * - **`l=` truncates the canonicalized body before hashing it.** §3.7 step 1 says
+ *   the body is "truncated to the length specified in the l= tag", so a signature
+ *   over 18 octets is only reproducible by hashing 18 octets. A bound _longer_ than
+ *   the body it accompanies is **accepted**, although §3.5 says the signer "MUST
+ *   NOT" use one: that MUST binds the signer, and verifier-side a bound can only
+ *   ever _reduce_ the octets covered, never extend them, so accepting one cannot
+ *   admit a message a shorter bound would have rejected (`dkimpy-l25` is `l=25`
+ *   over an 18-octet body, and appending a single byte to it still fails). It is
+ *   inside the signed field, so an attacker cannot add or enlarge it. Rejecting
+ *   instead would convert a harmless signer tag into a false rejection.
+ * - **An unsigned `From:` is refused.** §6.1.1: "If the 'h=' tag does not include
+ *   the From header field, the Verifier MUST ignore the DKIM-Signature header field
+ *   and return PERMFAIL (From field not signed)." Accepting one would let a message
+ *   signed with `h=to:subject` keep a valid signature while its `From:` line is
+ *   rewritten to any address at all. A message
+ *   with no `From:` field is refused for the same reason — `h=from` over a message
+ *   without one hashes nothing for it.
+ * - **The DKIM-Signature field name comes from the message.** §3.7 step 2 hashes
+ *   "the DKIM-Signature header field that exists", and `simple` preserves the
+ *   name's case (§3.4.1), so the name is signed bytes: renaming the field to
+ *   `dkim-signature:` fails a simple signature, and a signer that emitted the
+ *   lower-case name verifies. Hashing a literal `"DKIM-Signature"` — as an earlier
+ *   revision did — verified a renamed field against bytes the message no longer
+ *   contained and rejected the lower-case signer. `relaxed` lower-cases the name
+ *   (§3.4.2), so there the case carries no information and a renamed field still
+ *   verifies.
+ * - **`h=` may list `dkim-signature`, but never reaches the field being
+ *   verified.** §3.5 forbids signing the field being created or verified, and §3.7
+ *   adds that field to the header hash as its own step, so it is left out of the
+ *   `h=` selection. Other `DKIM-Signature` fields are selected like any header:
+ *   that is how a mailing list re-signs and covers the author's signature.
+ * - **Tags after `b=` are verified, not refused.** §3.7 deletes only the _value_ of
+ *   `b=`, so everything after it stays inside the signed bytes. A signature ending
+ *   `…; b=SIG; x=1800000000` is valid and its `x=` is authenticated, and appending
+ *   `; x=9999999999` or `; i=@attacker.invalid` to a genuine message changes the
+ *   hashed field and fails.
+ * - **A repeated tag is rejected.** §3.2 forbids duplicates. Silently keeping the
+ *   last one let an attacker append `; b=<their own signature>` and win.
+ * - **An unknown tag is ignored, whatever its value.** §3.2: "Unrecognized tags
+ *   MUST be ignored." Real signatures carry them (`r=`, `dt=`).
+ * - **Unfolding deletes the line ending, it does not turn it into a space.**
+ *   §3.4.2 unfolds by removing the CRLF and then compressing the WSP that followed
+ *   it, so `one<CRLF><HTAB>two` canonicalizes to `one two` and `a<LF>b` to `ab`.
+ *   A bare LF inside a value is not a line ending (RFC 5322 §2.3): `simple` keeps
+ *   it byte for byte, `relaxed` deletes it as part of unfolding. A lone CR
+ *   survives both modes, at the ends of the value as much as in the middle:
+ *   §3.4.2 unfolds CRLF only, and the relaxed path trims the ends of the value
+ *   with WSP only — SP and HTAB, RFC 5234's own definition, via a hand-written
+ *   `trimWsp` rather than `String.trim()`: `trim()` treats CR as whitespace, so
+ *   `relaxed` and `simple` would disagree on a lone CR at an end, and it strips
+ *   U+00A0, so a raw UTF-8 value ending in the byte 0xA0 — the second byte of
+ *   "à" (0xC3 0xA0) — would lose that byte. Body handling does not normalise a
+ *   lone CR at all — see the body line-endings paragraph above.
+ * - **A header block with a lone carriage return is refused outright.** Getting this
+ *   wrong costs a forged sender.
+ *   Readers do not agree on whether a bare CR ends a line: this verifier keeps the
+ *   CR inside the value it sits in, so a message carrying
+ *   `X-Note: a<CR>From: ceo@bank.example` above a signed block has one `From:` here
+ *   — the genuine one, which the signature covers — and two in a client that breaks
+ *   the line, where the forged one is what a person reads: the verdict would be
+ *   `valid` and the sender shown not the sender signed for. Guessing which reading is
+ *   right is not available to a verifier, so the message is refused with a reason
+ *   that names the problem, and a block that mixes CRLF with bare LF is refused for
+ *   the same reason: it has already passed through something that rewrote line
+ *   endings, and which ending a later reader honours is again a guess. A block that
+ *   is uniformly bare LF is **accepted**, because refusing it would reject ordinary
+ *   mail out of a mailbox — refusing every bare LF would turn RFC 6376's own
+ *   example message invalid. The rule covers
+ *   the header block only; a carriage return in the body cannot hide a header field.
+ * - **A header block carrying LF, CR, a vertical tab, a form feed, a
+ *   file/group/record separator, NEL or a Unicode line/paragraph separator — as
+ *   any UTF-8 packing, minimal or overlong, of any length from 2 to 6 bytes —
+ *   is refused outright.** The same shape as the lone-CR rule
+ *   above for a wider set of code points: `X-Note: a<FF>From: ceo@bank.example`
+ *   above a signed block hides a second `From:` from this verifier the way the
+ *   CR form does, behind a byte some reader still treats as ending the line.
+ *   No conformant _sender_ emits any of these code points in a header value.
+ *   RFC 5322 §4.1 puts VT, FF and 0x1C-0x1E only in the _obsolete_ syntax a
+ *   generator "MUST NOT" produce, and 0x85/U+2028/U+2029 are not ASCII at all
+ *   — RFC 6532 is what lets a header value carry them, as UTF-8. So refusing
+ *   all of them, anywhere in the block, is the safe direction rather than a
+ *   free one.
+ *
+ *   The rule is generated from ten code points — LF, CR, VT, FF, the
+ *   file/group/record separators, NEL, and U+2028/U+2029 — rather than
+ *   hand-listed as byte sequences, because two review rounds each found the
+ *   hand-picked list still had gaps. Round 1: an earlier draft exempted 0x85
+ *   whenever it looked like a UTF-8 continuation byte of a longer character
+ *   (`Å` is C3 85, `ą` is C4 85), on the theory that a reader decoding the
+ *   block as UTF-8 would never mistake it for NEL — wrong, because a reader is
+ *   not obliged to decode as UTF-8 at all, and one that decodes header octets
+ *   as Latin-1, or falls back to it the moment it meets one byte that is not
+ *   valid UTF-8, reads a bare 0x85 as NEL regardless of what bytes sit next to
+ *   it. Round 2: refusing only the minimal and one-step-overlong UTF-8 form of
+ *   U+2028/U+2029 left every other overlong packing open, and, worse, left LF
+ *   and CR themselves reachable the same way — `C0 8A` is an overlong 2-byte
+ *   UTF-8 encoding of LF, so a decoder that does not enforce the shortest-form
+ *   rule reads it as a line break even though the raw byte 0x0A never appears
+ *   in the message at all, which is invisible to the CR/LF uniformity check
+ *   above.
+ *
+ *   So every 2-to-6-byte UTF-8 packing of every one of the ten code points is
+ *   generated and refused: the classic FSS-UTF byte shapes (an `n`-byte form
+ *   reserves `n` one-bits and a zero separator bit in its lead byte, 6 payload
+ *   bits in each of the other `n - 1` bytes), skipping only a length too small
+ *   to hold the code point without corrupting its own marker bits. LF and CR's
+ *   _raw_ single-byte form stays legitimate, necessary content — every header
+ *   line ends in one — governed by the CR/LF uniformity check above instead;
+ *   only their multi-byte (inherently overlong) packings are refused here. The
+ *   other five single-byte code points, plus NEL's own two-byte minimal UTF-8
+ *   form (`C2 85`), are refused directly, with no exemption for context, which
+ *   has a real cost: a genuine RFC 6532 (SMTPUTF8) header value whose UTF-8
+ *   encoding happens to contain 0x85 — `Å` (C3 85), `ą` (C4 85), `久` (E4 B9
+ *   85), `😅` (F0 9F 98 85) — is refused too, and so is a raw windows-1252
+ *   ellipsis (`…`, byte 0x85) in an 8-bit header nobody encoded as UTF-8 at
+ *   all. An RFC 2047-encoded value (`=?UTF-8?B?w4U=?=` for `Å`) is untouched,
+ *   because every one of its octets is printable ASCII. A `string` input can
+ *   only ever produce a minimal UTF-8 form, never an overlong one, because
+ *   `TextEncoder` never emits one; overlong packings only ever reach this
+ *   verifier through the `Uint8Array` path.
+ * - **Trace fields a relay adds are exempt from the §5.4.2 growth check.** The check
+ *   refuses a message that still holds an instance of a name `h=` asked for, which is
+ *   how a prepended second `From:` or `Subject:` is caught — it must not be removed,
+ *   and removing it makes those forgeries verify again. It did, however, refuse
+ *   ordinary forwarded mail: every hop prepends its own `Received:`, so a signature
+ *   covering `Received` broke the moment the mail was forwarded. The names in
+ *   `TRANSIT_ADDED_HEADER_NAMES` — `received`, `x-received`, `return-path`,
+ *   `delivered-to`, `authentication-results`, `resent-*` and `arc-*` — are therefore
+ *   exempt, and no others. What makes a name belong there is that a later hop
+ *   prepends it by design, so a message that carries one more of it than the signer
+ *   signed is ordinary mail and not a forgery. It is **not** that a person never sees
+ *   these fields — `Resent-From` is on the list and some mail clients display it as
+ *   the sender. It is there because a redirect prepends a fresh `Resent-*` block
+ *   exactly the way a relay prepends a `Received:` field, and a verifier that
+ *   implements RFC 6376 and nothing more accepts that message as well, having no
+ *   growth check at all. A signer who wants one of these names protected has the
+ *   remedy §5.4 gives for it: list the name in `h=` once more than the message
+ *   carries it. The oversigned instance is still hashed, so a message that gained a
+ *   field of that name fails the signature. The exemption does not change which
+ *   bytes are hashed: §5.4.2
+ *   pairs `h=` with the message from the bottom up and a relay prepends, so the
+ *   instances selected are still the ones the signer signed, and altering a signed
+ *   `Received:` still fails the signature. The list is exported so the choice is
+ *   visible, and a caller who disagrees can see exactly what it admits.
+ *
+ *   Both this check and the unsigned-`From` check compare a header **name**
+ *   loosely on purpose: every octet outside printable ASCII (0x21-0x7E) is
+ *   trimmed from both ends of the name before it is compared (`trimHeaderName`),
+ *   so `From\x0B:` and `From` padded with a no-break space, a byte order mark, a
+ *   zero-width space or a C0 control character all still count as `from`. A
+ *   client that reads the field the same loose way would display the forged
+ *   address, so refusing to match it here would be the unsafe choice. RFC 5322's
+ *   `ftext` already restricts a genuine field name to this same range, so
+ *   trimming anything outside it can only make a disguised name easier to
+ *   recognise, never harder. A set copied from `String.prototype.trim()` would
+ *   miss every control character and zero-width space RFC 5322 never allows in
+ *   a name either. This
+ *   also means CR and LF are trimmed now, which is load-bearing rather than a
+ *   side effect: RFC 5322 does not let a field name fold before its own colon —
+ *   the obsolete syntax it does allow there is plain spaces and tabs,
+ *   `obs-from = "From" *WSP ":"` — but unfolding is defined as deleting every
+ *   CRLF immediately followed by WSP wherever it sits, so a reader that unfolds
+ *   first, as this verifier and most mail programs do, turns
+ *   `From<CRLF><TAB>: ceo@bank.example` (a _uniform_ CRLF block, so the header
+ *   block's line-ending refusal above accepts it) into `From<TAB>: ...` and
+ *   reads it as that same obsolete `From` form. The raw name this comparison
+ *   reads still carries the CRLF and the tab; trimming them is what lets it
+ *   still read that line as `From`, so the growth guard refuses the extra instance instead of missing
+ *   it.
+ *
+ *   A name's two ends are not the only place a disguising byte can sit, and a
+ *   name can need more than one kind of disguise at once. A byte outside
+ *   0x21-0x7E placed _inside_ a name — `Fr<U+00AD>om:` (a soft hyphen),
+ *   `From<NUL>x:` (a NUL) — survives the end-trim untouched, yet a lenient
+ *   mail program can still read it as `From`. Reading the name only stripped, or
+ *   only cut at the first such byte, is not enough when a name needs both at the
+ *   same time: `Fr<U+00AD>om<NUL>x:` strips to `Fromx` and cuts to `Fr`.
+ *
+ *   So both checks walk the trimmed name once, building up the
+ *   stripped prefix as they go, and test that prefix against `h=`'s names every
+ *   time a run of padding bytes _begins_ — as if a lenient reader had silently
+ *   swallowed the run and kept going — and once more after the whole name, as
+ *   if it had read to the end; a match at either point counts the same as a
+ *   match on the plain trimmed name. `Fr<U+00AD>om<NUL>x:` matches at the
+ *   NUL, because by then the walk has already absorbed the soft hyphen and its
+ *   prefix reads `From`. Because the prefix only ever grows, the walk stops as
+ *   soon as it is longer than the longest name in `h=` — no later point can
+ *   match one either — which is what keeps the cost linear in the name's length
+ *   rather than proportional to how many padding runs an attacker packs into
+ *   it. A candidate is only ever compared against the names `h=` actually
+ *   lists, so a genuine, unrelated, unsigned field with a stray byte in its name
+ *   is untouched — but a plain, otherwise-ordinary field whose name starts with
+ *   a signed name and then a padding byte is not: `Subject Line:` (the space is
+ *   one of the padding bytes) or `To Name:` count as an extra, unsigned
+ *   instance of `subject` or `to` and are refused, because a lenient reader
+ *   could read the same shape, `Fr om:`, as `From`.
+ *
+ *   This is also why an mbox file's envelope line —
+ *   `From sender@example.com Mon Sep 21 10:00:00 2026`, the line mbox storage
+ *   puts in front of every message it holds — is refused. That
+ *   line is not RFC 5322 at all: it has no colon before its first space, so this
+ *   verifier reads it as a header field literally named `From sender@example.com
+ *   Mon Sep 21 10` (the first colon sits inside the timestamp), and the loose
+ *   match above reads that name's `From` prefix, at the first space, as a
+ *   second, unsigned `From:`. Nothing here parses mbox framing, so a caller
+ *   verifying a message straight out of an mbox file must strip the envelope
+ *   line before calling `verifyDkim` — a message that still carries it is
+ *   refused as a forged sender rather than silently accepted or silently
+ *   stripped.
+ *
+ *   The refusal depends on that colon existing somewhere in the line, which is
+ *   why the wording above is exact about it rather than saying "the envelope
+ *   line": `From sender@example.com Mon Sep 21 2026`, a timestamp with no
+ *   `HH:MM:SS` and so no colon anywhere in the line, is _not_ refused — there
+ *   is then no colon at all before the next header's own, so this verifier
+ *   reads the whole line as one header field literally named `From
+ *   sender@example.com Mon Sep 21 2026` with an empty value, which is not
+ *   `From` under any reading and never enters the loose match at all. That is
+ *   not a gap this rule needs to close: no mail client displays this line as a
+ *   sender either way, colon or not, so a caller still has to strip it before
+ *   verifying — this paragraph documents what the current checks do with an
+ *   unstripped one, not a promise to catch every shape it can take.
+ * - **Both RSA key shapes import.** §3.6.1 says the `p=` tag holds a bare PKCS#1
+ *   `RSAPublicKey`, which is what real selector records publish, but RFC 6376's own
+ *   example record publishes a complete SubjectPublicKeyInfo. The envelope is
+ *   detected, not guessed. `DkimPublicKey.keyBytes` therefore holds whatever the
+ *   record carried — SPKI bytes for an SPKI `p=` — rather than a normalised form.
+ * - **The work is bounded, because the sender is not trusted.** Four limits, each
+ *   with a `reason` that names it: a message longer than `maxMessageLength` (10 MiB
+ *   of octets) is refused before it is canonicalized, a message with more than
+ *   `maxHeaderFields` (1 000) fields is refused before any signature is looked at,
+ *   `maxSignedHeaderNames` (200) bounds the names one `h=` may list, and at most
+ *   `maxSignatures` (10) `DKIM-Signature` fields are verified — §6.1 allows that
+ *   one, and each extra field otherwise buys a key lookup and a public-key
+ *   operation. Inside those limits every pass over the message is linear: twice the
+ *   message costs about twice the time, so a message an attacker sizes cannot
+ *   freeze the process. The body is canonicalized and hashed once per distinct
+ *   `(c=, l=)` combination, not once per `DKIM-Signature` field, so several
+ *   signatures do not multiply the one pass that scales with the body's size.
+ * - **Several signatures are all verified, and the first valid one is the verdict.**
+ *   §6.1 treats each field independently. A broken signature above a good one no
+ *   longer condemns the message, and one an attacker prepends no longer decides it —
+ *   but "valid" still only says _that domain signed it_, so a caller that cares
+ *   whether the signer has anything to do with the `From:` address must compare
+ *   `result.parsed.domain` itself. That comparison is DMARC alignment, which is out
+ *   of scope here. `verifyDkim` reports the **first valid** signature, which on a
+ *   mailing-list message is the list's rather than the author's, so a caller making
+ *   that comparison should read every result from `verifyDkimSignatures` and look
+ *   for the one whose domain lines up.
+ * - **`b=` need not be the last tag, in either mode.** §3.7 step 2 deletes only the
+ *   _value_ of `b=`, bounded by the value's parsed offsets, so the deletion is
+ *   byte-exact wherever the tag sits; a field ending `…; b=SIG; x=1800000000`
+ *   verifies under `simple` as well as `relaxed` and its `x=` is authenticated
+ *   (`dkimpy-unsigned-trailing-tag`).
+ *
+ * ## What the suite does not cover
+ *
+ * - **No real mail.** Every fixture is synthetic. A message from a production
+ *   signer would test more, and none is available offline.
+ * - **The printed §3.5 signature is not reproduced.** Its private key is
+ *   unpublished, so the RFC's actual signature cannot be verified by anyone; what
+ *   is tested is the RFC's example message signed with a known key.
+ * - **Negative coverage is a matrix, not a proof.** Tampering is tested across both
+ *   modes and both algorithms (body, signed header, signature byte, removed header,
+ *   wrong key), which is stronger than one case per path but still finite.
+ *
+ * @module
+ */
 
 import { type BodyHashCache, createBodyHashCache } from "./dkim-body-hash.ts"
 import { canonicalizeBody, canonicalizeHeader } from "./dkim-canonicalize.ts"
@@ -166,9 +612,9 @@ export async function verifyDkimSignatures(
         `${maxHeaderFields}-field limit`,
     }]
   }
-  // Every signature is verified, not just the first: a broken one above a good
-  // one used to condemn the whole message, and a valid one an attacker put on top
-  // used to decide it. Each field's value keeps its exact bytes, so the canonical
+  // Every signature is verified, not just the first, so a broken one above a good
+  // one cannot condemn the message, and a valid one an attacker put on top cannot
+  // decide it. Each field's value keeps its exact bytes, so the canonical
   // form reconstructed for hashing matches what that signer saw.
   // The name is compared trimmed, as `selectSignedHeaders` compares it: RFC 5322's
   // obsolete syntax allows WSP before the colon, so `DKIM-Signature :` is a field.
@@ -288,11 +734,9 @@ async function verifyOneSignature(
     // produced.
     //
     // `bodyHashCache` does the canonicalizing and hashing, at most once per
-    // `(c=, l=)` combination for the whole message — see `dkim-body-hash.ts`
-    // and issue #88's third finding: verifying this per signature field, as an
-    // earlier revision did, cost one full canonicalize-and-hash pass over the
-    // body for every `DKIM-Signature` field, so a message with several of them
-    // multiplied the one thing here that scales with the body's size.
+    // `(c=, l=)` combination for the whole message — see `dkim-body-hash.ts`.
+    // Hashing per signature field would multiply the one pass here that scales
+    // with the body's size by the number of fields.
     const hashed = await bodyHashCache.get(parsed.canonicalization.body, parsed.bodyLength)
     computedBodyHash = hashed.hash
     bodyCoverage = {
@@ -308,8 +752,7 @@ async function verifyOneSignature(
   // from the public message body, and `parsed.bodyHash` is copied straight out
   // of the `bh=` tag the sender put on the wire — so a plain compare needs no
   // constant-time treatment: there is nothing here a timing channel could leak
-  // that the message itself does not already show. #71's constant-time copy
-  // that used to sit here is removed, not moved to a shared home.
+  // that the message itself does not already show.
   if (computedBodyHash !== parsed.bodyHash) {
     return {
       valid: false,
@@ -400,8 +843,8 @@ function refuseSignatureHeader(
   // it, so the signature would say nothing about the author either. The name is
   // read through `headerNameMatches`, not a plain end-trimmed comparison, so a
   // line whose only "From" is disguised inside the name still counts as present
-  // here (issue #113) — this check only ever widens what counts as an instance
-  // to reject; `selectSignedHeaders`' own #113 guard is what actually refuses
+  // here — this check only ever widens what counts as an instance
+  // to reject; `selectSignedHeaders`' own disguised-name guard is what actually refuses
   // such a line, whether or not a genuine `From:` sits elsewhere in the message.
   // A line with no colon at all is not a header field this verifier can name —
   // `line.indexOf(":")` is `-1`, and `line.slice(0, -1)` would drop only that

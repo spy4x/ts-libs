@@ -51,7 +51,7 @@ class TestService extends DbServiceBase {
  * for it.
  *
  * It lists what a `postgres@3.4.7` transaction handle actually carries. `begin`, `reserve`
- * and `listen` are absent because the driver's handle does not have them (#115).
+ * and `listen` are absent because the driver's handle does not have them.
  */
 interface FakeExecutor {
   (strings: TemplateStringsArray, ...values: unknown[]): Promise<unknown>
@@ -77,7 +77,7 @@ interface FakeExecutor {
  *
  * `services.integration.test.ts` asserts this same list against the driver itself, so a
  * driver upgrade that changes the shape turns that test red instead of leaving this fake
- * quietly describing a handle nobody has (#115).
+ * quietly describing a handle nobody has.
  */
 const TRANSACTION_HANDLE_KEYS: string[] = [
   "array",
@@ -103,7 +103,7 @@ function fakeTemplate(text: string): TemplateStringsArray {
  * A query that is sent only when somebody awaits it, as `postgres`'s queries are.
  *
  * {@link createFakeSql} answers every statement straight away, which is the shape the
- * assertions about rendered SQL want. It cannot express the thing #108 is about: a
+ * assertions about rendered SQL want. It cannot express the thing these tests are about: a
  * `postgres@3.4.7` query sends nothing when it is built, and `then` is one of the five
  * methods that reach its `handle()` and put the statement on the connection
  * (`postgres@3.4.7/src/query.js:123-161`).
@@ -136,7 +136,7 @@ class FakeLazyQuery {
 }
 
 /**
- * A fake whose transaction handle builds lazy queries, for the #108 tests.
+ * A fake whose transaction handle builds lazy queries, for these tests.
  *
  * Deliberately small: a tag, a `savepoint` and nothing else. `sent` records a statement
  * when it is *sent*, not when it is built, which is the whole point.
@@ -517,7 +517,7 @@ Deno.test("the fake transaction handle carries the driver's own keys and no othe
   // The fake is the shape a contributor reads to learn the driver's surface. It used to
   // offer `begin` and `reserve` on the transaction handle, with a comment saying the
   // driver does too, and that put two call forms nobody can write into the list of
-  // refusals `services.ts` documents (#115).
+  // refusals `services.ts` documents.
   const fake = createFakeSql()
 
   assertEquals(
@@ -803,7 +803,7 @@ Deno.test("a clone kept past a begin that rolled back refuses too", async () => 
 })
 
 Deno.test("a write through a kept clone cannot land in a later transaction", async () => {
-  // The reproduction from issue #96, as a statement count. Before the fix the kept
+  // As a statement count: before the fix the kept
   // clone's `SELECT` was recorded inside the second transaction — three inner
   // statements and a COMMIT — and it disappeared when that transaction rolled back.
   const fake = createFakeSql()
@@ -829,9 +829,9 @@ Deno.test("a write through a kept clone cannot land in a later transaction", asy
 })
 
 Deno.test("a query built inside begin and awaited after it is never sent", async () => {
-  // Issue #108's first route, and the one a forgotten `await` is enough to write. The
+  // A forgotten `await` is enough to write this. The
   // query is lazy, so building it inside the callback runs nothing; awaiting it after the
-  // transaction has returned used to put the statement on that connection, inside
+  // transaction has returned would put the statement on that connection, inside
   // whatever transaction was open there by then.
   const fake = createLazyFakeSql()
   const service = new LazyService({ sql: fake.sql })
@@ -869,7 +869,7 @@ Deno.test("a query built and awaited inside the callback still runs, and reads b
 })
 
 Deno.test("a handle taken from sql.savepoint is retired when that savepoint returns", async () => {
-  // Issue #108's second route. `savepoint` calls its callback with a handle the driver
+  // `savepoint` calls its callback with a handle the driver
   // built, so that handle never passed through the wrapper; the clone's own `begin` was
   // guarded and this way round was not.
   const fake = createLazyFakeSql()

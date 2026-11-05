@@ -12,6 +12,44 @@
  * Items read back in the order `replace` wrote them (the server's order). An item added later by
  * `put` follows the others, and a `put` of an item already there keeps its place.
  *
+ * `browser/data-cache` keeps the last data the server sent, in IndexedDB, so a page opens with it and
+ * shows it with no network. Items live in scopes (a user, a calendar); a full server answer replaces a
+ * whole scope in one transaction, so an item the server dropped goes too, and a single item can be
+ * put or deleted when one pushed change arrives. It holds server state only: writes made offline
+ * wait in the outbox (`@spy4x/realtime/outbox-indexeddb`). Name the database for the signed-in user
+ * and `clear` the scopes at sign-out. `browser/indexeddb` is the small plumbing under it (a lazily
+ * opened database, promises for a request and a transaction), exported so a store of your own does
+ * not repeat it. `requestPersistentStorage` asks for `navigator.storage.persist()` and answers
+ * whether it was granted. Ask once the first offline write is queued: Safari clears the storage of a
+ * site that is not installed as an app after seven days unused, which would lose writes that were
+ * never sent.
+ *
+ * ```ts
+ * import { createDataCache } from "@spy4x/platform/browser/data-cache"
+ * import { requestPersistentStorage } from "@spy4x/platform/browser/persistent-storage"
+ *
+ * const cache = createDataCache<Task>({ name: `data:${userId}`, getId: (t) => t.id })
+ * const shown = await cache.read(calendarId) // render this first, then ask the server
+ * await cache.replace(calendarId, await fetchTasks(calendarId)) // a full answer
+ * await cache.put(calendarId, changedTask) // one pushed change
+ * const persistent = await requestPersistentStorage() // false: tell the person to install the app
+ * ```
+ *
+ * Items read back in the order `replace` wrote them, so the server's order survives without the app
+ * wrapping each item with a position. A single item `put` later follows the others; one put again
+ * keeps its place. `batch(ops)` applies puts, deletes, replaces and clears across items and scopes in
+ * one transaction, all or none: a sync answer ("these calendars, these changed objects, these
+ * removed") lands without a reader seeing it half applied, and an item whose id cannot be read leaves
+ * the cache as it was. A CalDAV sync store, for instance, keeps the calendar list in one scope and each
+ * calendar's objects in a scope of their own; `replaceCalendars` is one `batch` that replaces the list
+ * and `clear`s the scope of every calendar `scopes()` shows that the list no longer has. `clearAll()`
+ * empties every scope and leaves the cache usable. At sign-out call `finish()`: it empties every
+ * scope too, and from then on this instance stores nothing, so a server answer that was still on its
+ * way cannot put the signed-out person's data back. A write on a finished cache does not open the
+ * database either; a read still does. The next user gets a new cache. After
+ * `indexedDB.deleteDatabase(name)` at sign-out, stop whatever still holds the cache or an outbox
+ * store: the next call on a store that is still referenced creates an empty database again.
+ *
  * @module
  */
 

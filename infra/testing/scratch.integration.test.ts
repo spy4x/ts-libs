@@ -1,5 +1,5 @@
 /**
- * The scratch-folder helper of the integration tier (#73): proves that
+ * The scratch-folder helper of the integration tier: proves that
  * `createScratchFolder` returns a folder a test can write to and read from, that two
  * calls never collide, and that `removeScratchFolder` actually removes what it made.
  */

@@ -12,6 +12,39 @@
  * Deliberately stricter than RFC 5322 in two places, both documented at
  * {@link parseAddress}: control characters are rejected outright, and the domain
  * must carry at least one dot.
+ *
+ * A mailbox is validated at the boundary, and one bad entry in a recipient list
+ * fails the whole message rather than dropping that entry:
+ *
+ * - An addr-spec must be a dot-atom local part at a **dotted domain**. The domain
+ *   rule is stricter than RFC 5322 on purpose: `user@localhost` is legal and no relay
+ *   outside a test container delivers it, so a bare-host address is nearly always a
+ *   truncated value. Reject it loudly and the truncation is visible; accept it and it
+ *   bounces.
+ * - A control character is rejected outright, anywhere in a mailbox, subject or
+ *   attachment filename/content type. `Name\r\nBcc: victim@example.com` is a
+ *   plausible-looking display name and a forged header, so it never reaches a header.
+ *   A mailbox is held to a stricter rule: the C1 range (NEL, U+0085, among them) and
+ *   the Unicode line and paragraph separators U+2028 and U+2029 are refused there
+ *   too. A subject, filename or content type keeps the C0-and-DEL rule, because a
+ *   U+2028 from a word processor or a C1 character from mis-decoded Windows-1252 is
+ *   common in a subject and nodemailer encodes it safely.
+ * - An addr-spec longer than 254 characters is refused: it does not fit an SMTP
+ *   path, and it would render a header line over the 998-character limit. The limit
+ *   is exported as `MAX_ADDR_SPEC_LENGTH` from `@spy4x/email/address`; `isAddress`
+ *   checks only the pattern, so a caller pairing it with a length check reads it there.
+ * - A form field that must hold only an address goes through `parseBareAddress`: it
+ *   trims and lowercases the value and returns `null` for anything but a bare
+ *   addr-spec of at most 254 characters with a local part of at most 64. A display
+ *   name is refused, so a caller's words never reach a `To:` line.
+ * - `isExampleAddress` is true for an address on a domain reserved for examples
+ *   (`example.com`, `.net`, `.org`, their subdomains and the `.example` top-level
+ *   domain), which takes no mail. A sender skips them instead of bouncing, for
+ *   example a demo's fake subscribers. `.test` stays mailable for tests.
+ * - A display name containing a comma is accepted unquoted (`Doe, Jane <jane@example.com>`)
+ *   and re-emitted quoted. Non-ASCII names travel to the transport as structured
+ *   fields, so nodemailer encodes them per RFC 2047 instead of emitting mojibake.
+ *
  * @module
  */
 
@@ -124,8 +157,8 @@ function quoteForError(value: string): string {
  *
  * Accepts the forms a caller actually has: `jane@example.com`,
  * `Jane Doe <jane@example.com>`, `"Doe, Jane" <jane@example.com>`, `Jörg <j@example.com>`.
- * A display name containing a comma is accepted unquoted — that is what `mig`
- * did and what a hand-written config value looks like — but it is re-emitted
+ * A display name containing a comma is accepted unquoted — that is what a
+ * hand-written config value looks like — but it is re-emitted
  * quoted by {@link formatAddress}, because a bare comma splits the header into
  * two mailboxes at the first server that parses it strictly.
  *

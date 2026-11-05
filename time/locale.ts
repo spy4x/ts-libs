@@ -7,6 +7,8 @@
  *
  * Dates are plain `YYYY-MM-DD` values, formatted in UTC so the label never depends on the host
  * zone. Every function defaults to `"en-GB"`, the locale the rest of `@spy4x/time` writes in.
+ *
+ * @module
  */
 
 import { parseIsoDate, startOfMonth } from "./date.ts"

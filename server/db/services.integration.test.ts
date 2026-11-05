@@ -13,7 +13,7 @@
  *  - a clone kept past `begin` has to be refused. Against a fake that is a flag; against
  *    a server it is whether the write reaches the transaction that connection is running
  *    next and vanishes with that transaction's rollback;
- *  - helpers kept in a class field must run inside `begin` (#230). Against a fake that
+ *  - helpers kept in a class field must run inside `begin`. Against a fake that
  *    is which handle a statement went through; against a server it is whether the row
  *    survives the rollback.
  *
@@ -32,7 +32,7 @@
  * built inside the callback and awaited after it is refused when it is sent, and a handle
  * the driver gives a `savepoint` callback is retired when that savepoint returns. They do
  * not cover code that goes looking for the driver's internals; `services.ts` describes the
- * one route that remains, recorded on #108 — the transaction's execute function carried on
+ * one route that remains — the transaction's execute function carried on
  * a value a call *returned*, which is a consequence of leaving return values as the driver
  * built them and is what the return-value test below is there to keep.
  *
@@ -313,7 +313,7 @@ async function withSchema(
  * The same list is written down in `services.test.ts`, where the fake has to match it.
  * Keeping it in both files is deliberate: this one is measured against the driver, so a
  * driver upgrade that changes the shape fails here, and the fake's copy is then a comment
- * that no longer matches a test somebody has to look at (#115).
+ * that no longer matches a test somebody has to look at.
  */
 const TRANSACTION_HANDLE_KEYS: string[] = [
   "array",
@@ -336,7 +336,7 @@ describe("DbServiceBase against a real server", () => {
     // and `listen` to the root client alone (`src/index.js:69-82`), and `scope` builds the
     // handle with `Sql(handler)` plus `savepoint` and `prepare` (`src/index.js:251-254`).
     // The fake used to offer `begin` and `reserve` here, which is how two call forms
-    // nobody can write reached the documentation (#115).
+    // nobody can write reached the documentation.
     await withSchema({ max: 1 }, async (sql) => {
       let keys: string[] = []
       let callable: string[] = []
@@ -411,7 +411,7 @@ describe("DbServiceBase against a real server", () => {
       })
       assertExists(kept)
 
-      // The reproduction from issue #96. The kept clone used to write through the
+      // The kept clone used to write through the
       // connection its own transaction had run on, so row 3 landed inside this second
       // transaction, reported success, and disappeared when this one rolled back.
       await assertRejects(
@@ -624,7 +624,7 @@ describe("DbServiceBase against a real server", () => {
   })
 
   it("refuses a query built inside begin and awaited after it", async () => {
-    // Issue #108's first route, in the shape a person writes it: the writes are collected
+    // In the shape a person writes it: the writes are collected
     // inside the callback and awaited outside, which is a forgotten `await` rather than a
     // deliberate act. The query is lazy — `postgres` sends nothing until `then`, `catch`,
     // `finally`, `execute` or `forEach` reaches its `handle()` — so it used to be sent on
@@ -676,7 +676,7 @@ describe("DbServiceBase against a real server", () => {
   })
 
   it("retires a handle taken from sql.savepoint when that savepoint returns", async () => {
-    // Issue #108's second route. `savepoint` hands its callback the driver's own handle,
+    // `savepoint` hands its callback the driver's own handle,
     // so that handle never passed through the wrapper and a service that kept it held an
     // open door onto the connection for the rest of the process.
     await withSchema({ max: 1 }, async (sql, schema) => {

@@ -26,6 +26,12 @@
  * ```
  *
  * Nothing touches a global at import time: the worker scope is a parameter.
+ *
+ * `browser/push-notifications` is the receiving end of a Web Push: in a service worker, `installPushNotifications(self)`
+ * shows the pushed message and, on a click, focuses or opens the app at the message's URL, which must
+ * be of the worker's own origin. The worker ignores keys of a message it does not know, so a field
+ * added later does not silence a worker cached from an older build.
+ *
  * @module
  */
 import { type } from "arktype"

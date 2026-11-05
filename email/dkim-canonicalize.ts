@@ -98,11 +98,8 @@ export function canonicalizeBody(body: string, algorithm: Canonicalization): str
  * followed by LF — is an ordinary octet of whatever line it sits in, per RFC
  * 6376 §3.4.3/§3.4.4: neither section lists CR among what a body
  * canonicalizer treats specially, and dkimpy and OpenDKIM read it the same
- * way. An earlier revision of this file treated a lone CR as a line ending
- * too, rewriting it to CRLF — which disagreed with every RFC-faithful signer
- * on a body that legitimately carries one (classic-Mac text pasted inline, an
- * 8-bit part that was never quoted-printable encoded) and reported it as
- * tampered with (issue #94). The last element is what followed the final line
+ * way; reading it as a line ending would report a body that legitimately
+ * carries one (classic-Mac text pasted inline) as tampered with. The last element is what followed the final line
  * ending — the empty string when the body ends with one, and the whole
  * remaining text when it does not end with one at all.
  */

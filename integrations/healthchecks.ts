@@ -1,27 +1,53 @@
 /**
  * healthchecks.io dead-man's-switch client.
  *
- * Ported from the `healthchecks` half of `rostok/scripts/backup/src/reporting.ts`
- * with the backup domain removed: nothing here imports or mentions `BackupResult`,
- * `BackupContext` or a backup count. A notifier that only works while a backup
- * runs is a notifier nobody can reuse, which is why the two halves are separate
- * modules with their own config.
+ * It knows no domain: `ping` takes a `HealthchecksPing` value object, the
+ * caller states the `outcome` (`"success" | "fail"`) and writes the message, and
+ * `ping` returns a discriminated result with the attempt count and the last
+ * status, so a caller can tell a delivered ping from a dead endpoint.
  *
- * Deviations from the source, each pinned by a test:
+ * ```ts
+ * const client = new HealthchecksClient({ pingUrl })
+ * const result = await client.ping({ outcome: HealthchecksOutcome.Fail, body: "3 of 5 failed" })
+ * ```
  *
- *  - The source's only entry point took a `BackupResult`
- *    (`reporting.ts:79`), so the retrying ping was unreachable from anywhere
- *    else. `ping` takes a `HealthchecksPing` value object instead.
- *  - The source's attempt loop swallowed errors and carried on, always
- *    resolving `void` (`reporting.ts:79-121`). A caller could not tell a
- *    delivered ping from a dead endpoint. `ping` returns a discriminated result
- *    with the attempt count and the last status.
- *  - The source's success/failure decision was derived from
- *    `successCount === totalCount` (`reporting.ts:84`), which is a backup
- *    concept. `outcome` is now the caller's explicit `"success" | "fail"`.
- *  - The source built its message from backup rows (`buildHealthchecksMessage`),
- *    including a padded table. That was backup-specific and was never ported
- *    here; it lived in `ops/`'s backup module, which is not part of ts-libs (#67).
+ * `Success` pings the base URL, `Fail` pings `<url>/fail`, `Start` pings `<url>/start`. `urlFor`
+ * exposes the mapping.
+ *
+ * **Config.** `HEALTHCHECKS_PING_URL` through `healthchecksConfigFromEnv(read?)`; `null` when unset.
+ * The constructor throws on an empty URL. Nothing is read at module scope.
+ *
+ * **Result.** `{ ok: true, httpStatus, attempts, body, waitedMs }` or
+ * `{ ok: false, code, message, status?, attempts, waitedMs }`, `code` being `"http_error"`,
+ * `"network_error"`, `"timeout"`, `"check_not_found"`, `"rate_limited"` or `"redirected"`.
+ *
+ * **A 200 is not always a delivered ping.** healthchecks.io answers `200 OK (not found)` for a check
+ * UUID it does not know and `200 OK (rate limited)` for a ping it ignored
+ * ([pinging API](https://healthchecks.io/docs/http_api/)). The client reads the first 64 bytes of a
+ * 2xx body, never more, and reports these as `check_not_found` (not retried: the URL is wrong) and
+ * `rate_limited` (retried under the policy). Any other 2xx, including `OK` and `201 Created`, is a
+ * success.
+ *
+ * **The ping URL must be the final address.** Redirects are not followed: a 301, 302 or 303 would turn
+ * the POST into a GET and drop the body. Any 3xx answer is `redirected` and is not retried.
+ *
+ * **Retry policy.** 10 attempts, 60s doubling, capped at 5 minutes per wait, plus +/-20% jitter so
+ * that many hosts pinging the same check after a shared outage do not retry in lockstep. Measured
+ * schedule, not estimated: without jitter the waits run
+ * `1 + 2 + 4 + 5 + 5 + 5 + 5 + 5 + 5 = 37.0 minutes` (2,220,000 ms across 9 retries), which fits
+ * inside healthchecks.io's 1-hour grace window; with +/-20% jitter the same 9 waits range
+ * `29.6-38.4 minutes` (1,776,000-2,304,000 ms), still comfortably inside the window and the 40-minute
+ * total budget. Both the un-jittered figure and the jittered range are asserted by the suite,
+ * including a test that constructs the client with no options at all — the settings that ship — and
+ * confirms two instances get different delays. A 10-minute per-wait cap gives
+ * `1 + 2 + 4 + 8 + 10 + 10 + 10 + 10 + 10 = 65.0 minutes` and overruns the very window the cap exists
+ * to respect. `Retry-After` is honoured: the provider rate-limits with `429`, and ignoring the header
+ * would hammer the endpoint on the failures being retried. A total budget bounds the whole
+ * operation, set above the sum of the waits.
+ *
+ * **No backup coupling.** Nothing here imports or references `BackupResult` or any backup type. A
+ * notifier that only works while a backup runs is a notifier nobody can reuse.
+ *
  * @module
  */
 
@@ -168,10 +194,9 @@ export const healthchecksConfigFromEnv = (
 /**
  * healthchecks.io client.
  *
- * The default policy is the source's: 10 attempts with 60s doubling, capped at
+ * The default policy: 10 attempts with 60s doubling, capped at
  * 5 minutes per wait (see `DEFAULT_RETRY_POLICY`). `Retry-After` is honoured
- * when the provider sends it — healthchecks.io rate-limits with `429` and the
- * source ignored the header, hammering the endpoint on the exact failures it was retrying.
+ * when the provider sends it — healthchecks.io rate-limits with `429`.
  */
 export class HealthchecksClient {
   private readonly pingUrl: string
@@ -186,9 +211,8 @@ export class HealthchecksClient {
           "an unconfigured switch as an explicit caller decision",
       )
     }
-    // A URL the platform cannot parse can never be pinged, and the failure it
-    // used to produce was `{ ok: true, httpStatus: 200 }` from a stubbed
-    // transport. Refused at construction so a typo cannot look like a healthy
+    // A URL the platform cannot parse can never be pinged, yet a stubbed
+    // transport would answer it with `{ ok: true, httpStatus: 200 }`. Refused at construction so a typo cannot look like a healthy
     // dead-man's switch. Refused at construction, matching how an empty URL is
     // refused, so no error code has to exist for a state that cannot produce a
     // result.
@@ -202,9 +226,8 @@ export class HealthchecksClient {
   /**
    * Sends one ping, retrying transient failures under the policy.
    *
-   * Never throws. A non-2xx answer is a failure, not a log line: the source
-   * logged `healthchecks ping failed: ...` and returned, so a permanently
-   * broken switch looked like a healthy process.
+   * Never throws. A non-2xx answer is a failure, not a log line, so a
+   * permanently broken switch never looks like a healthy process.
    *
    * A 2xx is not enough either. healthchecks.io answers `200 OK (not found)`
    * for a UUID it does not know and `200 OK (rate limited)` for a ping it

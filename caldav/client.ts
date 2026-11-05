@@ -17,6 +17,85 @@
  * Runs on the server and in a browser: pass the platform `fetch` or a wrapper as `fetch`. A browser
  * hides redirect targets from script, so a redirect there fails with `CalDavErrorCode.Server`.
  *
+ * ```ts
+ * import { CalDavErrorCode, createCalDavClient } from "@spy4x/caldav"
+ *
+ * const client = createCalDavClient({
+ *   serverUrl: "https://dav.example.com/", // the bare host or `…/dav/cal/` both work
+ *   auth: { username: "user@example.com", password: "…" },
+ * })
+ *
+ * const found = await client.discover() // .well-known → current-user-principal → calendar-home-set
+ * if (!found.success) throw new Error(found.error.message)
+ * const calendars = await client.listCalendars(found.output.homeUrls[0])
+ * // Each: url, displayName, components, color?, ctag?, syncToken?
+ * const withFeeds = await client.listCalendars(found.output.homeUrls[0], { subscriptions: true })
+ * // A subscription also has `subscribed: true`; read it with `client.readSubscription?.(url)`.
+ *
+ * const inbox = "https://dav.example.com/dav/cal/user%40example.com/inbox/"
+ * const open = await client.listObjects(inbox, { component: "VTODO" }) // completed tasks left out
+ * const all = await client.listObjects(inbox, { component: "VTODO", includeCompleted: true })
+ *
+ * const created = await client.createObject(inbox, ics) // a UUID name, `If-None-Match: *`
+ * if (!created.success) throw new Error(created.error.message)
+ * // A server may answer a PUT without an ETag (`etag: null`); then read the object to get one.
+ * const current = await client.getObject(created.output.url)
+ * if (!current.success || current.output.etag === null) throw new Error("no etag to update with")
+ * const updated = await client.updateObject(current.output.url, changed, current.output.etag)
+ * if (!updated.success && updated.error.code === CalDavErrorCode.Conflict) {
+ *   // Someone changed it since it was read: read it again, merge, retry with the new etag.
+ * }
+ * ```
+ *
+ * What the client guarantees:
+ *
+ * - **No password over plain `http:` by accident.** `createCalDavClient` throws a `TypeError` for an
+ *   `http:` `serverUrl` before any request is sent, because HTTP Basic would send the password
+ *   unencrypted to anyone on the path. Pass `allowHttp: true` to accept it, and only when nobody else
+ *   can read that path, such as a container network or `localhost`. A redirect from `https:` to
+ *   `http:` counts as another origin and is never followed.
+ * - **Credentials stay on the server.** `Authorization` goes only to the configured origin. A URL
+ *   argument or a server href on another host, port or scheme is refused with `OutsideServer` before
+ *   any request. Redirects are followed by hand: on the same origin up to `maxRedirects` (default 5),
+ *   to another origin never, failing with `CrossOriginRedirect` and the target in `error.target`.
+ * - **No blind writes.** `createObject` sends `If-None-Match: *` and names the object with a UUID,
+ *   never the UID. `updateObject` and `deleteObject` need the etag, sent exactly as received, and
+ *   without one are refused with `InvalidArgument` before any request. The etag must be one quoted
+ *   entity tag: `*` or a list would match any version, so both are refused, and a server etag of
+ *   that kind reads as `null`. A stale etag fails with
+ *   `Conflict`, a code no other failure uses; a UID clash fails with `UidConflict`.
+ * - **Failures are not empty lists.** A missing calendar is `NotFound`, never `[]`. Stalwart
+ *   answers a `calendar-query` on an empty calendar, and on a calendar that does not exist, with 207
+ *   and only the calendar's own entry at 404; `listObjects` then asks the calendar's `resourcetype`
+ *   (`PROPFIND`, depth 0) and returns `[]` for a calendar, `NotFound` for anything else. The same
+ *   holds after a same-origin redirect: a calendar or home that moved is recognised under the address
+ *   the answer came from, so its own 404 is `NotFound` too. An object the server reports inside a
+ *   listing with an error other than 404 or 410 fails `listObjects` with the code of that status,
+ *   instead of being left out as if it were deleted; a 404 or 410 entry is left out.
+ *   `deleteCalendar` checks the collection is a calendar first, so it cannot delete the home.
+ * - **What the user may do.** `getPrivileges` returns the names of the `DAV:` privileges the server
+ *   lists for the signed-in user on a calendar or an object (`read`, `write`, `write-content`, `bind`,
+ *   `unbind`, `all`), or `null` when the server gives no such list. A calendar shared read-only
+ *   lists `read` and no privilege to write.
+ * - **Subscriptions are read-only.** A calendar subscription (a server-side copy of an external
+ *   iCalendar feed, `resourcetype` `{http://calendarserver.org/ns/}subscribed` on Nextcloud and
+ *   other sabre/dav servers) is listed only with `listCalendars(home, { subscriptions: true })`, and
+ *   then carries `subscribed: true`. Nextcloud answers `PROPFIND` and `REPORT` on one with no
+ *   objects, so `readSubscription(url)` reads the feed with `GET <url>?export` and returns one entry
+ *   per UID: the master, its `RECURRENCE-ID` overrides and the `VTIMEZONE`s they name, in one
+ *   `VCALENDAR`. A component without a `UID` is left out; an answer that is not one `VCALENDAR`
+ *   fails with `Malformed`. Because each entry repeats the time zones it references, the entries
+ *   together may hold at most four times `maxResponseBytes`; past that the call fails with
+ *   `TooLarge`. Each entry's `url` is `<calendar URL>#<encodeURIComponent(uid)>`, stable
+ *   while the feed keeps the UID, and its `etag` is `null`. `updateObject` and `deleteObject` refuse
+ *   a URL with a fragment, and `deleteCalendar` refuses a subscription. The feed's own source URL is
+ *   never fetched.
+ * - **Bounded.** One `timeoutMs` (default 30 s) covers a whole call; no body is read past
+ *   `maxResponseBytes` (default 10 MiB).
+ *
+ * Every method returns `{ success, output, error }` and never throws for a server or network failure.
+ * In a browser, `fetch` hides redirect targets, so a redirect fails with `Server`.
+ *
  * @module
  */
 

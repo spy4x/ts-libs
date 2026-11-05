@@ -5,14 +5,8 @@
  * `HEALTHCHECK` that tries to run one can never work. The compiled binary is the
  * only executable in the image, so it has to probe itself: TCP-connect to the
  * loopback port it is listening on and close the socket again, exiting `0` when
- * the connection succeeds and `1` otherwise. That is what the app this was
- * ported from did.
- *
- * An earlier version of this file also wrote one byte after connecting and
- * waited for it to be echoed back, and reported a real, running web server as
- * down: a web server never echoes a raw TCP byte, it answers HTTP or nothing, so
- * the echo step always timed out against a live server. Connect-and-close is
- * the TCP probe now.
+ * the connection succeeds and `1` otherwise. The probe writes nothing: a web
+ * server never echoes a raw TCP byte, it answers HTTP or nothing.
  *
  * A port that accepts connections says nothing about whether the service behind
  * it works: an API that lost its database still listens. Given a `path`, the
@@ -21,11 +15,8 @@
  * route that checks the database turns the container unhealthy when the
  * database goes away.
  *
- * Where it lives: **`server/healthcheck.ts`, not a separate deploy-tooling package.**
- * `ops/` used to be that package (issue #18) and would have needed its own config for
- * 60 LOC; `ops/` was later removed from ts-libs entirely (#67). A loopback probe of an
- * HTTP server is a server concern, and this module needs no package of its own — it
- * is a `server/` subpath.
+ * It is a `server/` subpath, not a package of its own: a loopback probe of an
+ * HTTP server is a server concern.
  *
  * The probe is separate from the process wrapper ({@link runHealthcheck}) so the
  * decision logic is unit-testable without a socket: `deno test` runs with
@@ -33,9 +24,37 @@
  * are injected and neither a real socket nor a real deadline is exercised by a
  * unit test.
  *
- * Not ported: the `caldav-mcp` two-stage Dockerfile (`denoland/deno:alpine` →
- * `gcr.io/distroless/cc-debian12` + `deno compile`). Deploy tooling is not part of
- * ts-libs; a project built from the template has its own `infra/scripts/`.
+
+ * `probeLoopback`, `healthcheckExitCode`, `runHealthcheck`, `resolveHealthcheckPort`, `denoConnector`,
+ * `LOOPBACK_HOSTS`, `DEFAULT_TIMEOUT_MS`, `DEFAULT_PORT`.
+ *
+ * The probe connects to the loopback port and closes the socket again: `{ healthy: true }` when the
+ * connect succeeds, `{ healthy: false, reason: "connect_failed" }` when it is refused or misses its
+ * deadline. A server that accepts connections but never answers one still reads healthy under
+ * connect-and-close; pass a `path` for a real HTTP check.
+ *
+ * Given a `path`, the probe sends a real HTTP `GET` to that loopback path instead and is healthy only
+ * when the answer has `expectedStatus` (default `200`). Point it at a health route that checks the
+ * database, and a container whose service still listens but lost its database turns unhealthy. The
+ * failure reasons are `request_failed` (no answer before the deadline, or the connection refused) and
+ * `unexpected_status`. The path is appended to the loopback origin, never resolved against it, so it
+ * cannot name another host; redirects are not followed; the body is cancelled unread; and the
+ * deadline aborts the request. `ProbeFetcher` is injected the way `ProbeConnector` is, so the unit
+ * tier needs no socket.
+ *
+ * The default fetcher is the platform `fetch`, which honours `HTTP_PROXY` and `NO_PROXY`. With a proxy
+ * set in the container's environment, the probe's request goes to the proxy rather than to loopback,
+ * and its answer decides the result. An operator who sets a proxy must list `127.0.0.1`, `localhost`
+ * and `::1` in `NO_PROXY`. The TCP probe opens its socket directly and is not affected.
+ *
+ * `hostname` must be a `LOOPBACK_HOSTS` entry, so a probe cannot be aimed at a public bind; `timeoutMs`
+ * must be a non-negative integer; `path` must start with `/`; `expectedStatus` must be an integer in
+ * 100-599; and `HEALTHCHECK_PORT`/`PORT` must be bare decimal digits
+ * (`0x1f90`, `1e3`, `+8080` are refused rather than parsed), the same rule this package applies to
+ * `content-length`.
+ *
+ * The probe is separated from the exit so the decision is a return value a test can assert with
+ * `--allow-read --allow-env` and no socket.
  *
  * @module
  */

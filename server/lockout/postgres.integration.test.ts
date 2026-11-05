@@ -1,5 +1,5 @@
 /**
- * The Postgres `LockoutStore` against a real server (#315).
+ * The Postgres `LockoutStore` against a real server.
  *
  * The contract suite the memory store passes runs here, so the parallel-guess and quiet-reset rules
  * are shown to hold in Postgres too. The tests after it need a real database: a template-shaped

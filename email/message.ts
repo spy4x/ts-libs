@@ -7,6 +7,30 @@
  * application. A library that owns the transport also owns the timezone framing
  * and the ICS attachment plumbing, because those are the parts that go wrong in
  * every hand-rolled reimplementation — the templates built on top of them do not.
+ *
+ * ## Per-recipient timezone framing
+ *
+ * `frameWallClockLong(date, time, sourceTz, recipientTz?)` turns a wall clock
+ * written in `sourceTz` into a line the recipient can read:
+ * `"Friday, 28 August 2026 at 04:00 (America/New_York)"`. `frameInstantLong` does the
+ * same for an absolute instant, and the `*Short` variants drop the zone name for a
+ * subject line. An unknown recipient zone falls back to the source zone; an unknown
+ * _source_ zone throws `RangeError` rather than reaching `Intl`.
+ *
+ * The zone math is `@spy4x/time/tz` — `zonedDateTime`, `formatInstantLong`,
+ * `formatInstantShort`, `validTimeZoneOr`, `isValidTimeZone`. Nothing here
+ * reimplements it, and nothing reads the host `TZ`, so the same input produces the
+ * same output on every machine.
+ *
+ * ## ICS attachments
+ *
+ * `icalAttachment(event, { ics, filename? })` builds a `text/calendar` attachment
+ * from `@spy4x/time/ics` (`generateIcs`) — there is no second ICS writer here. The
+ * MIME type's `method` parameter is read back out of the generated document, so a
+ * `Content-Type` announcing `REQUEST` for a body that says `CANCEL` is not
+ * expressible. Non-ASCII filenames are emitted per RFC 2231 (`filename*0*=utf-8''…`)
+ * by the transport.
+ *
  * @module
  */
 
@@ -24,7 +48,7 @@ import { assertNoControlCharacters, isAddress } from "./address.ts"
 export interface EmailAttachment {
   /** Filename as the recipient sees it. Non-ASCII is encoded per RFC 2231 by the transport. */
   filename: string
-  /** Content as UTF-8 text. Binary attachments are out of scope — see the README. */
+  /** Content as UTF-8 text. Binary attachments are out of scope — see `mod.ts`. */
   content: string
   /** MIME content type, e.g. `text/calendar; charset=utf-8; method=REQUEST`. */
   contentType: string
@@ -57,9 +81,8 @@ export interface EmailMessage {
   text?: string
   /**
    * HTML body. **Must already be escaped** — build it with `escapeHtml` and
-   * `htmlWrap` from `@spy4x/email/html`. It is never synthesised from `text`:
-   * `mig` sent `html: opts.html ?? opts.text` on every message, which mailed
-   * plain text as HTML.
+   * `htmlWrap` from `@spy4x/email/html`. It is never synthesised from `text`,
+   * which would mail plain text as HTML.
    */
   html?: string
   /** Attachments, in the order they should appear. Omitted entirely when empty. */
@@ -198,8 +221,8 @@ function assertListUnsubscribe(value: ListUnsubscribe): void {
 /**
  * True when a body field carries something worth sending.
  *
- * A whitespace-only body is absent: `text: ""` used to produce a `text/plain`
- * part containing nothing, which a text-only client shows as a blank mail.
+ * A whitespace-only body is absent, so it never becomes an empty `text/plain`
+ * part, which a text-only client shows as a blank mail.
  *
  * @deprecated An internal step of `assertSendableMessage` and the SMTP sender, exported by
  * mistake; it goes in 2.0. Check `value?.trim()` instead.
@@ -212,13 +235,12 @@ export function hasBody(value: string | undefined): value is string {
  * Render an instant as the recipient's own clock reads it, with the zone spelled
  * out: `"Friday, 28 August 2026 at 04:00 (America/New_York)"`.
  *
- * This is `mig`'s per-recipient framing — the guest sees the booking in the
+ * Per-recipient framing — the guest sees the booking in the
  * guest's zone, the host in the host's — with the zone name appended so a reader
  * comparing two mails can tell which clock each line means.
  *
- * @throws {RangeError} when `fallbackTz` is not an IANA zone. `mig` handed
- * `validTimeZoneOr`'s fallback straight to `Intl`, which throws a bare
- * `RangeError` from inside a formatter; failing here names the misconfiguration.
+ * @throws {RangeError} when `fallbackTz` is not an IANA zone, naming the
+ * misconfiguration rather than letting a formatter throw a bare `RangeError`.
  */
 export function frameInstantLong(
   instant: Date,

@@ -1,5 +1,5 @@
 /**
- * A display label for the device behind a `User-Agent` header (#406).
+ * A display label for the device behind a `User-Agent` header.
  *
  * `deviceName` turns the header into a name a person recognises in a list of signed-in devices,
  * such as "Safari on iPhone". It is a label, not browser detection: it knows the common browsers
@@ -7,6 +7,33 @@
  * The header is whatever the client chose to send.
  *
  * Pure: no I/O, no permissions. Runs in a browser bundle too.
+ *
+ * ```ts
+ * import { ipHint } from "@spy4x/net/ip"
+ * import { deviceName } from "@spy4x/net/user-agent"
+ *
+ * deviceName(request.headers.get("user-agent")) // "Safari on iPhone"
+ * deviceName("curl/8.9.1") // "Unknown device"
+ * ipHint("203.0.113.42") // "203.0.113.*"
+ * ipHint("2001:db8:85a3::7348") // "2001:db8:*"
+ * ipHint("not an address") // null
+ * ```
+ *
+ * Work both out once, when the session is created, and store the two labels
+ * instead of the full header and the full address.
+ *
+ * `deviceName` names the browser and the system, or only the one it recognises, or
+ * `UNKNOWN_DEVICE` ("Unknown device"). The answer is built from the module's own
+ * words, never from the header's text, and is under 30 characters long. It is a
+ * label, not browser detection: the client chooses the header, so never use the
+ * answer to decide what a client may do. An iPad that asks for the desktop site
+ * sends a Mac's user agent and is named "Safari on macOS". Only the first 512
+ * characters of the header are read.
+ *
+ * `ipHint` keeps the first three parts of an IPv4 address or the first two groups
+ * of an IPv6 one: enough to tell a home network from a phone network, too little
+ * to point at one machine. It returns `null` for a missing value and for anything
+ * `parseIp` refuses.
  *
  * @module
  */

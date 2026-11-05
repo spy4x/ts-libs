@@ -1,5 +1,5 @@
 /**
- * `@spy4x/server/images` — turns an uploaded photo into images a public page can show (#762):
+ * `@spy4x/server/images` — turns an uploaded photo into images a public page can show:
  * upright, with every metadata block stripped (EXIF, XMP, GPS, ICC), as AVIF and WebP at a few
  * widths for a `srcset` (`responsiveImage` of `@spy4x/platform/universal/srcset`).
  *
@@ -13,6 +13,40 @@
  * decoded. Running it twice on the same file writes the same files. Check the upload's bytes with
  * `matchesContentType` of `@spy4x/server/storage` first: this module trusts libvips to tell a
  * format by its content, not the type the browser claimed.
+ *
+ * `processImage(input, outputDir, options?)` turns the photo at `input`, a JPEG, PNG, WebP or HEIC,
+ * into AVIF and WebP files at 480, 960 and 1600 pixels wide (`widths` names others), never wider
+ * than the photo. Each is turned upright by the photo's orientation and keeps no metadata: no EXIF,
+ * no XMP, no GPS position, no ICC profile (colours are turned to sRGB first). It answers
+ * `{ success, output, error }`: the variants with their paths, types, widths and heights, AVIF first
+ * and narrowest first, ready for `responsiveImage` of `@spy4x/platform/universal/srcset`.
+ *
+ * ```ts
+ * import { processImage } from "@spy4x/server/images"
+ *
+ * const result = await processImage("/tmp/upload-1", "/tmp/upload-1-out", {
+ *   signal: AbortSignal.timeout(120_000),
+ * })
+ * if (result.success) { for (const v of result.output) await store(v.path, v.type, v.width) }
+ * ```
+ *
+ * - **A refusal** (`ImageRefusal`) is final: a file libvips cannot read, a format other than the
+ *   four (libvips names its loader, whatever the file is called), or more than `maxPixels` (100
+ *   million by default), refused before the pixels are decoded.
+ * - **A throw** is worth a retry: `vips` missing, stopped by `signal`, or failing to write a
+ *   variant. A job keeps the original until the variants exist. Variants written before the failure
+ *   stay in `outputDir`; remove the folder or run again, which writes the same names.
+ * - **Check the bytes first.** Run `matchesContentType` on the upload before `processImage`: libvips
+ *   picks a loader by content and ignores the type the browser claimed.
+ * - **Header fields are read one at a time** (`vipsheader -f`), since `vipsheader -a` also prints
+ *   the photo's EXIF text, where an uploader could forge an `orientation:` line.
+ * - **Same input, same files.** A second run on the same photo writes the same bytes to the same
+ *   names, so a retried job does not pile up variants.
+ * - **What it needs.** libvips 8.15 or newer with its command-line tools and libheif. On Debian 13:
+ *   `libvips-tools`, `libheif-plugin-libde265` (reads HEIC), `libheif-plugin-aomenc` (writes AVIF).
+ *   Every call sets `VIPS_BLOCK_UNTRUSTED=1`, which blocks libvips's loaders that are not meant
+ *   for untrusted files, and refuses a path that `vips` would read as an option (a leading `-` or
+ *   a `[`).
  *
  * @module
  */

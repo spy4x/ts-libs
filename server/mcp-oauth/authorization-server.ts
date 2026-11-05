@@ -123,7 +123,7 @@ export interface OwnerPassword {
    * About ten addresses reach the default ceiling in a minute and keep every approval refused for
    * the rest of `totalWindowMs`, 24 hours by default. The owner's way back in is a one-time code
    * from `createApprovalCode`, typed in place of the password: the lockout does not apply to
-   * it. The README, "Approving while the limit is reached", has the details.
+   * it. The module doc (`mod.ts`), "Approving while the limit is reached", has the details.
    */
   maxTotalFailures?: number
   /** The window `maxTotalFailures` counts over, in milliseconds. Defaults to 24 hours. */
@@ -167,7 +167,7 @@ export interface AuthorizationServerOptions {
    * default), every approval does. Denials and issued tokens are unaffected. When the store gives up
    * counting under a burst, the approval answers `429` too. The trade-off: anyone who can reach
    * `/authorize` can keep sending wrong passwords and so keep every approval refused for as long as
-   * they keep it up, across restarts with a persistent store. The README says how to lift it. A
+   * they keep it up, across restarts with a persistent store. The module doc (`mod.ts`) says how to lift it. A
    * one-time code from `createApprovalCode`, typed in place of the password, approves anyway.
    */
   ownerPassword?: OwnerPassword

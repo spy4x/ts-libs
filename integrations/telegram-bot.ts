@@ -3,8 +3,7 @@
  * step-by-step conversations whose state lives in a store the caller passes in, a webhook
  * handler on web-standard `Request`/`Response`, and a long-polling loop for development.
  *
- * Ported in behaviour from Financy's bot (its webhook route, polling worker and session manager),
- * not in structure. Fixes over that source: the webhook secret is compared in constant time and
+ * The webhook secret is compared in constant time and
  * is required; the request body is read under a byte cap and checked with arktype; and a
  * conversation's state has an expiry and a store of the caller's choice instead of one app cache.
  *

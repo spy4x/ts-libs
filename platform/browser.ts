@@ -7,6 +7,13 @@
  * `requestGeolocation` its `Geolocation`, and `isApplePlatform` its `navigator`, all as parameters,
  * defaulting to the real globals only when the caller passes none. All of them are safe under SSR
  * and testable with fakes.
+ *
+ * Needs a DOM-ish runtime. **Nothing here reads a global at import time** — `getCookie`, `makeStorage`,
+ * `downloadResponseAsFile`, `downloadCsv`, `copyToClipboard` and `requestGeolocation` all take their DOM surface (`document`, `Storage`, the object-URL
+ * factory, a timer, a clipboard, a `Geolocation`) as a parameter, defaulting to the real global only
+ * when the caller passes none.
+ *
+ * @module
  */
 
 export * from "./browser/build-env.ts"

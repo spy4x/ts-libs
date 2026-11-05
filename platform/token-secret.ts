@@ -7,9 +7,8 @@ import { MIN_SECRET_LENGTH, TokenError, TokenErrorCode } from "./tokens.ts"
 /**
  * Rejects any secret that would make the digest meaningless or brute-forceable.
  *
- * The source (`mig/lib/tokens.ts:38-44`) did not check at all, so `newOpaqueToken()` with
- * no argument hashed against the literal `"undefined"` and produced a token any
- * caller could forge. Fail closed instead: an unusable secret is a programming
+ * Without the check, `newOpaqueToken()` with no argument would hash against the literal
+ * `"undefined"` and produce a token any caller could forge. An unusable secret is a programming
  * error, not a warning.
  *
  * Two ways a secret is unusable, both checked on the trimmed value so a secret of

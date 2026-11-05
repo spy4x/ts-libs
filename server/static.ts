@@ -13,11 +13,8 @@
  *    inside the root that points outside it is not served. Only the realpath can
  *    tell — the path string is already inside the root.
  *
- * The source this was ported from did `Deno.readFile(SPA_DIR +
- * c.req.path)`, which is a path-traversal hole; that part is ported as a fix, not
- * as-is. Its second half — an explicit `app.get("/analyze", spaHandler)` route
- * list — is **not** ported: an SPA fallback is a single flag (`spaFallback`) or
- * the caller's own catch-all route, not a list of page paths.
+ An SPA fallback is a single flag (`spaFallback`) or the caller's own catch-all
+ * route, not a list of page paths.
  *
  * A file is opened, not read whole. `StaticFs.open` returns the file's size and a
  * `ReadableStream` of its bytes, so memory use stays flat for a request whatever
@@ -31,6 +28,26 @@
  * before `serveStatic` returns, without `serveStatic` ever wrapping or reading the
  * stream. (`denoStaticFs.open` still builds that stream eagerly as `file.readable`
  * — it exists, `serveStatic` just never touches it for `HEAD`.)
+ *
+ * `serveStatic`, `resolveStaticPath`, `isPathInsideRoot`, `contentTypeFor`, `denoStaticFs`.
+ *
+ * The request path is percent-decoded **once**, then every segment is checked: `..`, a backslash, an
+ * absolute path, a NUL byte and an encoded separator are all refused **before any filesystem call**. The
+ * adapter then compares the realpath of the resolved file against the realpath of the root, because only
+ * the realpath can reveal a symlink that points outside. A path ending in `/` serves that directory's
+ * `index.html`. An SPA fallback is one flag, not a list of route paths: with `spaFallback`, a missing
+ * path, or one refused for an encoded separator such as `/tasks/a%2Fb`, gets `<root>/index.html`. Every
+ * other refused path gets no response, with or without the flag: a traversal, a backslash, a control
+ * character, a malformed escape such as `%zz`, and an empty segment such as `/docs//`.
+ *
+ * A file is streamed, not read whole: `StaticFs.open` returns the file's size and a `ReadableStream`, so
+ * serving a large file costs the same per-request memory as serving a small one. `Content-Length` comes
+ * from that size, never from a buffer. For a `GET`, the handle is released the first time the body is
+ * fully read, is cancelled by the client, or fails on a read — but a `GET` response whose body is never
+ * read and never cancelled still holds the handle until garbage collection, which is exactly what a
+ * framework does to a `HEAD` response it builds fresh and discards unread. Pass `method: "HEAD"` and the
+ * response carries the same headers with no body, closed before `serveStatic` returns. Range and
+ * conditional requests are not implemented; a request for either is served the same as a plain `GET`.
  *
  * @module
  */

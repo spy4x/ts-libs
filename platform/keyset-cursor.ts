@@ -1,8 +1,7 @@
 /**
  * Keyset pagination cursor: an opaque, signed page key bound to the scope it was issued for.
  *
- * Ported from spy4x/seed's `libs/server/groups/group-list-cursor.ts` and
- * `libs/server/notes/note-list-cursor.ts`, which were near-copies (#314). A cursor is a
+ * A cursor is a
  * {@link createSignedPayloadCodec} token under the cursor's purpose, so this module only adds what a
  * list endpoint needs on top of it: a default `{ updatedAt, id }` page key, scope fields bound as the
  * signed context, a signing key derived from one master secret per purpose, and a single error type.
@@ -26,6 +25,21 @@
  *   throw error
  * }
  * ```
+ *
+ * `createKeysetCursorCodec` builds a list endpoint's pagination cursor on `./signed-payload`: an
+ * opaque, signed page key that decodes only under the purpose (`notes.list`) and the scope
+ * (`["userId", "groupId"]`) it was issued for. The scope values are covered by the signature but not
+ * carried in the cursor. The default page key, `updatedAtIdPageKey`, is `{ updatedAt, id }`: an
+ * instant exactly as `toISOString` prints it, decoded to a `Date`, and a lower-case UUID of any
+ * version; no other key is accepted. A `Date` holds milliseconds only, so the `updated_at` column
+ * must be `TIMESTAMPTZ(3)`, or the query must compare against and order by
+ * `date_trunc('milliseconds', updated_at)`; with a microsecond column, rows that share a millisecond
+ * are skipped or repeated. Pass another arktype schema as `pageKey` for another ordering.
+ * Every refused cursor throws `KeysetCursorError`, whose `KeysetCursorErrorCode` the caller maps to
+ * its own error; a missing scope value is a `TypeError`, a bug in the caller rather than a bad cursor.
+ * The codec takes the master secret (usually the session-cookie secret) and signs with
+ * `deriveCursorSecret(secret, purpose)`, which is `deriveSecret` from `./tokens` under the label
+ * `spy4x.keyset-cursor.v1:<purpose>`, so each list has its own key and none is the raw master.
  *
  * @module
  */

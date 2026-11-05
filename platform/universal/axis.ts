@@ -4,6 +4,34 @@
  *
  * Pure arithmetic, no DOM and no SVG — the caller decides how to draw the result.
  *
+ * **`universal/axis` is the single home for the chart tick maths**, matched against
+ * `preact-components/charts/scales.ts` on every case tested against it. Reversed bounds are swapped
+ * rather than returned as given (`ticks(10, 0)` equals `ticks(0, 10)`), a non-finite bound returns an
+ * empty axis instead of throwing, and a tick target that is `0`, negative or `NaN` falls back to the
+ * default of `5` instead of throwing: a chart's tick target and domain both come from data or layout
+ * math that can transiently be bad, and a chart needs an empty or default-shaped axis to keep
+ * rendering, not an exception that takes the rest of the component down.
+ *
+ * The tick loop is bounded at `Math.min(steps + 1, MAX_TICKS)`, not just the output, so an absurd
+ * tick target (`ticks(1_000_000, 2_000_000, 1e25)`, a step far below the float precision at that
+ * magnitude) returns whichever ticks distinguish themselves within `MAX_TICKS` iterations — as few
+ * as one — rather than freeze the page. `MAX_TICKS` is exported so `axis.test.ts` can assert against
+ * it, and a tripwire inside the loop throws fast if the bound is ever weakened back to plain
+ * `steps + 1`, so a regression fails a test instead of hanging the suite.
+ *
+ * **Which function draws an axis that covers the data.** `ticks(min, max)` keeps only the step
+ * multiples within half a step of the bounds, so its ticks need not reach them: `ticks(1.1, 10)` is
+ * `[2, 4, 6, 8, 10]`, and nothing marks 1.1. When the first and last tick must cover the data, use
+ * `stepAxis(min, max, niceStep(Math.abs(max - min), target))`, which rounds the bounds outward:
+ * `stepAxis(1.1, 10, niceStep(8.9))` is `{ min: 0, max: 10, ticks: [0, 2, 4, 6, 8, 10] }`.
+ *
+ * `stepAxis(min, max, step)` (1.4.0) is for a caller that has already chosen its step: it rounds the
+ * bounds outward to multiples of the step and returns them with the ticks between them, rounded by the
+ * same rule, so the first and last tick are exactly the bounds. It exists so `preact-components`'
+ * `niceScale` can drop its own copy of the tick loop. The same release fixed tick rounding for
+ * a step with more than one significant digit: `ticks(0, 10, 4)` returned `[0, 3, 5, 8, 10]` and now
+ * returns `[0, 2.5, 5, 7.5, 10]`.
+ *
  * @module
  */
 
@@ -18,8 +46,7 @@ export const MAX_TICKS = 1_000
 /**
  * Coerce a tick target to a usable step count.
  *
- * Ported from `preact-components/charts/scales.ts`'s `normaliseTarget`, which this module lacked:
- * a target of `0`, a negative number, `NaN` or `undefined` used to throw here. A chart passes its
+ * A target of `0`, a negative number, `NaN` or `undefined` falls back to `5`. A chart passes its
  * tick target from layout code (available width divided by a label's pixel width, say), and a
  * transient bad value there is exactly the kind of input a chart must render *something* for
  * rather than crash the whole component on. Falling back to the default of `5` matches what
@@ -47,22 +74,18 @@ function normaliseTarget(target: number | undefined): number {
  * | any other | snapped / `target`, **no grid guarantee** (`niceStep(10, 4) === 2.5`, `niceStep(10, 7) === 1.4285714285714286`) |
  *
  * So **the `1/2/5` invariant holds only for `target` in `{1, 5, 10}` plus the powers of ten that
- * follow them.** This is source behaviour, preserved deliberately: the invariant is documented here as
- * conditional rather than claimed unconditionally, and `axis.test.ts` pins both the grid cases and the
- * counterexamples so the difference cannot be lost again. The textbook form — snap `span / target`
- * onto the grid — would change every chart's tick values, so it is a follow-up with a rendering diff
- * to review, not a change to make while porting.
+ * follow them.** `axis.test.ts` pins both the grid cases and the counterexamples. The textbook form — snap
+ * `span / target` onto the grid — would change every chart's tick values.
  *
  * A non-positive or non-finite span returns `1` so a degenerate axis still has a step, and the result
  * is never `0` or negative. A `target` that is not a finite number `>= 1` falls back to `5`, through
  * {@link normaliseTarget}, rather than throwing — see its own doc for why.
  *
- * **No hard floor on the result.** An earlier revision clamped with `Math.max(1e-9, raw)`, which made
- * every span narrower than about `2e-9` round up to a step 1e-9 — coarser than the whole span, so
- * `ticks(0, 1e-12)` collapsed to a single `[0]` tick instead of six. The floor is gone; the only
- * remaining safety net is for a genuine underflow (`10 ** exponent` rounding to `0` for a subnormal
- * span), where the grid computation itself yields `0` or a non-finite value — ported from
- * `preact-components/charts/scales.ts`, which found and fixed the same loss of precision.
+ * **No hard floor on the result.** A floor such as `Math.max(1e-9, raw)` would round every span
+ * narrower than about `2e-9` up to a step coarser than the whole span, so `ticks(0, 1e-12)` would
+ * collapse to a single `[0]` tick instead of six. The only safety net is for a genuine underflow
+ * (`10 ** exponent` rounding to `0` for a subnormal span), where the grid computation itself yields
+ * `0` or a non-finite value.
  */
 export function niceStep(span: number, target = 5): number {
   if (!Number.isFinite(span) || span <= 0) return 1
@@ -91,8 +114,7 @@ export function niceStep(span: number, target = 5): number {
  * with {@link stepAxis} instead: `stepAxis(min, max, niceStep(Math.abs(max - min), maxTicks))`.
  *
  * Reversed bounds are swapped rather than rejected — `ticks(10, 0)` equals `ticks(0, 10)` — so a
- * caller does not have to sort its own domain first; ported from
- * `preact-components/charts/scales.ts`, whose JSDoc calls the swap out as deliberate. When
+ * caller does not have to sort its own domain first. When
  * `min === max` a single-element array is returned, so a caller can render a degenerate axis
  * without dividing by zero. Non-finite bounds return an empty axis rather than throwing — the same
  * "render something, not nothing" reasoning as {@link normaliseTarget}: a chart fed a bad domain

@@ -15,6 +15,45 @@
  * break. A line break or any other control character in the path is written escaped, as `\n` or
  * `\x1b`, so a caller cannot start a second, forged log line.
  *
+ * `requestLog`, `RequestLogOptions`, `RequestLogWriter`.
+ *
+ * `write` defaults to `console.log`, and `skipPaths` lists paths not to log, because which path is
+ * a health check is the app's decision, not this middleware's.
+ *
+ * **What is logged, checked.** Every line carries only the HTTP method, the request pathname, and —
+ * on the outgoing line — the response status and elapsed time. The pathname comes from Hono's own
+ * `c.req.path`, which stops at the first `?`, so a token or password passed as a query parameter
+ * never reaches a log line through this middleware; no header and no request or response body is
+ * read at all. `log.test.ts` asserts it (`never logs the query string`, `does not read or log any
+ * request header`).
+ *
+ * **One request, one line each way.** Hono decodes the pathname, so `%0A` arrives as a real line
+ * break. A line break or any other control character in the method or the path is written escaped
+ * (`\n`, `\r`, `\t`, `\x1b`, `\u2028`), so a caller cannot start a second, forged log line or send a
+ * terminal an escape sequence. The `error: unhandled exception on …` line of `applyBaseMiddleware`
+ * is escaped the same way. A backslash is kept as it is.
+ *
+ * **Arrows: `<--` on the way in, `-->` on the way out**, matching Hono's own built-in `hono/logger`.
+ * `log.test.ts` pins the direction instead of only checking each line's other fields.
+ *
+ * **The color table's reach: checked, not assumed.** `c.res.status` is read as a plain property,
+ * never checked against `instanceof Response`, so two paths reach the color table's edges without
+ * needing a status the `Response` constructor itself would refuse: a handler that returns
+ * `Response.error()` produces the network-error status `0` (checked: `app.get("/err", () =>
+ * Response.error())` logs `<-- GET /err` then `--> GET /err 0 0ms`), and a handler that bypasses
+ * Hono's own return type and hands back a plain object is logged by whatever `.status` that object
+ * carries — `700`, in a check that returned `{ status: 700 } as unknown as Response`. Both are
+ * asserted in `log.test.ts`. The color table carries entries for classes `0` and `7` for exactly this
+ * reason, and falls back to the plain, uncolored status number for any class it does not carry, so
+ * nothing here throws or prints the literal text `undefined` regardless of what a handler returns.
+ *
+ * **Decisions.** `hono/utils/color` is not the internal it looks like: `./utils/*` is part of the
+ * published `hono` package's own `exports` map (checked against the pinned `hono@4.13.8`'s
+ * `package.json`), so this middleware is layered on hono's public surface, not reaching past it —
+ * consistent with hono staying a kept dependency. It reads Hono's own public `c.req.path`, not
+ * `getPath(c.req.raw)`, so it imports `hono/utils/color` only — never `hono/utils/url`. Color output
+ * stays: `getColorEnabled()` already turns it off for a non-TTY or `NO_COLOR` environment.
+ *
  * @module
  */
 import { getColorEnabled } from "hono/utils/color"
@@ -28,7 +67,7 @@ export type RequestLogWriter = (line: string) => void
 export interface RequestLogOptions {
   /**
    * Called once per line: `<-- GET /users` on the way in, `--> GET /users 200 12ms` on the way
-   * out — the same direction as the source and Hono's own built-in `hono/logger`. Defaults to
+   * out — the same direction as Hono's own built-in `hono/logger`. Defaults to
    * `console.log`. This is the one thing the app wires in — a logger that tags every line with a
    * request id, ships it somewhere, or both.
    */

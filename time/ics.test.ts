@@ -425,7 +425,7 @@ Deno.test("generateIcs rejects a SEQUENCE that is not a non-negative integer", (
 })
 
 Deno.test("generateIcs keeps the SEQUENCE guard in buildVEventLines, the exported entry", () => {
-  // buildVEventLines is exported for #13, so the guard must live there and not
+  // buildVEventLines is exported, so the guard must live there and not
   // only in generateIcs.
   assertThrows(
     () => buildVEventLines(makeEvent({ sequence: 1.5 }), DTSTAMP, IcsMethod.REQUEST),

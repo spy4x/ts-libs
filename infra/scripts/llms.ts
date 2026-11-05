@@ -1,4 +1,4 @@
-// Writes `llms.txt` and `llms-full.txt` at the repository root, for an agent working in another
+// Writes `llms.txt` at the repository root, for an agent working in another
 // repository that uses this library. Run with `deno task llms`.
 //
 // `llms.txt` lists what every published entry point exports, one line each, as four fields
@@ -7,7 +7,7 @@
 // the lines that are not exports (the header and the fingerprint) start with `#`. A type named
 // after a function or class whose parameters it describes is left out (`describesParameters`). The names, kinds and
 // JSDoc come from `deno doc --json`; the entry points come from the same `exports` maps
-// `contract.ts` reads. `llms-full.txt` joins the root README and every package README.
+// `contract.ts` reads. Usage lives in each module's `@module` doc, which `deno doc` and JSR show.
 //
 // `deno doc` needs `--allow-run`, which the unit tier does not have, so the unit test cannot
 // regenerate `llms.txt`. Instead the file ends with a fingerprint of the entry points' export
@@ -155,7 +155,7 @@ export const HEADER = [
   `# Left out: a type or interface that describes the parameters of a listed function or class Foo, foo or createFoo and is named Foo plus ${
     PARAMETER_SUFFIXES.join(`, `)
   }. Its signature: https://jsr.io/<package>/doc`,
-  `# Full READMEs: https://raw.githubusercontent.com/spy4x/ts-libs/main/llms-full.txt`,
+  `# Usage: each entry point's module doc, https://jsr.io/<package>/doc/<entry>`,
 ]
 
 /** Prefix of the last line of `llms.txt`, which carries the surface fingerprint. */
@@ -172,46 +172,6 @@ export function renderLlms(entries: EntryExports[], fingerprint: string): string
   }
   lines.push(`${FINGERPRINT_PREFIX}${fingerprint}`, ``)
   return lines.join("\n")
-}
-
-/** The text of `llms-full.txt`: each README under a header naming its file. */
-export function renderLlmsFull(readmes: { path: string; text: string }[]): string {
-  return readmes.map(({ path, text }) => `# ${path}\n\n${text.trim()}\n`).join("\n")
-}
-
-const SKIPPED_DIRS = new Set(["node_modules", "dist", "coverage"])
-
-async function findReadmes(root: string, dir: string): Promise<string[]> {
-  const found: string[] = []
-  for await (const item of Deno.readDir(join(root, dir))) {
-    const path = `${dir}/${item.name}`
-    if (item.isDirectory) {
-      if (SKIPPED_DIRS.has(item.name) || /fixtures?$/i.test(item.name)) continue
-      found.push(...await findReadmes(root, path))
-    } else if (item.name === "README.md") found.push(path)
-  }
-  return found
-}
-
-/**
- * The root README, then every `README.md` under each entry's package directory (nested ones such
- * as `platform/rate-limit/README.md` included, fixture folders skipped), sorted by path.
- */
-export async function loadReadmes(
-  root: string,
-  entries: Entry[],
-): Promise<{ path: string; text: string }[]> {
-  const paths = new Set<string>()
-  for (const pkg of new Set(entries.map((entry) => entry.pkg))) {
-    for (const path of await findReadmes(root, pkg)) paths.add(path)
-  }
-  const sorted = [...paths].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0))
-  return await Promise.all(
-    ["README.md", ...sorted].map(async (path) => ({
-      path,
-      text: await Deno.readTextFile(join(root, path)),
-    })),
-  )
 }
 
 const REEXPORT = /^export\b[^"]*?from\s+"(\.{1,2}\/[^"]+)"/gms
@@ -261,12 +221,11 @@ async function main() {
   }
   const fingerprint = await surfaceFingerprint(".", entries)
   await Deno.writeTextFile("llms.txt", renderLlms(withExports, fingerprint))
-  await Deno.writeTextFile("llms-full.txt", renderLlmsFull(await loadReadmes(".", entries)))
   const count = withExports.reduce((sum, item) => sum + item.exports.length, 0)
   const left = withExports.reduce((sum, item) => sum + describesParameters(item.exports).size, 0)
   console.log(
     `wrote llms.txt (${entries.length} entry points, ${count - left} of ${count} exports, ` +
-      `${left} parameter types left out), llms-full.txt`,
+      `${left} parameter types left out)`,
   )
 }
 

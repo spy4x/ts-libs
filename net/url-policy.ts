@@ -28,6 +28,54 @@
  * `@spy4x/net/dns`, which works on Deno, Node and Bun; on Deno a consumer
  * that uses it needs `--allow-net`. Injecting a resolver removes that
  * need; every test in this package does exactly that.
+ *
+ * ```ts
+ * import { validatePublicUrl } from "@spy4x/net/url-policy"
+ *
+ * async function fetchUserSuppliedUrl(userInput: string) {
+ *   const safeUrl = await validatePublicUrl(userInput) // throws on a private/loopback/link-local target
+ *   return fetch(safeUrl)
+ * }
+ * ```
+ *
+ * ## The injectable resolver
+ *
+ * ```ts
+ * import { type DnsResolver, validatePublicUrl } from "@spy4x/net/url-policy"
+ *
+ * export const staticResolver: DnsResolver = {
+ *   resolve: (host) => Promise.resolve(host === "example.com" ? ["93.184.216.34"] : []),
+ * }
+ *
+ * const canonical = await validatePublicUrl("https://example.com/x", { resolver: staticResolver })
+ * ```
+ *
+ * `DnsResolver` is a one-method interface, and it is the only side-effecting part
+ * of the guard. Injecting it is what makes the test suite deterministic and
+ * hermetic — **no test in this package touches the network** — and it is also the
+ * seam for anything the system resolver cannot express:
+ *
+ * - an allow-list (resolve from your own table, never call out);
+ * - a latency bound (`Promise.race` the lookup against your own timeout);
+ * - DNS-over-HTTPS, a cache, or a fixture in a request-handling test.
+ *
+ * `defaultResolver` is the production implementation: it asks `resolveDns`
+ * for A and AAAA in parallel and returns both sets, so **every family that answers
+ * is checked**. It distinguishes the two ways a lookup can come back empty:
+ *
+ * - **NODATA** (`Deno.errors.NotFound` on Deno, `ENODATA` or `ENOTFOUND` on Node
+ *   and Bun, an empty list from `resolveDns`) means the name
+ *   exists but has no record of that type. That is a legitimate empty family and
+ *   it is tolerated — most of the public web is A-only, and refusing those hosts
+ *   would make the guard useless as a default.
+ * - **Any other error** (SERVFAIL, timeout, refused, malformed reply) propagates
+ *   and the guard raises `dns_failure`. An _unanswerable_ family is unverifiable,
+ *   and unverifiable must never be read as safe.
+ *
+ * A host that answers neither family propagates as NODATA and is refused: "no
+ * records at all" is not a routable destination. An empty family is not a bypass —
+ * the family that does answer is still checked for routability.
+ *
  * @module
  */
 
@@ -320,7 +368,7 @@ const NON_PUBLIC_IPV4_RANGES: readonly string[] = [
  * `--deny-net` does close it, because Deno applies it at connect time, against
  * the address the connection is actually going to. Start the process with these
  * denied and a rebind lands on a refused connection instead of on the internal
- * service — see `denyNetFlag()` and the README.
+ * service — see `denyNetFlag()`.
  *
  * **What this layer cannot cover.** Deno 2.9.7 takes a CIDR range for IPv4 but
  * not for IPv6: `--deny-net=fc00::/7` stops the process from starting at all
@@ -334,7 +382,7 @@ const NON_PUBLIC_IPV4_RANGES: readonly string[] = [
  * either, and `Deno.serve` binds the wildcard address by default, so
  * `0.0.0.0/8` or `0.0.0.0/32` in this list stops the application from starting
  * its own server. A process that never listens can add `0.0.0.0/32` to the flag
- * itself and close it; one that serves cannot, and the README says so plainly.
+ * itself and close it; one that serves cannot.
  *
  * Every address here is one `isPublicAddress` also refuses, which
  * `url-policy.test.ts` checks; the other direction does not hold, and this list

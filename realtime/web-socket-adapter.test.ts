@@ -1,5 +1,5 @@
 /**
- * State mapping and send-refusal for the real `WebSocket` adapter (issue #65, finding 4).
+ * State mapping and send-refusal for the real `WebSocket` adapter.
  *
  * No real `WebSocket` is constructed here — that needs a network permission and a real peer, and is
  * covered end to end by `web-socket-adapter.integration.test.ts`. What is pinned here is the bug the

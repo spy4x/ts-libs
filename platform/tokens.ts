@@ -1,20 +1,13 @@
-// Token primitives: monotonic ULIDs, opaque tokens, constant-time compare.
-//
-// Ported from `mig/lib/tokens.ts` (62 LOC). Two behaviour changes at extraction time, plus a third
-// once `@std/ulid` joined the root import map:
-//
-// 1. The secret is validated. The source hashed `raw + secret` with no check
-//    (`tokens.ts:42`), so a missing secret silently hashed against the string
-//    `"undefined"` — a fail-open. See `newOpaqueToken`.
-// 2. Callers must never compare signatures with `!==`. The source's compare was
-//    constant-time already (`tokens.ts:55-62`), but the equivalent in an earlier
-//    internal project is a plain `sigB64 !== expectedSig`.
-//    `verifyOpaqueToken` therefore routes through `constantTimeEquals`, and
-//    `tokens.test.ts` asserts that call site so the mistake cannot come back.
-// 3. ULID generation is `@std/ulid`'s `monotonicUlid`, not a hand-written encoder. The encoder
-//    existed only because `@std/ulid` was missing from the root import map; issue #70 added the
-//    pin, and "own the small, keep the huge" means a hand-rolled ULID stops being the right call
-//    once the stdlib package is pinned.
+/**
+ * Token primitives: monotonic ULIDs, opaque tokens, constant-time compare.
+ *
+ * `newOpaqueToken` refuses a missing or unusable secret, so a token is never hashed against an
+ * empty or `"undefined"` secret. `verifyOpaqueToken` compares through `constantTimeEquals`, never
+ * `!==`, because a byte-by-byte compare is a timing oracle. ULIDs come from `@std/ulid`'s
+ * `monotonicUlid`.
+ *
+ * @module
+ */
 
 import { encodeBase64Url } from "@std/encoding/base64url"
 import { encodeHex } from "@std/encoding/hex"
@@ -188,7 +181,7 @@ const DERIVE_SECRET_SALT = "spy4x.derive-secret.v1"
  * Use one label per purpose (`cookie`, `csrf`) so a single configured secret yields independent
  * keys; leaking one derived value does not reveal the master or the others. HKDF, not a plain
  * HMAC of the label, so a derived key never equals a signature the app makes with the master
- * secret, such as a signed cookie whose value is the label (#322). The master secret is held to
+ * secret, such as a signed cookie whose value is the label. The master secret is held to
  * the same floor as every other secret here.
  *
  * Changed in 1.21.0: earlier releases returned `HMAC-SHA-256(secret, label)`. Every derived key
@@ -239,8 +232,7 @@ export function randomBase64Url(bytes: number = DEFAULT_TOKEN_BYTES): string {
  * Mints an opaque token: `raw` goes to the caller, `hash` is what the server
  * stores.
  *
- * The construction is the source's, unchanged: `hash = sha256Hex(raw + secret)`
- * (`tokens.ts:38-44`). Tradeoff, recorded deliberately: HMAC-SHA-256 with the
+ * The construction is `hash = sha256Hex(raw + secret)`. Tradeoff: HMAC-SHA-256 with the
  * secret as key is the stronger construction, but the stored value carries no
  * algorithm or version marker, so switching it would silently invalidate every
  * hash already in the database — all links would stop working with no
@@ -263,8 +255,7 @@ export async function newOpaqueToken(secret: string): Promise<{ raw: string; has
 
 /**
  * Recomputes `sha256Hex(raw + secret)` and compares it to the stored hash via
- * `constantTimeEquals` — never `===`, never `!==` (the shape that made an earlier
- * internal project's compare timing-unsafe).
+ * `constantTimeEquals` — never `===` or `!==`, which leak timing.
  *
  * Returns `false` for every malformed input rather than throwing: a wrong raw
  * token, a wrong secret, an empty, truncated, upper-case, non-hex or unusual

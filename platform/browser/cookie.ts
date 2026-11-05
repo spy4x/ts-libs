@@ -13,6 +13,13 @@
  *    identifier throws in a runtime with no global `document`, even when the caller passes nothing.
  *    The real global is read only inside the function body, and only when the caller passed none,
  *    the same shape `download.ts`'s `downloadResponseAsFile` uses for its own `document` parameter.
+ *
+ * `browser/cookie` fixes two bugs in the `getCookie` copies apps carried before it had a home here: it
+ * splits `document.cookie` instead of building a `RegExp` from the cookie name (a name containing `.`
+ * or `[` no longer over-matches or crashes), and it returns `null` when there is no `document` instead
+ * of throwing.
+ *
+ * @module
  */
 
 /**

@@ -1,4 +1,4 @@
-// Writes `docs/social-preview.png` (#235): the 1280×640 card GitHub shows when someone shares a
+// Writes `docs/social-preview.png`: the 1280×640 card GitHub shows when someone shares a
 // link to the repository. Run with `deno task social-preview`, then upload the file by hand in
 // Settings → General → Social preview; GitHub has no API for that upload.
 //

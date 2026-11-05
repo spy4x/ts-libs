@@ -21,6 +21,89 @@
  * forward, so a task due at 02:30 is not lost on that day.
  *
  * Runs in the browser and on the server: web-platform APIs only, no `Deno.*`, no dependencies.
+ *
+ * `time/rrule` computes the next occurrence of an `RRULE` for the subset Tasks.org writes, and refuses
+ * the rest by name so an app can say "complete this one in Tasks.org" instead of guessing.
+ *
+ * ```ts
+ * import { IcalDateKind } from "@spy4x/time/ical"
+ * import { describeRrule, formatRrule, nextOccurrence, parseRrule } from "@spy4x/time/rrule"
+ *
+ * const parsed = parseRrule("RRULE:FREQ=WEEKLY;INTERVAL=2;BYDAY=MO,TH")
+ * if (!parsed.success) throw new Error(`${parsed.error.code} ${parsed.error.part}`) // BYSETPOS, …
+ * describeRrule(parsed.output) // "Every 2 weeks on Mon, Thu"
+ * // Write a rule back, e.g. from an editor: the value for `TaskEdit.repeatRule`.
+ * formatRrule(parsed.output) // { success: true, output: "FREQ=WEEKLY;INTERVAL=2;BYDAY=MO,TH", … }
+ * // Complete a repeating task like Tasks.org: the due date is both `start` and `after`.
+ * const due = {
+ *   kind: IcalDateKind.Zoned,
+ *   date: "2026-03-26",
+ *   time: "09:00:00",
+ *   tzid: "Europe/Berlin",
+ * }
+ * const next = nextOccurrence(parsed.output, { start: due, after: new Date("2026-03-26T08:00:00Z") })
+ * // next.output: an IcalDateValue of the start's kind, or null once COUNT or UNTIL is used up
+ * ```
+ *
+ * - **Subset.** `FREQ` DAILY, WEEKLY, MONTHLY, YEARLY; `INTERVAL`; `BYDAY` for WEEKLY and MONTHLY
+ *   (ordinals such as `2MO`, `-1FR` for MONTHLY); `BYMONTHDAY`; `BYMONTH`; `COUNT`; `UNTIL`; `WKST`. Anything else (`BYSETPOS`, `BYHOUR`,
+ *   `FREQ=HOURLY`, `X-` parts) is `RruleErrorCode.Unsupported` with `error.part` naming it.
+ * - **Completing a task as Tasks.org does.** Pass the task's due date as both `start` and `after`,
+ *   even when the task is overdue; DTSTART is ignored. The caller lowers `COUNT` by one per
+ *   completion and the series stops at 1. For a task that counts from completion, `completeTodo`
+ *   passes the completion day in place of the due date.
+ * - **Month ends.** A plain monthly rule (no `BYDAY`, no `BYMONTH`, no `BYMONTHDAY` or one positive
+ *   day) is anchored on that day, or on the start's day, and uses the month's last day when a month
+ *   is shorter than the anchor, as Tasks.org does: 31 January is followed by 28 February. Like
+ *   Tasks.org, when the month `INTERVAL` months after the start is too short for the anchor, its
+ *   last day comes next even if the anchor is still ahead in the start's month: `BYMONTHDAY=31` from
+ *   15 January gives 28 February, not 31 January. Every other rule skips a missing day
+ *   (RFC 5545 section 3.3.10): yearly on 29 February waits for the next leap year, and
+ *   `BYMONTHDAY=30,31` jumps from January to March.
+ * - **Refused for Tasks.org parity.** `BYDAY` with DAILY or YEARLY, because Tasks.org deletes it
+ *   there and no answer of ours could match.
+ * - **Clock changes.** Occurrences keep the start's wall clock. A time a zone skips (spring forward)
+ *   keeps its date and wall clock; a time it repeats (fall back) occurs once, at its first reading.
+ * - **Month end as RFC 5545 says.** `monthEnd: RruleMonthEnd.Skip` (in `nextOccurrence` and
+ *   `occurrencesBetween`) turns the Tasks.org clipping off: monthly on day 31 then skips February,
+ *   April and June. The default is `RruleMonthEnd.Clip`.
+ *
+ * ## Occurrences in a range
+ *
+ * `occurrencesBetween` lists every occurrence from `from` to `to`, both included, in order. It walks
+ * the same steps as `nextOccurrence`, so the two never disagree. A range with more than `limit`
+ * occurrences (default 1,000) is `RruleErrorCode.SearchLimit`, never a cut list.
+ *
+ * ```ts
+ * import { occurrencesBetween, RruleMonthEnd } from "@spy4x/time/rrule"
+ *
+ * const month31 = parseRrule("FREQ=MONTHLY;BYMONTHDAY=31")
+ * if (!month31.success) throw new Error(month31.error.message)
+ * occurrencesBetween(month31.output, {
+ *   start: { kind: IcalDateKind.Date, date: "2026-01-31" },
+ *   from: new Date("2026-01-01T00:00:00Z"),
+ *   to: new Date("2026-06-30T23:59:59Z"),
+ *   monthEnd: RruleMonthEnd.Skip,
+ * }) // 31 January, 31 March, 31 May
+ * ```
+ *
+ * ## Labels in nine languages
+ *
+ * `describeRrule(rule)` writes English. `describeRrule(rule, words)` takes a translator of the
+ * `@spy4x/platform/universal/i18n` shape built from the catalogs in `@spy4x/time/rrule-words/<lang>`
+ * (`en`, `ru`, `es`, `de`, `pt-BR`, `ar`, `fr`, `ja`, `zh-CN`). Weekday, month and date names come
+ * from `Intl` in the translator's language, lists from `Intl.ListFormat`, and counts use the
+ * language's plural forms.
+ *
+ * ```ts
+ * import { createTranslator } from "@spy4x/platform/universal/i18n"
+ * import en from "@spy4x/time/rrule-words/en"
+ * import ru from "@spy4x/time/rrule-words/ru"
+ *
+ * const words = createTranslator({ language: "ru", catalogs: [{ source: en, translation: ru }] })
+ * describeRrule(parseRrule("FREQ=MONTHLY;BYDAY=-1FR").output!, words) // "Ежемесячно: последняя пятница"
+ * ```
+ *
  * @module
  */
 

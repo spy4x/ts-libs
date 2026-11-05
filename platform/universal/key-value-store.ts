@@ -1,7 +1,14 @@
 /**
+ * The `KeyValueStore` port, on a subpath of its own so a consumer can import it without the bare
+ * `@spy4x/platform` specifier, which also pulls in `@spy4x/validation`.
+ *
+ * @module
+ */
+
+/**
  * Minimal synchronous key/value port: the subset of the DOM `Storage` interface a caller needs to
  * persist a small value, and the one shape `@spy4x/platform/browser/storage`'s `StorageLike` and
- * `@spy4x/realtime`'s `KeyValueStore` both alias (#71). No import here on purpose — a package with
+ * `@spy4x/realtime`'s `KeyValueStore` both alias. No import here on purpose — a package with
  * a KeyValueStore-shaped dependency (browser storage, a realtime cursor, a server-side fallback)
  * pulls in nothing but this file.
  */

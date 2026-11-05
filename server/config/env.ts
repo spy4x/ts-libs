@@ -1,20 +1,11 @@
 /**
  * Reading environment values without touching the process environment at import time.
  *
- * Ported from this repository's own `ops/env.ts`, removed from the tree in #67
- * (`git log --all --oneline -- ops/env.ts`), trimmed to the environment-reading primitive:
- * `absPath`, `substituteEnvVars` and `rewriteEnvValues` were `ops`-specific deploy-templating
- * helpers, not part of "environment to typed config", and are not ported here.
- *
  * **An empty string counts as unset, everywhere in this module.** A placeholder that expanded to
  * nothing (`${VAR}` with no value, a blank line in a `.env` file) is indistinguishable from a real
  * empty string once it reaches the process environment, and treating it as "present" would let a
- * broken deploy script configure a service with `""` instead of failing at start-up. The source
- * file normalised this inconsistently — `systemEnv.get` returned a real blank value unchanged,
- * while `createEnvReader` (the one path any of its own tests exercised) folded it to `undefined` —
- * so a variable that was genuinely blank in production behaved differently from the same case
- * under test. Fixed here by normalising in both readers, at the one boundary every caller goes
- * through.
+ * broken deploy script configure a service with `""` instead of failing at start-up. Both readers
+ * normalise it, so a blank variable behaves the same in production and under test.
  *
  * @module
  */
@@ -24,7 +15,7 @@
  *
  * The same shape as `EnvReader` in `@spy4x/platform/server/process`, so a reader from either
  * package fits wherever the other is expected. It is declared here, not imported, because this
- * file imports nothing (#443): `@spy4x/server/config/env` pulls in no other package.
+ * file imports nothing: `@spy4x/server/config/env` pulls in no other package.
  */
 export interface EnvReader {
   /** Value of `name`, or `undefined` when unset or blank. */
@@ -47,7 +38,7 @@ function blankToUndefined(value: string | undefined): string | undefined {
  * The process environment, read on each call and never at module scope: `Deno.env` on Deno,
  * `process.env` on Node and Bun. The lookup is written here rather than imported from
  * `@spy4x/platform/server/process`, whose `processEnv` does the same, because this file imports
- * nothing (#443).
+ * nothing.
  *
  * @throws {Error} From `get`, on a runtime with neither (a browser).
  */

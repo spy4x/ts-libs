@@ -530,9 +530,8 @@ describe("NtfyClient.push", () => {
 
   it("gives two default-configured clients different delays under the settings that ship", async () => {
     // No `retry` override and no injected `random`: exactly what a caller who
-    // configures nothing gets. This is the test #68 asks for — "at least one
-    // retry test runs with the shipped delay settings, and two processes do
-    // not get identical delays" — and it is what makes DEFAULT_RETRY's
+    // configures nothing gets. At least one retry test runs with the shipped
+    // delay settings, and two processes do not get identical delays; it is what makes DEFAULT_RETRY's
     // jitterRatio: 0.2 matter, rather than only the mechanism being capable of
     // randomness. `sleep`/`clock` are still injected so the test never waits
     // on wall-clock time; only the randomness is real.

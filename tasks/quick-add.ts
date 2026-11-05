@@ -11,6 +11,11 @@
  *   timeZone: "Europe/Berlin",
  * })
  * ```
+ *
+ * `parseQuickAdd` takes the line a person types and the current moment and time zone. It returns the
+ * title without its tokens, the `#tags`, the `@contexts`, a due date, a priority, and the position of
+ * every recognised token, so a field can highlight them as the person types.
+ *
  * @module
  */
 export * from "@spy4x/platform/universal/quick-add"

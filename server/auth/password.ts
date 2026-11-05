@@ -1,8 +1,7 @@
 /**
- * Sign-in with an email address and a password, built on `AuthStore` and `SessionManager` (#57).
+ * Sign-in with an email address and a password, built on `AuthStore` and `SessionManager`.
  *
- * Written from the rules in issue #57, not moved from the earlier `providers/email-password.ts`. The
- * rules this file carries:
+ * The rules this file carries:
  *
  * - **Sign-in takes the same work as an account whose hash the current hasher made, whether or not
  *   the account exists.** A missing account is checked against a fixed dummy hash made once when
@@ -17,7 +16,7 @@
  * - **Password sign-up does not prove the address.** The key starts unproven. Sign-up is refused
  *   when another user owns the address, and a completed reset proves it, taking it away from
  *   whoever registered it first. To keep the account, the signed-in user proves the address with
- *   `requestVerification` and `completeVerification` (#149), or with `proveAddress` of the
+ *   `requestVerification` and `completeVerification`, or with `proveAddress` of the
  *   email-code provider (`@spy4x/server/auth/email-code`). Either makes the user the address's
  *   owner, so a later reset keeps the same user.
  * - **Create before revoke.** A password change or reset stores the new secret and creates the new
@@ -25,6 +24,166 @@
  *   person signed out with the old password still working.
  *
  * This provider sends no mail. `requestReset` returns the code, and the app delivers it.
+ *
+ * `createPasswordSignIn`, `PasswordSignInError`, `PasswordSignInFailure`, `PASSWORD_METHOD`,
+ * `PASSWORD_RESET_PURPOSE`, `PASSWORD_VERIFY_PURPOSE`, `DEFAULT_MIN_PASSWORD_LENGTH`, `DEFAULT_RESET_TTL_MINUTES`,
+ * `DEFAULT_MAX_RESET_ATTEMPTS`, and the input and option interfaces.
+ *
+ * Sign-up, sign-in, password change and password reset with an address and a password, on the
+ * `server/auth` store and the `server/sign-in` session manager and hasher. Every refusal is thrown as a
+ * `PasswordSignInError` whose `reason` names it.
+ *
+ * The hasher also works on its own:
+ *
+ * ```ts
+ * import { createPasswordHasher } from "@spy4x/server/sign-in"
+ *
+ * const hasher = createPasswordHasher({ pepper: Deno.env.get("PASSWORD_PEPPER") ?? "" })
+ * const hash = await hasher.hash("correct horse battery staple")
+ * const check = await hasher.verify("correct horse battery staple", hash)
+ * ```
+ *
+ * ```ts
+ * import { createPasswordHasher } from "@spy4x/server/sign-in"
+ * import { createPasswordSignIn } from "@spy4x/server/auth/password"
+ *
+ * const passwords = createPasswordSignIn({
+ *   store,
+ *   sessions,
+ *   hasher: createPasswordHasher({ pepper: Deno.env.get("PASSWORD_PEPPER") ?? "" }),
+ * })
+ *
+ * const { user } = await passwords.signUp({ email, password })
+ * const verification = await passwords.requestVerification({ userId: user.id })
+ * // The app mails verification.code to verification.email; the signed-in user sends it back:
+ * await passwords.completeVerification({ userId: sessionUserId, code: typedCode })
+ *
+ * const { session } = await passwords.signIn({ email, password })
+ * const reset = await passwords.requestReset({ email }) // the app mails reset.code to reset.email
+ * ```
+ *
+ * ## What it does
+ *
+ * **Sign-in costs the same whether or not the account exists.** A dummy hash is made once, when the
+ * provider is created, with the same hasher. Every `signIn` runs exactly one `verify`: against the
+ * key's hash, or against the dummy one when there is no key or the address is malformed. A wrong
+ * password, a missing account, a malformed address and a deleted user all answer
+ * `invalid-credentials`. A legacy or lower-iteration hash still verifies faster than the dummy until
+ * its first successful sign-in, which rehashes it.
+ *
+ * **`checkCredentials` is `signIn` without the session.** It runs the same single verification, gives
+ * the same refusals and the same rehash, and returns the user and key. An app that must write rows of
+ * its own together with the session (an audit row, a last-login time) checks the password first, then
+ * creates the session with `SessionManager.create` inside its own transaction, so a failed row also
+ * undoes the session. The hash is verified before the transaction begins, so no connection is held for
+ * the length of a hash. It does not call `secondFactorFor`: the caller works out the session's
+ * second-factor status itself, as `signIn` would, and sets the cookie only after the transaction
+ * commits. Passing `SecondFactorStatus.NotRequired` for a user who needs a second factor skips the
+ * second factor.
+ *
+ * **Sign-up does not prove the address; the verification step does.** The key starts unproven, with
+ * `email` equal to its subject, the normalised address. Sign-up is refused as `email-taken` when
+ * another user owns the address or a password key for it already exists. Follow every sign-up with the
+ * verification step: `requestVerification({ userId })` returns a code for the app to mail to the
+ * key's address, and `completeVerification({ userId, code })` checks it and proves the key with
+ * `AuthStore.proveKey`. The user keeps their id, password and sessions, and becomes the address's
+ * owner. Take `userId` from a validated session. The code is bound to that user and that address, is
+ * never a reset code, and uses the reset code's lifetime and the `maxResetAttempts` guess limit. `requestVerification`
+ * returns null when the key is already proven. The email-code provider's `requestCode` and
+ * `proveAddress` (see `server/auth/email-code`) prove the address the same way.
+ *
+ * **Without the verification step, a reset moves the person to a new, empty account.** A reset proves
+ * the address, and an unproven key loses to that proof (branch 3 below): the password lands on a new
+ * user, the old user keeps its id but no keys, and every app row keyed by that id is out of reach.
+ *
+ * **Sign in by a username with `normalizeSubject`.** The option turns the `email` field of
+ * `signUp` and `signIn` into the key's subject, or refuses it by returning null; it defaults to
+ * `normalizeEmail`, so an address-based provider behaves exactly as before. A custom subject gets the
+ * same dummy-hash verification and rehash as an address. A refused subject answers `invalid-email` at
+ * sign-up and `invalid-credentials` at sign-in, and a subject in use answers `email-taken`. The key
+ * is written with `email: null`, so it never owns, proves or evicts an address, even when the
+ * username looks like one. `requestReset` and `completeReset` throw a plain `Error` in this mode,
+ * because they mail the subject; `changePassword` works as usual.
+ *
+ * Use one normaliser per store. Username keys and address keys share the `password` method and so one
+ * subject namespace: a username shaped like an address (`ann@example.com` taken as a username) blocks
+ * that address's password sign-up (`email-taken`) and reset (`conflict`) for good, because the username
+ * key carries no `email` and proving the address never evicts it. The normaliser must not throw: a
+ * throw rejects `signIn` before its one hash verification, so that subject answers faster than a wrong
+ * password.
+ *
+ * ```ts
+ * const passwords = createPasswordSignIn({
+ *   store,
+ *   sessions,
+ *   hasher,
+ *   normalizeSubject: (raw) => {
+ *     if (typeof raw !== "string") return null
+ *     const username = raw.trim().toLowerCase()
+ *     return [...username].length >= 1 && [...username].length <= 50 ? username : null
+ *   },
+ * })
+ * await passwords.signIn({ email: username, password })
+ * ```
+ *
+ * **Create before revoke.** `changePassword` (which checks the current password) and `completeReset`
+ * store the new secret, then create the new session, and only then sign out the user's other sessions.
+ * A failure part-way never leaves the person signed out while the old password still works. The
+ * caller replaces its cookie with the returned session's.
+ *
+ * **Changing the password without signing anyone out.** `changePassword({ ..., keepSessions: true })`
+ * runs the same two checks in the same order (the new password's length, then the current password),
+ * stores the new secret and touches no session: none is created and none is signed out, and it
+ * returns `{ user, key }` with no session. It is for a person who chose to stay signed in on their
+ * other devices. Whoever holds a session of that user keeps it, so offer it only as an explicit
+ * choice and keep the default for a password changed because it may have leaked. Only the literal
+ * `true` keeps the sessions.
+ *
+ * **The device of a new session.** `signUp`, `signIn`, `changePassword` and `completeReset` take an
+ * optional `device: { deviceName, ipHint }` and record it on the session they create, for the list of
+ * signed-in devices (see `server/sign-in`).
+ *
+ * **A reset hands the address to whoever receives the code.** `requestReset` issues a code for every
+ * valid address, whether or not an account uses it, and returns it for the app to deliver: 32 random
+ * bytes, of which only the SHA-256 is stored, valid 30 minutes by default. Every request opens a
+ * challenge of its own, keyed by a digest of the address and the code, and leaves earlier codes as they
+ * were, so a stranger who asks for codes for someone's address, or guesses wrong, can neither replace
+ * nor lock the code that person received.
+ * `completeReset` checks the new password before it spends a guess, then, on a matching code, takes
+ * one of three branches:
+ *
+ * 1. The password key's own user owns the address: the key is kept, proven if it was not, and given
+ *    the new secret.
+ * 2. Another user owns the address: a proven password key is added to that owner, and the proven
+ *    insert deletes the unproven claim in the same write.
+ * 3. Nobody owns the address: a new user is created with a proven password key, which deletes the
+ *    unproven claim the same way.
+ *
+ * So the `user` a reset returns can differ from the one that held the key. A matching code with no
+ * password key for the address, or whose account is deleted, answers `no-account`, which only the
+ * person who received the code learns. A write that raced the reset answers `conflict`; the code is
+ * used by then, so the person asks for a new one.
+ *
+ * ## What it does not do
+ *
+ * - **It does not send mail.** `requestReset` returns the code; the app sends it.
+ * - **It does not limit guesses per account or per client.** A verification code allows its own few
+ *   guesses and a reset code cannot be guessed, but nothing limits how often codes are asked for or passwords tried. Put
+ *   `@spy4x/platform/rate-limit` in front of every route that calls this provider.
+ * - **It does not hide an address in use at sign-up.** `email-taken` tells the caller; a reset is the
+ *   way in for the address's owner.
+ * - **It cannot tell a squatter from a person who never proved their own sign-up.** Both lose an
+ *   unproven account to a reset by branch 2 or 3, and to a code sign-in with `verifyCode`. Prove the
+ *   address after sign-up with `requestVerification` and `completeVerification`, or with the
+ *   email-code provider's `proveAddress`, to keep it.
+ * - **It does not limit how often a verification code is asked for.** Every `requestVerification`
+ *   call is a mail; rate-limit its route like the reset route.
+ * - **It cancels the address's other reset codes only with a store that can.** Once a code matches,
+ *   the provider deletes the address's other reset codes through the store's optional
+ *   `deleteChallenges`, which both stores of this package have. A store of your own without it leaves
+ *   every other unexpired code for that address working until it expires (`resetTtlMinutes`), so keep
+ *   the lifetime short. Codes issued by 1.82 or earlier still work after the upgrade, until they
+ *   expire, and are not cancelled.
  *
  * @module
  */
@@ -49,7 +208,7 @@ export const PASSWORD_METHOD = "password"
 /** The challenge purpose of a password-reset code. */
 export const PASSWORD_RESET_PURPOSE = "password-reset"
 
-/** The challenge purpose of an address-verification code (#149). */
+/** The challenge purpose of an address-verification code. */
 export const PASSWORD_VERIFY_PURPOSE = "password-verify"
 
 /** Shortest new password accepted by default, in characters (code points). */

@@ -70,32 +70,17 @@ function isHeaderNamePadding(code: number): boolean {
  * header **name**, before {@link selectSignedHeaders} and
  * {@link refuseSignatureHeader} compare it against a name in `h=`.
  *
- * The previous version of this comparison trimmed an explicit byte set
- * — space, tab, vertical tab, form feed and U+00A0 — copied from what
- * `String.prototype.trim()` stripped on `main` before this file could handle
- * raw octets. That set was narrower than `trim()`'s own Unicode whitespace
- * list, which also strips U+FEFF, U+1680, U+2000-U+200A, U+2028, U+2029,
- * U+202F, U+205F and U+3000 — each several bytes in UTF-8, none in the old
- * set — so a genuine signed mail with, for instance, `From` followed by
- * U+00A0 (a no-break space, still one of `trim()`'s own characters) and then
- * the colon, placed above it, verified here and was refused on `main`: the
- * guard's name match had shrunk, the opposite of what widening it to handle
- * bytes was supposed to do. Review of this pull request found it does not go
- * far enough either: a control character (U+0000-U+001F, U+007F), U+0085 or a
- * zero-width space (U+200B) before the colon verifies on `main` too (issue
- * #106) — `trim()` never stripped any of those, so the byte set inherited
- * from it never could either.
- *
- * Stripping everything *outside* printable ASCII, rather than enumerating
- * more characters to strip, closes both at once and cannot regress again the
- * same way: RFC 5322's `ftext` restricts a genuine field name to exactly this
+ * An enumerated set of whitespace to strip always misses some: Unicode
+ * spaces such as U+00A0 or U+3000, a control character, U+0085 or a
+ * zero-width space (U+200B) before the colon would let a disguised name
+ * through. Stripping everything *outside* printable ASCII closes all of
+ * them at once: RFC 5322's `ftext` restricts a genuine field name to exactly this
  * range already (`HEADER_NAME_RE`), so every character this now strips is one
  * no conformant sender's field name would contain in the first place, and
  * removing it can only ever make a disguised name easier to recognise as the
  * name it is disguising.
  *
- * This also means CR and LF are stripped now, unlike the narrower set before
- * — and that is load-bearing, not incidental. RFC 5322 does not let a field
+ * This also means CR and LF are stripped, and that is load-bearing. RFC 5322 does not let a field
  * name fold before its own colon — the obsolete syntax it does allow there is
  * plain spaces and tabs, `obs-from = "From" *WSP ":"` — but §2.2.3 defines
  * unfolding as deleting every CRLF that is immediately followed by WSP,
@@ -124,7 +109,7 @@ export function trimHeaderName(value: string): string {
  * The name an already end-trimmed header name ({@link trimHeaderName}) reads
  * as, to a mail program that is lenient about a padding byte
  * ({@link isHeaderNamePadding}) sitting *inside* the name rather than at an
- * end (issue #113, the inside-the-name half of #106), if that reading is one
+ * end, if that reading is one
  * of `targets` (each already lowercase). Returns the matched target, or
  * `undefined`.
  *
@@ -159,11 +144,8 @@ export function trimHeaderName(value: string): string {
  * A candidate is only ever compared against `targets`, so an unrelated,
  * unsigned field's own disguised name never matches anything — but a plain
  * field whose name simply *starts* with a signed name and then a padding
- * byte, `Subject Line:` or `To Name:`, now matches at the first run (the
- * space), the same as it would have matched the old truncate-only reading:
- * this is not a new trade, only a more visible one, since issue #113's own
- * table already lists `Fr om:` as a shape a lenient reader could take for
- * `From`.
+ * byte, `Subject Line:` or `To Name:`, matches at the first run (the
+ * space): a lenient reader could take `Fr om:` for `From` too.
  */
 function looseHeaderNameMatch(
   trimmedName: string,
@@ -224,7 +206,7 @@ export function headerNameMatches(rawName: string, target: string): boolean {
  * adds on the way and a forwarded message therefore always has more of. It
  * also throws when a header line's name is not `h=`-asked-for as written but
  * a lenient mail program could still read it as one ({@link
- * looseHeaderNameMatch}, issue #113): such a line is never selected by the
+ * looseHeaderNameMatch}): such a line is never selected by the
  * bottom-up pairing above — it sits in its own bucket, under its own literal
  * name — so it is always an instance beyond what the signer signed, for
  * every name it disguises as that `h=` actually lists. Unlike the leftover
@@ -289,7 +271,7 @@ export function selectSignedHeaders(
     throw new DkimParseError(`unsigned additional instances of a signed header: ${name}`)
   }
 
-  // #113: a header line whose end-trimmed name is not itself asked for can
+  // A header line whose end-trimmed name is not itself asked for can
   // still disguise as one that is, by a padding byte sitting inside the name
   // rather than at an end. Such a line was bucketed above under its own
   // literal (undisguised) name and so never took part in the pairing or the

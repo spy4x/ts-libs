@@ -14,6 +14,13 @@
  * container running `TZ=UTC` still names the file for the server's day, not the
  * user's; only taking the user's timezone as input would fix that.
  *
+ * `buildExportEnvelope`, `EXPORT_VERSION`, `exportFileName`, `formatLocalDate`,
+ * `exportDownloadHeaders`, `exportDownloadResponse`.
+ *
+ * Repository-agnostic: the caller supplies the user value and one `{ name, load }` per collection. The
+ * filename uses the **local** calendar day, not `toISOString().slice(0, 10)`, which named an export for
+ * a day the user was not on.
+ *
  * @module
  */
 

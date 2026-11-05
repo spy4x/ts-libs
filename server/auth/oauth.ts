@@ -1,8 +1,7 @@
 /**
  * Sign-in with an OAuth2 / OpenID Connect provider (Google, or any provider the app configures).
  *
- * Written from the rules in issue #57, finding 2, not moved from the earlier
- * `providers/oauth2.ts`. The rules this file carries:
+ * The rules this file carries:
  *
  * - An existing key is matched by the provider's own user id (`sub`), never by email. The key's
  *   `method` is `oauth:<provider id>` and its `subject` is the `sub`, looked up with `findKey`. An
@@ -30,6 +29,203 @@
  * Pending flows live in an {@link OAuthFlowStore}. The default keeps them in memory inside the
  * object {@link createOAuthSignIn} returns, so a callback must reach the same process that built
  * the authorization URL; pass {@link OAuthSignInOptions.flows} to share them between processes.
+ *
+ * `createOAuthSignIn`, `OAuthSignInError`, `OAuthFailure`, `OAuthOutcome`, `OAuthProviderConfig`,
+ * `OAuthProfile`, `OAuthProfileContext`, `ConfirmableOAuthSignIn`, `ConfirmableOAuthSignInOptions`,
+ * `OAuthPendingSignUp`, `OAuthConnectCallbackInput`, `OAuthConnectResult`, `pkceChallenge`, `MAX_PENDING_OAUTH_FLOWS`,
+ * `MAX_OAUTH_NAME_LENGTH`, `MAX_OAUTH_AVATAR_URL_LENGTH`, the flow stores
+ * (`createMemoryOAuthFlowStore`, `createKvOAuthFlowStore`, `OAuthFlowStore`, `OAuthFlowKv`,
+ * `OAuthPendingFlow`, `OAuthTakenFlow`, `DEFAULT_OAUTH_FLOW_KEY_PREFIX`), and the option, input and
+ * result interfaces. Google's configuration is `@spy4x/server/auth/oauth-google`:
+ * `createGoogleOAuthProvider`, `readGoogleProfile` and Google's endpoint and default-scope constants.
+ * GitHub's is `@spy4x/server/auth/oauth-github`: `createGitHubOAuthProvider`, `readGitHubUser`,
+ * `readGitHubPrimaryEmail` and GitHub's endpoint and default-scope constants.
+ *
+ * OAuth2 sign-in with any provider that has a user-info endpoint. The provider is configuration,
+ * not an enum: an `id` (lower-case letters, digits and `-`, 1 to 58 characters), the client
+ * credentials, three `https:` endpoints, scopes, and a `profile(body)` function that reads the
+ * user-info answer. A provider whose user-info answer lacks something adds `completeProfile(profile,
+ * { getJson })`, which may send further authenticated `GET`s to `https:` URLs; GitHub's address is
+ * read that way. Refusals are `OAuthSignInError`s with a `reason`.
+ *
+ * ```ts
+ * import { createOAuthSignIn } from "@spy4x/server/auth/oauth"
+ * import { createGoogleOAuthProvider } from "@spy4x/server/auth/oauth-google"
+ *
+ * const google = createOAuthSignIn({
+ *   store,
+ *   sessions,
+ *   redirectUri: "https://app.example.com/auth/google/callback",
+ *   provider: createGoogleOAuthProvider({
+ *     clientId: Deno.env.get("GOOGLE_CLIENT_ID") ?? "",
+ *     clientSecret: Deno.env.get("GOOGLE_CLIENT_SECRET") ?? "",
+ *   }),
+ * })
+ *
+ * const { url, state } = await google.authorizationUrl() // keep `state` in an HttpOnly cookie
+ * // …in the callback route:
+ * const result = await google.handleCallback({ query: callbackUrl.searchParams, browserState })
+ * ```
+ *
+ * ## What it does
+ *
+ * **A person is matched by the provider's `sub`, never by email.** The key's method is
+ * `oauth:<provider id>` and its subject is the `sub`. `handleCallback` resolves the person in this
+ * order, and reports which in `result.outcome`:
+ *
+ * 1. A key with this `sub` exists: its user signs in (`SignedIn`), whatever the address says now.
+ * 2. The provider vouches for the address (`emailVerified`) and a user owns it proven: a proven key is
+ *    added to that user (`Linked`). This is the only way an address links accounts.
+ * 3. The provider vouches for the address and nobody owns it: a new user with a proven key
+ *    (`SignedUp`), which deletes every other user's unproven claim to the address.
+ * 4. Otherwise: a new user whose key carries no address and is unproven (`SignedUp`).
+ *
+ * **Ask before creating an account: `signUp: "confirm"`.** A person who picks the wrong
+ * provider account otherwise gets a silent second account. With this option, a callback that would
+ * reach rule 3 or 4 creates nothing and returns `{ outcome: OAuthOutcome.PendingSignUp, profile,
+ * token, expiresAt }` instead; rules 1 and 2 still complete in the callback. Show the person the
+ * profile, keep `token` server-side or in an HttpOnly cookie, and call `confirmSignUp(token)` when
+ * they choose to create the account. The token is 256 random bits, works once and for 10 minutes, and
+ * only its SHA-256 hash is kept, in the same flow store as started flows (under `sign-up:<method>:`, so a token works only with the
+ * sign-in that issued it, even when several providers share one store). Of
+ * parallel confirmations of one token only one proceeds; the others, and an unknown, used or expired
+ * token, are refused as `invalid-sign-up`. `confirmSignUp` runs the whole resolution again, so a key
+ * or proven address that appeared meanwhile signs in or links instead of creating a duplicate.
+ *
+ * ```ts
+ * const google = createOAuthSignIn({ store, sessions, redirectUri, provider, signUp: "confirm" })
+ * const result = await google.handleCallback({ query, browserState })
+ * if (result.outcome === OAuthOutcome.PendingSignUp) {
+ *   // ask "create a new account for ${result.profile.email}?", then:
+ *   const signedUp = await google.confirmSignUp(result.token)
+ * }
+ * ```
+ *
+ * An address the provider does not vouch for is not stored on the key at all; the app still sees it
+ * in `result.profile`. A deleted user is refused as `user-deleted`, both on sign-in and as a link
+ * target. When a parallel callback or a proof changes what the resolution read, it reads again once; a
+ * second conflict is thrown. `readGoogleProfile` counts only the boolean `email_verified: true`, with
+ * an address present, as vouched for.
+ *
+ * **The person's name and picture, for display only.** A profile may carry `name` and `avatarUrl`, so
+ * an app can show them, for example on its "Create a new account?" page. Google's are `name` and
+ * `picture` (scope `profile`, now in `GOOGLE_DEFAULT_SCOPES`); GitHub's are `name`, or `login` when
+ * the person set no name, and `avatar_url`. Anyone can set both on their provider account, so they
+ * never identify anyone, and `createOAuthSignIn` cleans every profile a provider config or the flow
+ * store returns: the name loses NUL and lone surrogates, is trimmed and cut to
+ * `MAX_OAUTH_NAME_LENGTH` (200), and the avatar is kept only as an absolute `https:` URL without a
+ * user name or password, of at most `MAX_OAUTH_AVATAR_URL_LENGTH` (2048) characters. A field that
+ * does not survive is left out. A pending sign-up keeps both in the flow store, so `confirmSignUp`'s
+ * `result.profile` carries them too. The name is still outside text: escape it where it is shown.
+ *
+ * **GitHub.** `createGitHubOAuthProvider({ clientId, clientSecret })` writes method `oauth:github`
+ * with GitHub's numeric user id, as a decimal string, as the subject. GitHub's `/user` answer carries
+ * only the address the person made public, and does not say whether it is verified, so the address
+ * is read from `/user/emails` (scopes `read:user` and `user:email`). Only the address marked both
+ * `primary` and `verified` is vouched for; any other address is ignored, and without one the person
+ * signs in with no address. A failed `/user/emails` request refuses the sign-in as `profile-failed`.
+ *
+ * **PKCE and a single-use, expiring `state`.** `authorizationUrl()` makes a 256-bit `state` and a
+ * 256-bit verifier and sends the S256 challenge. The flow lives 600 seconds by default
+ * (`flowTtlSeconds`). `handleCallback` needs `browserState`, the `state` the app kept in the browser
+ * that started the flow, and compares it with the query's in constant time, so a flow cannot be
+ * completed in another browser. As soon as the callback names a `state`, its flow is removed: before
+ * the browser check, the expiry check and both provider requests, so a failed callback cannot be
+ * retried with the same `state`.
+ *
+ * **Pending flows live in a flow store, memory by default.** A started flow (its `state` and
+ * PKCE verifier) waits in the `flows` option's store until its callback. The store's `take` reads and
+ * deletes it in one atomic step, so of parallel callbacks with one `state` only one proceeds. `take`
+ * also returns the flow's `expiresAt`, and `handleCallback` checks it again, so a third-party store
+ * that ignores the expiry still cannot complete a stale flow.
+ *
+ * - Leave `flows` unset for one process. The default, `createMemoryOAuthFlowStore`, keeps at most
+ *   `MAX_PENDING_OAUTH_FLOWS` (10 000) flows in the process; expired flows are dropped first, then the
+ *   oldest. A callback must reach the process that built its authorization URL.
+ * - Pass `createKvOAuthFlowStore(kv)` when more than one process serves the callback (several
+ *   replicas behind a load balancer, or a restart during a deploy), or when a flood of started flows
+ *   must not push out other people's. `kv` is a `RedisKvStore` from `server/kv` (Redis 6.2 or later,
+ *   for `GETDEL`), or any client with `set(key, value, ttlSec)` and an atomic `take(key)`. Keys
+ *   go under `oauth-flow:` unless `keyPrefix` names another, non-empty prefix. The flow's expiry is
+ *   stored with it and checked on `take`; the key's time to live only clears flows nobody completed. A
+ *   stored value that is not a flow (not JSON, or no valid PKCE verifier and finite expiry) reads as
+ *   no flow. Every instance that shares a store must use the same provider configuration.
+ *
+ * ```ts
+ * const google = createOAuthSignIn({
+ *   store,
+ *   sessions,
+ *   redirectUri,
+ *   provider,
+ *   flows: createKvOAuthFlowStore(kv),
+ * })
+ * ```
+ *
+ * **Connect a provider to the signed-in user: `connectUrl` and `handleConnectCallback`.** Signing in
+ * links a provider to an account only when the provider vouches for an address the account has
+ * proven. A person whose Google address is not their account's address connects it from their
+ * settings instead. `connectUrl(userId)` starts a flow bound to that user, with the same PKCE pair and
+ * single-use, expiring `state` as a sign-in. `handleConnectCallback({ query, browserState, userId })`
+ * completes it, where `userId` is the user signed in on the callback request:
+ *
+ * - The provider identity is new: its key is added to that user (`Connected`), whatever its address.
+ *   The key carries the address, proven, only when the provider vouches for it and no other user
+ *   owns it proven; otherwise it carries none. A proven address is exclusive, as it is for a
+ *   provider sign-up: when another user holds that address on an unproven key, connecting deletes
+ *   that user's key, and a user whose only key it was is left with none.
+ * - This user already has it: nothing is written (`AlreadyConnected`).
+ * - Another user has it: refused as `identity-taken`, so the app can say "this Google account is
+ *   already connected to another account". Nothing is written.
+ *
+ * It never creates a user and never creates a session: the person stays signed in as they were. A
+ * callback whose `userId` is not the user the flow was started for is refused as `invalid-state`, and
+ * a deleted or unknown user as `user-deleted`. The two kinds of flow do not mix: a connect flow is
+ * kept under `connect:<method>:<state>` and carries the user id, so `handleCallback` refuses its
+ * `state`, and `handleConnectCallback` refuses the `state` of a flow `authorizationUrl()` started,
+ * both as `invalid-state`. Either callback also refuses, before it asks the flow store, a `state`
+ * that is not the 43 base64url characters this module makes, so a crafted `connect:…` or `sign-up:…`
+ * store key is never looked up, whatever fields a third-party store keeps. Both callbacks arrive at the one `redirectUri`, so keep the connect flow's
+ * `state` in a cookie of its own and call the handler whose cookie holds the query's `state`.
+ *
+ * ```ts
+ * // Settings, signed in as `session.userId`:
+ * const { url, state } = await google.connectUrl(session.userId) // `state` → the connect cookie
+ * // …in the callback route, when the connect cookie holds the query's state:
+ * try {
+ *   const { outcome } = await google.handleConnectCallback({
+ *     query,
+ *     browserState: connectCookie,
+ *     userId: session.userId,
+ *   })
+ * } catch (error) {
+ *   if (error instanceof OAuthSignInError && error.reason === "identity-taken") {
+ *     // show "already connected to another account"
+ *   }
+ * }
+ * ```
+ *
+ * **`disconnect(userId, keyId)` deletes one key.** Only when the key exists, belongs to `userId`, and
+ * has this provider's method; any other id returns `false` and deletes nothing. On the Postgres store
+ * the key's sessions end with it, through the cascade.
+ *
+ * **The provider requests are bounded.** Endpoints must be `https:`. The client secret goes in the
+ * token request's form body. Each request has a 10-second limit by default (`timeoutMs`). Every
+ * answer (token, profile and `completeProfile`'s `getJson`) is read with `readBoundedJson` from
+ * `@spy4x/net/bounded-body`: up to 64 KiB, and with the same `timeoutMs` as the longest wait for its
+ * next chunk. An answer that is larger, stalls or is not JSON refuses the step with its own
+ * reason (`token-exchange-failed` or `profile-failed`); a parse failure keeps no `cause`, because the
+ * parser's message quotes the start of the body. A token answer whose `token_type` is present and not
+ * `bearer` is refused. The redirect URI is sent exactly
+ * as given, because providers compare it character by character.
+ *
+ * ## What it does not do
+ *
+ * - **It does not share pending flows between processes by default.** Without the `flows` option,
+ *   a callback must reach the process that built its authorization URL; see the flow store above.
+ * - **It does not verify an ID token or send a `nonce`.** The profile comes from the user-info
+ *   endpoint, called with the access token the token endpoint returned over TLS.
+ * - **It does not update a key's address** when the provider later reports a different one.
+ * - **It does not refuse to disconnect a user's last key.** The app decides whether that is allowed.
  *
  * @module
  */
@@ -159,7 +355,7 @@ export interface OAuthSignInOptions extends ProviderDeps {
   /** Sends the requests to the provider. Defaults to the global `fetch`. */
   fetch?: (request: Request) => Promise<Response>
   /**
-   * Where started flows wait for their callback (#150). Defaults to
+   * Where started flows wait for their callback. Defaults to
    * `createMemoryOAuthFlowStore({ clock })`: in this process, at most
    * {@link MAX_PENDING_OAUTH_FLOWS}. Pass `createKvOAuthFlowStore` on a shared Redis when more than
    * one process serves the callback, or when a flood of started flows must not push out others.
@@ -363,7 +559,7 @@ const DEFAULT_FLOW_TTL_SECONDS = 600
 const DEFAULT_TIMEOUT_MS = 10_000
 /**
  * Most bytes read from one provider answer. A token, profile or address list is a few KiB at most;
- * anything larger refuses the step instead of being buffered (#331).
+ * anything larger refuses the step instead of being buffered.
  */
 const MAX_RESPONSE_BYTES = 64 * 1024
 /** 256 bits each; base64url renders them as 43 characters, the PKCE verifier's minimum length. */

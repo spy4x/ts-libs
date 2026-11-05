@@ -302,7 +302,7 @@ describe("PersistentCursorStore", () => {
   })
 
   it("treats a negative stored cursor as absent instead of restoring it", () => {
-    // #74: the load path (`#ensureLoaded`) already guards `sequence < SEQUENCE_START`, but nothing
+    // The load path (`#ensureLoaded`) already guards `sequence < SEQUENCE_START`, but nothing
     // pinned it — only the non-numeric case above was covered, and a negative number passes
     // `Number.isFinite` on its own. A stored `-1` reaching `CursorTracker.restore` unrejected would
     // resume gap detection from a cursor no real sequence can ever be contiguous with.

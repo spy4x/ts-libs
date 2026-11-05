@@ -19,6 +19,8 @@
  * const result = await saveSettings(preferences, store, userId, await request.json())
  * if (!result.ok && result.reason === "conflict") return Response.json(result.current, { status: 409 })
  * ```
+ *
+ * @module
  */
 
 import { type Type, type } from "arktype"

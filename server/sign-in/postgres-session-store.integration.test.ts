@@ -1,5 +1,5 @@
 /**
- * The `SessionStore` contract against `createPostgresSessionStore` on a real Postgres (#74).
+ * The `SessionStore` contract against `createPostgresSessionStore` on a real Postgres.
  *
  * `session-store.test.ts` runs the same suite against the fake that the sign-in and auth unit tests
  * use, so every rule the fake claims is checked against the store it stands in for. The store

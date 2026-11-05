@@ -1,8 +1,8 @@
 # Third-party material in this folder
 
 This repository is MIT (`LICENSE` at the root, © 2026 Anton Shubin). Two of the fixtures here
-were not written for it, and this note records where they came from and under what terms, which
-issue #62 asked for. `SOURCES.md` describes what each fixture proves; this file is only about
+were not written for it, and this note records where they came from and under what terms.
+`SOURCES.md` describes what each fixture proves; this file is only about
 provenance.
 
 ## Copied from dkimpy
