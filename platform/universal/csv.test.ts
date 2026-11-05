@@ -50,18 +50,15 @@ describe("csvField", () => {
   })
 
   it("prefixes and quotes a cell starting with a line feed", () => {
-    // Bug fixed at extraction time: the source's CELL_START_GUARD_CHARS guarded a leading tab
-    // and carriage return but not a leading line feed, even though the same OWASP guidance and
-    // the same reasoning (a bare control character opening a cell) covers it too. Named here
-    // because preact-components' own ui/csv.ts carries the same gap.
+    // The OWASP guidance that covers a leading tab or carriage return covers a leading line
+    // feed too: a bare control character opening a cell. preact-components' ui/csv.ts misses it.
     expect(csvField("\ncmd")).toBe('"\'\ncmd"')
   })
 
   it("guards a cell starting with the full-width equivalent of =, + or @", () => {
-    // Bug fixed at extraction time: the source only checked the four ASCII formula-lead
-    // characters. A spreadsheet reader that folds full-width Unicode forms to their ASCII
-    // equivalent before evaluating a cell still opens ＝1+1 as a formula, so a guard that only
-    // recognizes = misses it. preact-components' ui/csv.ts has the same gap.
+    // A spreadsheet reader that folds full-width Unicode forms to their ASCII equivalent before
+    // evaluating a cell still opens ＝1+1 as a formula, so a guard that only recognizes = misses
+    // it. preact-components' ui/csv.ts has the same gap.
     expect(csvField("＝1+1")).toBe("'＝1+1")
     expect(csvField("＋1")).toBe("'＋1")
     expect(csvField("－1")).toBe("'－1")
@@ -73,10 +70,8 @@ describe("csvField", () => {
   })
 
   it("looks past a leading space before checking for a formula character at cell start", () => {
-    // Bug fixed at extraction time: Excel and LibreOffice both skip leading whitespace before
-    // deciding whether a cell opens with a formula, so " =1+1" still opens as one even though
-    // the first character is a space, not "=". The source guarded only the exact first
-    // character. preact-components' ui/csv.ts has the same gap.
+    // Excel and LibreOffice both skip leading whitespace before deciding whether a cell opens
+    // with a formula, so " =1+1" still opens as one. preact-components' ui/csv.ts has the same gap.
     expect(csvField(" =1+1")).toBe("' =1+1")
   })
 
@@ -238,12 +233,10 @@ describe("toCsvText", () => {
   })
 
   it("guards and quotes an array a format callback returns, not leaking an extra column", () => {
-    // Bug fixed at extraction time: `format`'s declared return type is `CsvCellValue`
-    // (`string | number | bigint`), but nothing stops a caller from returning an array or an
-    // object at runtime. The source's csvField only guarded `string`, so a value like
-    // ["=1+1", "x"] skipped both the guard and the quoting: `String()`-ed unguarded, it becomes
-    // the unquoted text "=1+1,x", which a reader splits into a live formula in one cell and a
-    // bare "x" leaking into the next. preact-components' ui/csv.ts has the same gap.
+    // `format`'s declared return type is `CsvCellValue`, but nothing stops a caller from
+    // returning an array at runtime. Unguarded, ["=1+1", "x"] becomes the unquoted text
+    // "=1+1,x": a live formula in one cell and a bare "x" leaking into the next.
+    // preact-components' ui/csv.ts has the same gap.
     const risky: CsvColumn<{ link: string }>[] = [
       { key: "link", header: "Link", format: () => ["=1+1", "x"] as unknown as CsvCellValue },
     ]

@@ -98,7 +98,7 @@
  * work, the only gate), `release` (a refund when the work did not happen), `record` (after the work,
  * may overshoot), `check` and `get` (read-only). `QuotaDecision` maps to 200/429/503 through
  * `quotaStatusCode`; `Unavailable` is the service condition (the metered resource is not configured)
- * and is deliberately not the source's `limit === 0` sentinel, because 0 is also a legitimate disabled
+ * and is deliberately not a `limit === 0` sentinel, because 0 is also a legitimate disabled
  * budget. State lives in the injected `QuotaStore`, so two processes share one budget and a restart
  * cannot reset usage. The policy and the recorded count parse through arktype; the failures map to
  * constant messages, because an arktype summary echoes the value.
@@ -759,8 +759,7 @@ export function resolveQuotaPrincipal(
  * needs no stored per-request timestamp, so it stays cheap and auditable at any
  * scale. It is also coarse — a principal can spend `2 * limit` across a
  * boundary, and a burst straddling it is not smoothed. Smoothing is explicitly
- * out of scope: a *sliding* window is a rate limiter concern (`platform/rate-limit`,
- * issue #4), and buying it here would trade a quota's auditability for it.
+ * out of scope: a *sliding* window is a rate limiter concern (`platform/rate-limit`), and buying it here would trade a quota's auditability for it.
  */
 export function quotaKey(principal: QuotaPrincipal, policy: QuotaPolicy, nowMs: number): QuotaKey {
   const kind = principal.kind === QuotaPrincipalKind.User ? "user" : "session"

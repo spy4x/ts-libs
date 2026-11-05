@@ -48,7 +48,7 @@ import { assertNoControlCharacters, isAddress } from "./address.ts"
 export interface EmailAttachment {
   /** Filename as the recipient sees it. Non-ASCII is encoded per RFC 2231 by the transport. */
   filename: string
-  /** Content as UTF-8 text. Binary attachments are out of scope — see the README. */
+  /** Content as UTF-8 text. Binary attachments are out of scope — see `mod.ts`. */
   content: string
   /** MIME content type, e.g. `text/calendar; charset=utf-8; method=REQUEST`. */
   contentType: string
@@ -81,9 +81,8 @@ export interface EmailMessage {
   text?: string
   /**
    * HTML body. **Must already be escaped** — build it with `escapeHtml` and
-   * `htmlWrap` from `@spy4x/email/html`. It is never synthesised from `text`:
-   * `mig` sent `html: opts.html ?? opts.text` on every message, which mailed
-   * plain text as HTML.
+   * `htmlWrap` from `@spy4x/email/html`. It is never synthesised from `text`,
+   * which would mail plain text as HTML.
    */
   html?: string
   /** Attachments, in the order they should appear. Omitted entirely when empty. */
@@ -236,13 +235,12 @@ export function hasBody(value: string | undefined): value is string {
  * Render an instant as the recipient's own clock reads it, with the zone spelled
  * out: `"Friday, 28 August 2026 at 04:00 (America/New_York)"`.
  *
- * This is `mig`'s per-recipient framing — the guest sees the booking in the
+ * Per-recipient framing — the guest sees the booking in the
  * guest's zone, the host in the host's — with the zone name appended so a reader
  * comparing two mails can tell which clock each line means.
  *
- * @throws {RangeError} when `fallbackTz` is not an IANA zone. `mig` handed
- * `validTimeZoneOr`'s fallback straight to `Intl`, which throws a bare
- * `RangeError` from inside a formatter; failing here names the misconfiguration.
+ * @throws {RangeError} when `fallbackTz` is not an IANA zone, naming the
+ * misconfiguration rather than letting a formatter throw a bare `RangeError`.
  */
 export function frameInstantLong(
   instant: Date,

@@ -32,7 +32,7 @@
  * built inside the callback and awaited after it is refused when it is sent, and a handle
  * the driver gives a `savepoint` callback is retired when that savepoint returns. They do
  * not cover code that goes looking for the driver's internals; `services.ts` describes the
- * one route that remains, recorded on #108 — the transaction's execute function carried on
+ * one route that remains — the transaction's execute function carried on
  * a value a call *returned*, which is a consequence of leaving return values as the driver
  * built them and is what the return-value test below is there to keep.
  *
@@ -411,7 +411,7 @@ describe("DbServiceBase against a real server", () => {
       })
       assertExists(kept)
 
-      // The reproduction from issue #96. The kept clone used to write through the
+      // The kept clone used to write through the
       // connection its own transaction had run on, so row 3 landed inside this second
       // transaction, reported success, and disappeared when this one rolled back.
       await assertRejects(
@@ -624,7 +624,7 @@ describe("DbServiceBase against a real server", () => {
   })
 
   it("refuses a query built inside begin and awaited after it", async () => {
-    // Issue #108's first route, in the shape a person writes it: the writes are collected
+    // In the shape a person writes it: the writes are collected
     // inside the callback and awaited outside, which is a forgotten `await` rather than a
     // deliberate act. The query is lazy — `postgres` sends nothing until `then`, `catch`,
     // `finally`, `execute` or `forEach` reaches its `handle()` — so it used to be sent on
@@ -676,7 +676,7 @@ describe("DbServiceBase against a real server", () => {
   })
 
   it("retires a handle taken from sql.savepoint when that savepoint returns", async () => {
-    // Issue #108's second route. `savepoint` hands its callback the driver's own handle,
+    // `savepoint` hands its callback the driver's own handle,
     // so that handle never passed through the wrapper and a service that kept it held an
     // open door onto the connection for the rest of the process.
     await withSchema({ max: 1 }, async (sql, schema) => {

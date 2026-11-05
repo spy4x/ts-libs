@@ -9,9 +9,8 @@ import {
 } from "./cache.ts"
 
 /**
- * Test-only fake. Not exported by the package: the template this suite was ported from kept its
- * equivalent (`MemoryCacheStorage`) local to the test file too, and `server/kv` is where a real,
- * published `ICacheStorage` (over Redis) belongs.
+ * Test-only fake. Not exported by the package: `server/kv` is where a real, published
+ * `ICacheStorage` (over Redis) belongs.
  */
 class MemoryCacheStorage implements ICacheStorage {
   private values = new Map<string, string>()

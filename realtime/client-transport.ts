@@ -1,8 +1,8 @@
 /**
  * Client transport: acks, heartbeat, backoff and the sync handshake — hint-only, no mutations.
  *
- * Ported in behaviour from `financy/apps/web/src/state/ws.ts` and rebuilt without signals, without
- * Preact and without a module-level mutable singleton, so it is testable in Deno with a fake socket
+ * Built without signals, without Preact and without a module-level mutable singleton, so it is
+ * testable with a fake socket
  * and a fake clock. A signals binding is a thin wrapper over this class and belongs in the
  * component library, not here.
  *
@@ -19,24 +19,22 @@
  * - A failed handshake is reported as degraded, not fatal: the socket is an optimisation and the
  *   REST pull path stays correct without it.
  *
- * What changed from the source, and why:
+ * Behaviour, and why:
  *
- * - The sync handshake sends the persisted cursor. Financy sent a hardcoded `0` with a TODO, so
- *   every connect re-downloaded every model.
- * - `syncedAt` is no longer a signal that dies with the tab: cursors and the last successful sync
+ * - The sync handshake sends the persisted cursor, so a connect does not re-download every model.
+ * - `syncedAt` is not a signal that dies with the tab: cursors and the last successful sync
  *   live in an injected {@link KeyValueStore}, read lazily, never at import time.
- * - Reconnect is exponential with jitter and a cap instead of a fixed random interval forever.
+ * - Reconnect is exponential with jitter and a cap.
  * - Every timer is injected, so nothing here sleeps and every deadline below is asserted.
- * - A failed reconnect gate stops the loop instead of being ignored; a gate that throws is retried
+ * - A failed reconnect gate stops the loop; a gate that throws is retried
  *   on the next backoff step rather than treated as consent.
- * - A hint's sequence is no longer trusted as "received" on arrival: the
- *   position now moves forward only once the pull it triggers has actually succeeded.
- * - A reconnect always pulls every group the client holds a cursor for: a
- *   quiet group's gap used to surface only when a later hint happened to reveal it, which in a
- *   quiet group could be never.
+ * - A hint's sequence is not trusted as "received" on arrival: the
+ *   position moves forward only once the pull it triggers has actually succeeded.
+ * - A reconnect always pulls every group the client holds a cursor for: otherwise a quiet
+ *   group's gap would surface only when a later hint revealed it, which could be never.
  * - The reconnect backoff counter resets only once the connection has proven itself, rather than at
  *   the moment the socket merely opens: a server that accepts and immediately
- *   drops every attempt no longer causes a reconnect storm. "Proven" needs two things, not one — a
+ *   drops every attempt causes no reconnect storm. "Proven" needs two things, not one — a
  *   message must have arrived, *and* the socket must have stayed open for at least `minHealthyMs`
  *   (default: the base backoff delay) — because a single inbound frame is not proof by itself: a
  *   peer that sends one byte and drops satisfies "a message arrived" for free, on every attempt.
@@ -71,8 +69,8 @@
  *
  * Every hint that is not a duplicate — a genuine gap and a merely-contiguous one
  * alike — is pulled before anything moves, and `onChange` fires only once that
- * pull has actually succeeded (issue #65, finding 1: a hint carries no payload,
- * so its arrival alone was never proof the client held the data). `pull` is
+ * pull has actually succeeded: a hint carries no payload, so its arrival alone
+ * is no proof the client holds the data. `pull` is
  * therefore the one path a failure can be seen on, and it is also the one a host
  * keeps running on an interval when `onSyncDegraded` fires.
  *
@@ -98,9 +96,8 @@
  * - **The reconnect backoff resets only once the connection has proven itself —
  *   a message _and_ a minimum amount of time open, not either alone.** A single
  *   inbound frame is not proof of health: a server that sends one byte and drops
- *   satisfies "a message arrived" for free, on every attempt, which is exactly
- *   what let a reconnect storm through until issue #65's follow-up review caught
- *   it. The counter resets only once a message has arrived _and_ the socket has
+ *   satisfies "a message arrived" for free, on every attempt, and would let
+ *   a reconnect storm through. The counter resets only once a message has arrived _and_ the socket has
  *   stayed open for at least `minHealthyMs` (default: `backoff.baseMs`) — a
  *   server that accepts a connection and drops it, with or without sending
  *   anything first, produces a growing delay between attempts instead of a
@@ -326,8 +323,7 @@ export interface ClientTransportOptions {
    *
    * A single inbound frame is not proof of health by itself: a server that sends one byte — an
    * error frame, a stale ack, a ping squeezed out before the host reaps the socket — and then
-   * drops satisfies "a message arrived" for free, every attempt, which is exactly what issue #65's
-   * finding 3 turned out to still allow. Requiring the connection to also have stayed open for a
+   * drops satisfies "a message arrived" for free, every attempt. Requiring the connection to also have stayed open for a
    * minimum duration defeats that without any new protocol dependency: an attacker or a broken peer
    * would have to keep the socket open for `minHealthyMs` to get anything out of it, at which point
    * the reconnect rate this produces is bounded by that duration, not a storm.
@@ -961,10 +957,10 @@ export class ClientTransport {
   }
 
   /**
-   * Pull every group the client already holds a cursor for: after a reconnect (issue #65, finding
-   * 2) and after the first handshake. A cold client — no cursors yet — has nothing to
-   * pull; its first fetch is the app's own bootstrap, which this package does not own (see README,
-   * "Explicitly not implemented"). The app pulls at the right moment through
+   * Pull every group the client already holds a cursor for: after a reconnect and after the first
+   * handshake. A cold client — no cursors yet — has nothing to pull; its first fetch is the app's
+   * own bootstrap, which this package does not own (see the module doc, "Explicitly not
+   * implemented"). The app pulls at the right moment through
    * {@link ClientTransport.onHandshakeAcknowledged}.
    */
   async #pullHeldCursors(): Promise<void> {

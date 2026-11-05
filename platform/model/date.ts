@@ -5,12 +5,9 @@
  * built in a test) or an ISO 8601 date string (what arrives over the wire as JSON), and both parse
  * to a `Date`.
  *
- * Moved from `template/libs/platform/types/+index.ts`. **Bugs fixed at extraction time (#131,
- * #136, #135).** The source was `type("Date | string.date.iso.parse")`: arktype's
- * `string.date.iso.parse` checks the string's *shape* against the ISO 8601 grammar and then parses
- * it with `new Date(...)`. `new Date` silently rolls an out-of-range day or month into the next one
- * instead of refusing it — `new Date("2026-02-30")` is 2 March 2026, not an error — so the source
- * accepted and stored a date that was never on any calendar. V8 also reads two shapes the
+ * Only real calendar dates pass. arktype's `string.date.iso.parse` checks the string's *shape*
+ * and then parses it with `new Date(...)`, which silently rolls an out-of-range day or month into
+ * the next one — `new Date("2026-02-30")` is 2 March 2026, not an error. V8 also reads two shapes the
  * grammar allows as the wrong date: an ordinal date (`"2024-005"`, 5 January, becomes 1 May) and a
  * year with a sign (`"-2024-01-01"` becomes 2024, `"+0099-12-31"` becomes 1999). See
  * {@link isRealCalendarDate} for how each is refused. A date-time string with a time but no offset
@@ -69,7 +66,7 @@ const ISO_TIME_WITHOUT_OFFSET = /T\d{2}:\d{2}(:\d{2}(\.\d+)?)?$/
  * not 30.
  *
  * A string with no such prefix (a year, or a year and month) has nothing here to rebuild and
- * compare; once `Date.parse` has read it, it is accepted exactly as the source accepted it.
+ * compare; once `Date.parse` has read it, it is accepted.
  */
 function isRealCalendarDate(iso: string): boolean {
   if (Number.isNaN(Date.parse(iso))) return false

@@ -12,19 +12,14 @@
  * ranges. A proxy that runs as a container gets a new address each time it is recreated, so this
  * module trusts it by name instead and follows the name's current address.
  *
- * Ported from `template/apps/api/middlewares/proxy-peer.ts`. What changed
- * and why:
- *
- *  - The source awaited a DNS lookup inside the request with no bound: when the resolver hung
- *    (upstream DNS down), every request carrying a forwarded header waited up to 8 s. A request now
- *    waits for a lookup at most {@link PROXY_LOOKUP_DEADLINE_MS}, and concurrent requests share one.
+ *  - A request waits for a DNS lookup at most {@link PROXY_LOOKUP_DEADLINE_MS}, and concurrent requests share one.
  *  - After the deadline a request is answered from the last good addresses, but only while they are
  *    younger than {@link PROXY_ADDRESS_HARD_MAX_AGE_MS}; past that a failing DNS refuses, so a
  *    moved proxy's old address is not trusted for the length of an outage. A lookup itself ends
  *    after {@link PROXY_LOOKUP_TIMEOUT_MS}, so a resolver that never answers cannot block the next.
- *  - A failing `onError` callback no longer breaks the lookup: the last good addresses stay.
+ *  - A failing `onError` callback does not break the lookup: the last good addresses stay.
  *  - The peer address comes from a `remoteAddr` resolver (`denoServeRemoteAddr` under `deno
- *    serve`) instead of Deno's `env.remoteAddr`, so the module runs on any runtime.
+ *    serve`), so the module runs on any runtime.
  *  - The 403 wording is a parameter.
  *
  * `createProxyPeers`, `requireProxyForForwardedHeaders`, `FORWARDED_HEADERS` (re-exported from

@@ -13,17 +13,16 @@
  *    `applyWithoutTransaction` and recorded in the same call: the record insert is what proves
  *    the migration ran, and it has to happen outside the transaction the statement cannot be
  *    wrapped in.
- *  - the name-based history table. The template runner keyed on file names and re-read the
- *    whole table per run; here the applied set is read once per run into a `Set`.
+ *  - the name-based history table. The applied set is read once per run into a `Set`.
  *
  * History rows store the migration **name**, not the file name: the `.sql` extension is
  * stripped and so is the `.no_transaction` suffix, so renaming a migration's transaction
  * mode does not orphan its history row.
  *
- * Two rules were added after #59 found the runner had neither:
+ * Two rules:
  *
- *  - **one runner at a time.** Two application instances starting together both read an
- *    empty history and both applied every migration. The whole run — the history table,
+ *  - **one runner at a time.** Two application instances starting together would
+ *    otherwise both read an empty history and both apply every migration. The whole run — the history table,
  *    the applied set and every apply — happens inside {@link MigrationDriver.withLock},
  *    so the second runner reads the history the first one wrote and skips.
  *  - **an applied migration's file may not change.** Every run hashes each file and
@@ -33,17 +32,16 @@
  *    with and assuming the current file is the one that ran would be the silent answer
  *    this check exists to replace.
  *
- * Three neighbouring kinds of drift were added after #110 found them passing without a
- * word:
+ * Three neighbouring kinds of drift are caught too:
  *
  *  - **nothing is applied by a run that is going to be refused.** Every file is read,
  *    hashed and checked before the first apply, so a new file that sorts before an edited
- *    one no longer lands in the database on the way to the error.
+ *    one does not land in the database on the way to the error.
  *  - **a history row with no file is reported**, as {@link MigrationReport.missing}. Not
  *    refused: squashing old migrations away is legitimate and there is no opt-out yet.
  *  - **a renamed migration is refused.** A pending file whose body is exactly what a
- *    missing row recorded is {@link MigrationRenamedError}; it used to be treated as new
- *    and its body ran a second time.
+ *    missing row recorded is {@link MigrationRenamedError}; treated as new, its body
+ *    would run a second time.
  *
  * ## Migrations: one runner at a time, and no editing what has run
  *
@@ -65,7 +63,7 @@
  *
  * **The driver works on a client built with any column-name transform** (`postgres.camel`,
  * `postgres.pascal`, `postgres.kebab`, or a custom `transform.column.from`, including one that maps
- * two different columns to the same name) — `#137`. Every probe this driver runs (the lock check, the
+ * two different columns to the same name). Every probe this driver runs (the lock check, the
  * schema resolution, the history-table existence check, the applied-migrations read) is read through
  * `.values()`, not by the name written in the query: the driver builds a `.values()` row as a plain
  * array in `SELECT` order and never keys it by a column's (possibly transformed) name at all
@@ -264,8 +262,7 @@ export function checksumOf(sqlText: string): Promise<string> {
  * That is what a rename looks like from the runner's side: the history holds a name with
  * no file behind it any more, and a file the history has never seen hashes to exactly what
  * that row recorded. Treating it as new would run the body a second time against a
- * database that already has it, which is the one kind of drift in issue #110 that can
- * damage data.
+ * database that already has it, which is the one kind of drift that can damage data.
  *
  * The way out is to rename the file back. A migration that really is new and really does
  * have the same body as a deleted one needs a body that differs — a comment naming what it
@@ -302,8 +299,7 @@ export interface MigrationReport {
   /**
    * Names in the history table that no file on disk accounts for, oldest row first.
    *
-   * A migration that was applied and then deleted used to be ignored in silence, so the
-   * history and the folder disagreed with nobody told. It is reported rather than
+   * A migration that was applied and then deleted is reported rather than
    * refused, because squashing old migrations away is a legitimate thing to do and this
    * library has no opt-out for it yet; a caller that wants a run to stop on one checks
    * this list. It is also what the rename check is derived from.
@@ -494,7 +490,7 @@ async function applyPending(
     const sqlText = await reader.readText(options.folder, fileName)
     const checksum = await checksumOf(sqlText)
     // The file-name form only matches a history written by a runner that recorded the
-    // file name; the template runner (`template/libs/server/db/migrate.ts:55`) did.
+    // file name.
     const recordedUnder = known.has(name) ? name : known.has(fileName) ? fileName : undefined
     if (recordedUnder !== undefined) accountedFor.add(recordedUnder)
     planned.push({

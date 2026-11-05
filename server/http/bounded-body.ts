@@ -8,27 +8,7 @@
  * `content-length` before touching the body, and cancels the reader on failure —
  * including a stall that outlives the budget.
  *
- * **Canonical home: `net/bounded-body.ts`** (`@spy4x/net/bounded-body`). This
- * module is a named re-export of that implementation, `parseBoundedFormData`
- * included: it lived here until #222 moved it to `net` so a caller that only caps
- * a form body does not depend on the whole server package. Until this collapse the
- * module carried a byte-identical copy of the reader, which meant two distinct
- * classes named `PayloadTooLargeError`: `instanceof` against one was false for
- * an error thrown by the other, so a caller that caught the error from this
- * module did not catch the one from `net`. The copies had also drifted apart on
- * `readContentLength`. One class object now sits behind both specifiers.
- *
- * The re-export is **named**, not `export *`: `BodyReadErrorCode`,
- * `BodyReadTimeoutError`, `readBoundedJson`, `DEFAULT_MAX_BYTES` and
- * `DEFAULT_BODY_TIMEOUT_MS` are canonical-module surface this package never
- * promised, and leaking them is not the same as publishing them.
- *
- * Two shape changes came with the collapse, both documented in the PR: a stall
- * rejects with the canonical `BodyReadTimeoutError` (importable from
- * `@spy4x/net/bounded-body`) rather than a bare `Error` — both are `Error`
- * subclasses, so an existing `catch (error: unknown)` keeps working — and
- * `maxBytes` is now optional, defaulting to 5 MiB. The injectable
- * `setTimer`/`clearTimer` surface is gone with the duplicate timer layer.
+ * A stall rejects with `BodyReadTimeoutError` (importable from `@spy4x/net/bounded-body`).
  *
  * The stall budget is deliberately the canonical per-chunk one, **not** a single
  * overall deadline: it bounds the wait for the *next* chunk, so a slow-but-live
@@ -50,9 +30,9 @@
  * `readContentLength` are the canonical symbols, so `PayloadTooLargeError` is one class object behind
  * both specifiers and a single `catch` covers either import. The re-export is named rather than
  * `export *`, so `BodyReadErrorCode`, `BodyReadTimeoutError`, `readBoundedJson` and the default
- * constants are not republished as if this package had promised them. `parseBoundedFormData` lived
- * here until #222 moved it to `@spy4x/net/bounded-body`; this module re-exports that same function, so
- * a caller that only caps a form body can depend on `@spy4x/net` alone. The
+ * constants are not republished as if this package had promised them. `parseBoundedFormData` lives
+ * in `@spy4x/net/bounded-body` too, so a caller that only caps a form body can depend on
+ * `@spy4x/net` alone. The
  * cap is enforced on the stream, a declared `content-length` over the cap is rejected without
  * reading the body, and the reader is cancelled on any failure. `maxBytes` is optional and defaults
  * to 5 MiB; `timeoutMs` is a **per-chunk stall budget, not a single overall deadline** — a

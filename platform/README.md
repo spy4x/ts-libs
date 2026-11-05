@@ -88,10 +88,10 @@ Each module's usage is in its module doc, shown by `deno doc` and on JSR.
 - [`@spy4x/platform/universal/settings`](universal/settings.ts): Typed, versioned settings.
 - [`@spy4x/platform/universal/shell`](universal/shell.ts): Quoting for a POSIX shell (`sh`, `bash`, `dash`, `zsh` in `sh` mode), for the one place a value must pass through a shell.
 - [`@spy4x/platform/universal/sort`](universal/sort.ts): Multi-column sort rules for a table.
-- [`@spy4x/platform/universal/srcset`](universal/srcset.ts): The attributes of a responsive `<img>` or `<picture>`, from the widths an image is stored at, such as the AVIF and WebP variants `processImage` of `@spy4x/server/images` makes.
+- [`@spy4x/platform/universal/srcset`](universal/srcset.ts): The attributes of a responsive `<img>` or `<picture>`, from the widths an image is stored at , such as the AVIF and WebP variants `processImage` of `@spy4x/server/images` makes.
 - [`@spy4x/platform/universal/statistics`](universal/statistics.ts): Small statistics helpers.
 - [`@spy4x/platform/universal/text`](universal/text.ts): Small, dependency-free text helpers.
 - [`@spy4x/platform/universal/time`](universal/time.ts): Calendar-date helpers.
 - [`@spy4x/platform/universal/time-constants`](universal/time-constants.ts): Time unit constants, derived so that one unit is always an exact multiple of the one below it.
 - [`@spy4x/platform/universal/uuid`](universal/uuid.ts): UUID version 7 ids and UUID validators.
-- [`@spy4x/platform/validation/predicates`](validation/predicates.ts): Reusable arktype predicates for untrusted text, ported from `mig/routes/api/_validators.ts`.
+- [`@spy4x/platform/validation/predicates`](validation/predicates.ts): Reusable arktype predicates for untrusted text.

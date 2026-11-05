@@ -2,8 +2,7 @@
  * Signed payload codec: a small JSON value, bound to a purpose and signed with HMAC-SHA-256,
  * carried as one URL-safe string.
  *
- * Built for two consumers that each hand-rolled the same primitive: the template's
- * group-list pagination cursor and the unsubscribe link on antonshubin.com. A token is
+ * Used by a keyset pagination cursor and a newsletter unsubscribe link. A token is
  *
  * ```
  * base64url(JSON envelope) + "." + base64url(HMAC-SHA-256(secret, MAC input))

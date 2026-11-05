@@ -291,7 +291,7 @@ describe("StoreRateLimiter parity with MemoryRateLimiter", () => {
 describe("StoreRateLimiter over the KV store", () => {
   it("draws two limiters on one key from a single shared counter", async () => {
     // Sequential on purpose: this pins shared-store accounting, not concurrency. True interleaving
-    // is deliberately not atomic — see `kv.ts` and the README — so a test claiming otherwise would
+    // is deliberately not atomic — see `kv.ts` — so a test claiming otherwise would
     // claim a guarantee this package does not make.
     const kv = fakeKv()
     const { clock } = fakeClock()

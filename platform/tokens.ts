@@ -232,8 +232,7 @@ export function randomBase64Url(bytes: number = DEFAULT_TOKEN_BYTES): string {
  * Mints an opaque token: `raw` goes to the caller, `hash` is what the server
  * stores.
  *
- * The construction is the source's, unchanged: `hash = sha256Hex(raw + secret)`
- * (`tokens.ts:38-44`). Tradeoff, recorded deliberately: HMAC-SHA-256 with the
+ * The construction is `hash = sha256Hex(raw + secret)`. Tradeoff: HMAC-SHA-256 with the
  * secret as key is the stronger construction, but the stored value carries no
  * algorithm or version marker, so switching it would silently invalidate every
  * hash already in the database — all links would stop working with no
@@ -256,8 +255,7 @@ export async function newOpaqueToken(secret: string): Promise<{ raw: string; has
 
 /**
  * Recomputes `sha256Hex(raw + secret)` and compares it to the stored hash via
- * `constantTimeEquals` — never `===`, never `!==` (the shape that made an earlier
- * internal project's compare timing-unsafe).
+ * `constantTimeEquals` — never `===` or `!==`, which leak timing.
  *
  * Returns `false` for every malformed input rather than throwing: a wrong raw
  * token, a wrong secret, an empty, truncated, upper-case, non-hex or unusual

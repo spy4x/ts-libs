@@ -15,8 +15,7 @@ export function sleep(ms: number): Promise<void> {
  * Trailing-edge debounce.
  *
  * Each call resets the timer; only the last call's arguments reach `fn`. The timer is **unref'd**
- * where the runtime supports it, so a pending debounce never keeps a Deno process alive — an
- * improvement over the source, which held the event loop open for the full delay.
+ * where the runtime supports it, so a pending debounce never keeps a Deno process alive.
  *
  * `cancel()` drops a pending call, `flush()` runs it now, and `pending()` reports whether one is
  * queued, which is what makes the behaviour assertable without sleeping. Call `flush()` before a
@@ -108,12 +107,10 @@ export interface BackoffDelayOptions {
 }
 
 /**
- * Caps a raw delay and jitters it — the exponential-backoff arithmetic that used to be
- * implemented twice: once with symmetric jitter around the capped delay
- * (`integrations/retry.ts`'s `createExponentialBackoff`) and once with jitter that only ever
- * shortens the wait (`realtime/backoff.ts`'s `nextBackoffDelay`). Both call this function now,
- * each supplying its own `rawMs` growth formula and jitter mode, and each still returns exactly
- * what it returned before this function existed — see the two wrappers' own tests.
+ * Caps a raw delay and jitters it: the exponential-backoff arithmetic shared by
+ * `integrations/retry.ts`'s `createExponentialBackoff` (symmetric jitter around the capped delay)
+ * and `realtime/backoff.ts`'s `nextBackoffDelay` (jitter that only ever shortens the wait). Each
+ * supplies its own `rawMs` growth formula and jitter mode.
  *
  * `"symmetric"` jitters in both directions: `capped + (random() * 2 - 1) * capped * jitterRatio`,
  * clamped to `[minFloorMs, maxMs]`. It rounds only when `jitterRatio > 0`; at `0` or below it

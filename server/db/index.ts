@@ -10,9 +10,6 @@
  * already pinned in the root import map, and the SQLite driver is the caller's
  * choice.
  *
- * Design sources: `template/libs/server/db` and the database layers of three
- * earlier internal projects.
- *
  * Two adapters, one migration runner. `@spy4x/server/db` is the barrel; `db/migrate`,
  * `db/postgres` and `db/sqlite` are the subpaths. Nothing here ships a driver: `postgres` is pinned in
  * the root import map and the SQLite driver is the caller's own, passed through `SqliteDriver`.

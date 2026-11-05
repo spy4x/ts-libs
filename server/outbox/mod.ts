@@ -1,15 +1,12 @@
 /**
  * `@spy4x/server/outbox` — transactional outbox drain: claim, publish, retry.
- * Extracted from `template/libs/server/outbox/+index.ts`.
  *
  * Not the client's offline queue of writes: that is `@spy4x/realtime/outbox`.
  *
  * `OutboxProcessor`, `OutboxEvent`, `OutboxPublisher`, `OutboxRepository`, `PostgresOutboxRepository`,
  * `LoggingOutboxPublisher`, `JobPublisher`, `retryDelayMs`, `errorCodeOf`, `scheduleOutboxEvent`,
  * `ensureScheduledOutboxEvent`, `OutboxAttemptFailure`, `OutboxLeaseExpiredError`,
- * `attemptFailureLine`, `stepsJob`, `JobStep`. Extracted from
- * `template/libs/server/outbox/+index.ts` — the template is the only source of an outbox in this
- * wave's source repositories.
+ * `attemptFailureLine`, `stepsJob`, `JobStep`.
  *
  * A transactional outbox: a command writes an identity-only row (aggregate, version, kind — never a
  * payload) in the same transaction as its state change, and `OutboxProcessor.drainOnce`/`run` claim
@@ -107,31 +104,26 @@
  * gets `onAttemptFailed` for the `publish` and `markProcessed` stages, with the given-up row left
  * unprocessed, and `repeatAfterGiveUp` refuses it at construction.
  *
- * **The row this library defines is smaller than the template's.** The ported original's row also
- * carried `groupId` and `actorUserId` — the template's own data model, not something a generic outbox
- * needs to do its job. `OutboxEvent` here carries only `id`, `eventKind`, `aggregateType`,
+ * **The row is small.** `OutboxEvent` carries only `id`, `eventKind`, `aggregateType`,
  * `aggregateId`, `aggregateVersion` and `attemptCount`. A consumer that wants to route or filter on
  * more than the aggregate identity pulls the authoritative row instead, which is the pattern the module
  * exists to enforce.
  *
- * **The retry delay reuses `@spy4x/integrations`'s backoff for its clamp, but keeps the source's own
- * numbers.** Issue #71 lists this doubling-and-capping formula as one of the duplicated retry helpers
- * in the codebase. `retryDelayMs` computes the uncapped delay exactly as the ported original did —
- * `Math.max(1, attemptCount)` before subtracting one for the exponent, and the same `exponent >= 32 ?
+ * **The retry delay reuses `@spy4x/integrations`'s backoff for its clamp.** `retryDelayMs`
+ * computes the uncapped delay itself — `Math.max(1, attemptCount)` before subtracting one for the exponent, and the same `exponent >= 32 ?
  * Infinity : …` guard, which matters when `baseMs` is `0`: without it, `0 * 2 ** exponent` is `0` for a
  * merely large exponent and `NaN` once the exponent overflows `2 ** exponent` to `Infinity` — then hands
  * that number to `createExponentialBackoff`'s own `(attempt, retryAfterMs)` form so the final
  * `Math.min`/`Math.max` clamp to `[0, maxDelayMs]` is not a second copy of that logic. `retryDelayMs(0,
- * …)`, a negative attempt and a fractional attempt all return the same delay the source gave for
- * attempt 1, matching the source rather than a shorter delay computed from a negative or fractional
- * exponent. No jitter: one worker holds a claimed row at a time via its lease, so there is nothing to
+ * …)`, a negative attempt and a fractional attempt all return the delay for attempt 1, not a
+ * shorter delay computed from a negative or fractional exponent. No jitter: one worker holds a claimed row at a time via its lease, so there is nothing to
  * de-synchronise.
  *
  * **`errorCodeOf` falls back to `"Error"` when `name` is not a string**, the same rule
- * `integrations/retry.ts`'s `readErrorName` follows. The ported original was `error.name || "Error"`
- * inside an `instanceof Error` branch: `error.name || "Error"` is truthy for any non-empty, non-zero
+ * `integrations/retry.ts`'s `readErrorName` follows. `error.name || "Error"`
+ * would be truthy for any non-empty, non-zero
  * `name`, including a number, so an `Error` whose `name` was reassigned to something other than a
- * string reached `.slice(0, 64)` on that value and threw `TypeError: name.slice is not a function` — from
+ * string would reach `.slice(0, 64)` on that value and throw `TypeError: name.slice is not a function` — from
  * inside `OutboxProcessor.drainOnce`'s own `catch`, which meant one poisoned event stopped the whole
  * batch and never rescheduled that event either. A non-`Error` thrown value is still reported by
  * `typeof`, which returns one of a fixed, small set of strings and cannot carry arbitrary caller text.
@@ -160,9 +152,8 @@
  * opens an explicit transaction on one connection and claims from a second one while the first is still
  * open.
  *
- * **The Postgres repository is part of this extraction, and the table it needs is small.** The
- * claim/retry/mark-processed SQL is generic over any table shaped like this, and nothing in it
- * references the template's `groups`/`users` tables:
+ * **The Postgres repository needs a small table.** The claim/retry/mark-processed SQL is generic
+ * over any table shaped like this:
  *
  * ```sql
  * CREATE TABLE outbox_events (

@@ -244,7 +244,7 @@ Deno.test("the lock, the run and the unlock all go through the reserved connecti
     `ALTER TABLE "migrations" ADD COLUMN IF NOT EXISTS checksum TEXT`,
     "SELECT pg_advisory_unlock($1)",
   ])
-  // Only the warm-up query the #156 fix sends before `reserve()` goes through the pool.
+  // Only the warm-up query sent before `reserve()` goes through the pool.
   assertEquals(fake.topLevel, ["SELECT 1"])
 })
 
@@ -268,7 +268,7 @@ Deno.test("withLock unlocks and releases the connection when the run throws", as
 })
 
 Deno.test("a runner that cannot take the lock within the bound fails by name", async () => {
-  // Issue #109: `pg_advisory_lock` waits for ever, so one stuck runner stopped every other
+  // `pg_advisory_lock` waits for ever, so one stuck runner stopped every other
   // instance from starting and the deployment hung with nothing in the log. The bound is
   // measured against the time spent waiting *between* attempts, so this test injects a
   // delay that returns at once and never sleeps.
@@ -340,7 +340,7 @@ Deno.test("a runner that takes the lock on a later attempt runs normally", async
 })
 
 Deno.test("a second run on the same driver object is refused instead of deadlocking", async () => {
-  // Issue #109's other half. `withLock` points this instance at the connection it
+  // `withLock` points this instance at the connection it
   // reserved, so a second run on the same object sent its statements down the first run's
   // connection: both held an advisory lock, the winner queued behind the loser, and the
   // process hung until it was killed.

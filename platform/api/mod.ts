@@ -4,7 +4,7 @@
  * {@link apiFetch} wraps `fetch` for a JSON API and reports the outcome as an {@link ApiResult}
  * instead of throwing on an HTTP error. A failure carries the status, a message (the body's `error`,
  * else its `message`, else `"Request failed"`) and the body's string `code` when present. A network
- * failure still rejects. See `api.ts` for the header-merge bug fixed at extraction time.
+ * failure still rejects. See `api.ts` for how headers merge.
  *
  * `apiFetch` reads an error body in three shapes: `{ error }` (a string), `{ code, message }`, or
  * `{ error: { code, message } }`. The message is the string `error`, else the string `message` of an

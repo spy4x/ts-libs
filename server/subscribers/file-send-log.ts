@@ -44,8 +44,8 @@ function fromStored(row: StoredEntry): SendLogEntry {
 }
 
 /**
- * A {@link SendLog} kept in one JSON file, ported from antonshubin.com's `lib/newsletter-log.ts`
- * and reading its `newsletter-log.json` unchanged: an array with one object per issue, keyed by
+ * A {@link SendLog} kept in one JSON file, reading antonshubin.com's `newsletter-log.json`
+ * unchanged: an array with one object per issue, keyed by
  * `slug`.
  *
  * - The send lock is an exclusive lock on `<path>.lock`, held by the OS, so a crashed run frees it.

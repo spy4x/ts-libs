@@ -40,15 +40,10 @@
  * type a plain HTML form can send, so a JSON or other mutation passes unchecked. And it passes a
  * request when either `Origin` or `Sec-Fetch-Site` looks right, where this guard requires both.
  *
- * Ported from `template/apps/api/middlewares/same-origin.ts`. What changed and why:
- *
- *  - The source found the cookie with `startsWith("<name>=")` on each `;`-separated part. The header
- *    is now parsed by Hono's cookie parser, and an empty value counts as absent.
- *  - The source checked every method. GET, HEAD and OPTIONS now pass, so the guard can be mounted
- *    on a whole router with `app.use`.
+ *  - The cookie header is parsed by Hono's cookie parser, and an empty value counts as absent.
+ *  - GET, HEAD and OPTIONS pass, so the guard can be mounted on a whole router with `app.use`.
  *  - The expected origin can be configured. Behind a proxy that terminates TLS, the request URL the
  *    server sees is `http://`, while the browser sends `Origin: https://…`.
- *  - The source refused `Origin: null`, so a same-origin form post under `no-referrer` failed.
  *
  * ## Requests with no fetch metadata
  *

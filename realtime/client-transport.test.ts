@@ -2,7 +2,7 @@
  * Client transport: handshake cursors, fetch-before-apply, acks, heartbeat, backoff, gate.
  *
  * Every case is driven by `FakeClock` and `FakeSocket` — no sleep, no network, no `--allow-net`.
- * The cases that matter most are the ones ADR 002 and issue #65 are built on: the handshake
+ * The cases that matter most are the ones ADR 002 is built on: the handshake
  * advertises the cursor the client actually holds (not a hardcoded `0`); a hint — contiguous or
  * not — triggers a pull and the cursor moves only once that pull succeeds; a reconnect pulls every
  * held cursor once, unprompted; and the reconnect backoff resets only once a message has actually
@@ -363,7 +363,7 @@ describe("ClientTransport gap handling", () => {
   })
 
   it("does not move the position when the fetch a contiguous hint triggers fails", async () => {
-    // Issue #65, finding 1, and #74's done-when: the position must not move when the app's own
+    // The position must not move when the app's own
     // fetch fails. Before the fix, `cursors.apply` ran on hint arrival, so the cursor moved
     // regardless of whether anything was ever fetched.
     const harness = createHarness({
@@ -758,7 +758,7 @@ describe("ClientTransport heartbeat", () => {
   })
 
   it("keeps the original pong deadline instead of re-arming it on every unanswered ping", async () => {
-    // #74: this needs a heartbeat interval shorter than the pong timeout, so more than one ping is
+    // This needs a heartbeat interval shorter than the pong timeout, so more than one ping is
     // sent before the deadline — the existing "closes the socket…" test above has the interval
     // longer than the timeout, so only one ping is ever sent and the re-arm guard is never
     // exercised. If `#ping` re-armed the timer on every call instead of only the first, a peer that
@@ -930,7 +930,7 @@ describe("ClientTransport reconnect", () => {
   })
 
   it("keeps the backoff climbing when the peer accepts and drops before any message arrives", async () => {
-    // Issue #65, finding 3: a server that accepts a connection and closes it immediately used to
+    // A server that accepts a connection and closes it immediately used to
     // reset the attempt counter the moment the socket opened, so every reconnect delay stayed at
     // the base value — a storm of attempts roughly twice a second forever. No jitter here so every
     // delay is the exact, deterministic `baseMs * factor ** attempt`.
@@ -981,7 +981,7 @@ describe("ClientTransport reconnect", () => {
   })
 
   it("keeps the backoff climbing when the peer sends one frame and drops every attempt", async () => {
-    // Issue #65, finding 3, the residual the reviewer found: resetting on the message alone let a
+    // Resetting on the message alone let a
     // peer that sends a single byte before dropping reset the counter for free, every time, so the
     // delay never grew past the base value. Requiring the socket to also have stayed open for
     // `minHealthyMs` defeats it, because the drop always arrives before that deadline.
@@ -1013,7 +1013,7 @@ describe("ClientTransport reconnect", () => {
 
 describe("ClientTransport reconnect fetches what was missed", () => {
   it("pulls every held cursor once after a reconnect", async () => {
-    // Issue #65, finding 2: a quiet group's gap used to surface only when a later hint happened to
+    // A quiet group's gap used to surface only when a later hint happened to
     // reveal it, which in a quiet group might be never. A reconnect now pulls unconditionally.
     const harness = createHarness({ cursors: { "group-1": 4, "group-2": 7 } })
     await harness.open()

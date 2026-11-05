@@ -111,8 +111,7 @@ RFC 8463 Appendix A.3).
 §3.7 step 2 deletes the _value_ of `b=`, not the rest of the field. The short input
 that stops at `b=` (208 bytes) therefore **fails** OpenSSL, while the construction
 keeping `; x=1800000000` (222 bytes) **verifies** — so that `x=` is authenticated
-and this message is valid mail that an earlier revision of this package wrongly
-refused.
+and this message is valid mail.
 
 The same property protects the other direction: appending `; x=9999999999` or
 `; i=@attacker.invalid` to a genuine message lands inside the hashed field and

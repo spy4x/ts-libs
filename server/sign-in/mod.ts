@@ -1,11 +1,11 @@
 /**
  * `@spy4x/server/sign-in` — the building blocks a sign-in method stands on: server-side sessions
  * behind an app-supplied store, the signed session cookie, Hono middleware and guards, password
- * hashing with a pepper, and authenticator-app codes. See `server/README.md`.
+ * hashing with a pepper, and authenticator-app codes.
  *
  * The account model, sign-in keys and challenges (`AuthStore`) are in `@spy4x/server/auth`.
  *
- * The building blocks a sign-in method stands on, extracted from the template's API. Entry point:
+ * The building blocks a sign-in method stands on. Entry point:
  * `sign-in/mod.ts`. Nothing here imports from `server/auth/`.
  *
  * | File            | What it is                                                                          |
@@ -132,8 +132,8 @@
  *   in front of every route that checks a password or a code, keyed per account as well as per address.
  * - **It does not hide whether an account exists.** When the account is missing, the app should still
  *   spend the time of one `verify` (against a hash made once at start-up) before answering.
- * - **It does not send mail, sign users up, or talk to identity providers.** Those methods are #57's,
- *   built on this set.
+ * - **It does not send mail, sign users up, or talk to identity providers.** Those methods are
+ *   `@spy4x/server/auth`'s, built on this set.
  * - **It does not know about roles, groups or users.** `loadUser` and `hasSecondFactor` come from the
  *   app, and so does the check given to `isAuthorized`.
  * - **It does not use the `__Host-` cookie prefix by default.** Pass `name: "__Host-sessionIdToken"`

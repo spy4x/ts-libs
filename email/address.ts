@@ -157,8 +157,8 @@ function quoteForError(value: string): string {
  *
  * Accepts the forms a caller actually has: `jane@example.com`,
  * `Jane Doe <jane@example.com>`, `"Doe, Jane" <jane@example.com>`, `Jörg <j@example.com>`.
- * A display name containing a comma is accepted unquoted — that is what `mig`
- * did and what a hand-written config value looks like — but it is re-emitted
+ * A display name containing a comma is accepted unquoted — that is what a
+ * hand-written config value looks like — but it is re-emitted
  * quoted by {@link formatAddress}, because a bare comma splits the header into
  * two mailboxes at the first server that parses it strictly.
  *

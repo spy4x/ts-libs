@@ -115,7 +115,7 @@ describe("createExponentialBackoff", () => {
   })
 
   it("returns a non-integer Retry-After exactly, unrounded, when jitterRatio is 0", () => {
-    // #71: an earlier extraction of this function's arithmetic rounded even when jitterRatio
+    // An earlier extraction of this function's arithmetic rounded even when jitterRatio
     // was 0, which no version of this function ever did.
     const noJitter = createExponentialBackoff({
       baseDelayMs: 100,

@@ -128,9 +128,8 @@ describe("postgres@3.4.7 against a real server — a deferred constraint at impl
     // `sql.unsafe(text)` with no parameters takes the simple-protocol path
     // (`args.length === 0` in the driver's own `unsafe`) and correctly reports a deferred
     // failure; passing parameters switches it to the same extended-protocol path a tagged
-    // template takes, and the failure is lost the same way. This is the case round 1 of #134
-    // documented as safe and was not — pinned here so the distinction is enforced, not just
-    // asserted in prose.
+    // template takes, and the failure is lost the same way. Pinned here so the distinction is
+    // enforced, not just asserted in prose.
     const settings = postgresSettings()
     await requireReachable(settings.address)
 

@@ -71,8 +71,8 @@
  *   clients, not the wiring around them.
  * - **A webhook router.** `verifyWebhookRequest` verifies. Routing, idempotency and retry queues are
  *   the caller's job.
- * - **Backup, deploy, env tooling.** `ops/` was removed from ts-libs; a project built from the
- *   template gets the equivalent scripts from its own `infra/scripts/`.
+ * - **Backup, deploy, env tooling.** A project built from the template has them in its own
+ *   `infra/scripts/`.
  * - **Email and SMTP**, `server/email`.
  *
  * @module

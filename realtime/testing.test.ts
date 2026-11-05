@@ -3,7 +3,7 @@
  * package (and in a host's own tests, via `@spy4x/realtime/testing`), so a difference from the
  * real thing here is a difference every test built on it inherits silently.
  *
- * `close()` closing asynchronously is the one case #74 named directly: "a real socket closes
+ * `close()` closing asynchronously is the case that matters most: "a real socket closes
  * asynchronously" — `state` moves to `Closing` immediately and only reaches `Closed`, and fires the
  * close handlers, on a later microtask. Before this fix `close()` transitioned straight to `Closed`
  * and fired the handlers synchronously, so a caller that awaited nothing after `close()` never saw

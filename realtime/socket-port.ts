@@ -6,7 +6,7 @@
  * this package is then testable against a fake socket with no network and no extra permission.
  */
 
-/** Lifecycle state of a socket, mirroring the platform `WebSocket` constants. */
+/** Lifecycle state of a socket: the platform `WebSocket`'s four states, numbered 1-4 (the platform uses 0-3). */
 export enum SocketState {
   Connecting = 1,
   Open = 2,

@@ -1,13 +1,10 @@
 /**
  * Postgres pool tuning.
  *
- * The template created its client with no pool options at all
- * (`template/libs/server/db/+index.ts:5-17`), so every deployment inherited the
- * driver defaults: a connection that never times out, an idle connection that is
- * never reaped, and a pool of 10 that silently queues the eleventh concurrent
- * request behind the slowest in-flight query. An earlier internal project set all
- * four; those values are the defaults here, exported as an overridable
- * object rather than inlined into `createSql`.
+ * The driver's own defaults are a connection that never times out, an idle connection that is
+ * never reaped, and a pool of 10 that silently queues the eleventh concurrent request behind the
+ * slowest in-flight query. These defaults set all four, exported as an overridable object rather
+ * than inlined into `createSql`.
  *
  * All four are seconds, matching the driver's own units. The names are the
  * driver's option names, so a reader can diff this file against `postgres`'s
@@ -73,25 +70,25 @@
  *
  * A `postgres` query is lazy: nothing is sent when it is built, and `then`, `catch`, `finally`,
  * `execute` and `forEach` all reach the query's `handle()`, which is where the statement goes on the
- * connection. So a query built inside the callback and awaited after `begin()` has returned used to run
+ * connection. So a query built inside the callback and awaited after `begin()` has returned would run
  * inside whatever transaction that connection held by then and vanish with its rollback — a forgotten
- * `await` is enough to write it. The guard now sits on the query's own `handle` as well: the first send
+ * `await` is enough to write it. The guard sits on the query's own `handle` as well: the first send
  * after the scope has ended is refused. Awaiting a query that already ran inside the callback sends
  * nothing and is not refused. `handle` is not documented driver API, which is why an integration test
  * awaits such a query and expects the error — a driver that renamed the method turns that test red
  * instead of reopening the route in silence.
  *
- * `sql.savepoint(fn)` calls `fn` with a handle the driver built and passed in, so that handle never
- * went through the wrapper. The callback now receives a scoped handle instead, retired when the
+ * `sql.savepoint(fn)` calls `fn` with a handle the driver built and passed in, a handle that would
+ * bypass the wrapper. The callback receives a scoped handle instead, retired when the
  * savepoint returns.
  *
- * **It is a guard against a mistake, not a security boundary.** The mistake is the one #96 describes: a
+ * **It is a guard against a mistake, not a security boundary.** The mistake: a
  * service stores the clone (`this.db = tx`) and writes through it after the transaction has returned,
  * or forgets an `await` on a query it built inside the callback. Code that goes looking for the
  * driver's internals is not making that mistake and could in any case import `postgres` and open a
  * connection of its own.
  *
- * One known route remains, recorded on #108. The driver's own internals ride on a value a call
+ * One known route remains. The driver's own internals ride on a value a call
  * _returned_ — for example `new q.constructor(…, q.handler, …)`, since every query object holds the
  * transaction's execute function. Return values are deliberately not wrapped, so this one cannot be
  * closed by wrapping reads, and it is not the mistake the guard is for.

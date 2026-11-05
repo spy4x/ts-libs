@@ -44,7 +44,7 @@ describe("dateSchema", () => {
   })
 
   /**
-   * #131: `new Date(...)` silently rolls an out-of-range day into the next month instead of
+   * `new Date(...)` silently rolls an out-of-range day into the next month instead of
    * refusing it (`new Date("2026-02-30")` is 2 March 2026), so the schema must catch this itself
    * rather than delegate to `Date` parsing.
    */
@@ -115,13 +115,13 @@ describe("dateSchema", () => {
       expect(dateSchema("+2023-02-29") instanceof type.errors).toBe(true)
       expect(dateSchema("+2026-04-31") instanceof type.errors).toBe(true)
       expect(dateSchema("-1900-02-29") instanceof type.errors).toBe(true)
-      // Refused since #136: a signed year is refused even when the date exists.
+      // Refused: a signed year is refused even when the date exists.
       expect(dateSchema("+2024-02-29") instanceof type.errors).toBe(true)
     })
   })
 
   /**
-   * #136: V8's `new Date` reads an ordinal date's day of the year as a month, and drops the sign
+   * V8's `new Date` reads an ordinal date's day of the year as a month, and drops the sign
    * of a signed four-digit year, with no error. Both shapes are refused rather than mis-dated.
    */
   describe("shapes new Date reads as the wrong date", () => {
@@ -162,7 +162,7 @@ describe("dateSchema", () => {
   })
 
   /**
-   * #135: a date-time string with a time but no offset and no `Z` is read in the host's own time
+   * A date-time string with a time but no offset and no `Z` is read in the host's own time
    * zone by `new Date`, so the same wire string would parse to a different instant depending on
    * where the process runs. These cases pin the fix without depending on the host's `TZ` — they
    * assert only that the string is refused, never a particular instant — and are also proven by

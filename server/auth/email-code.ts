@@ -326,8 +326,8 @@ export interface EmailCodeSignIn {
    * sent without it, or with another one, never reach this challenge. The outcome is the same
    * whether or not the address has an account.
    *
-   * Optional in the interface only so that a double written against an earlier version still
-   * compiles; the provider {@link createEmailCodeSignIn} returns always has it.
+   * Optional in the interface only so that an app's test double without it still compiles; the
+   * provider {@link createEmailCodeSignIn} returns always has it.
    *
    * @throws {EmailCodeError} `invalid-email` when `normalizeEmail` rejects the address.
    */

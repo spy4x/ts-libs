@@ -1,12 +1,7 @@
 /**
  * A whole environment, read once and validated against one arktype schema.
  *
- * Six apps each carry their own version of this shape today: a class whose fields are one
- * `getEnvVar("NAME")` call apiece (`template/apps/api/services/config.ts`; `financy`'s carries the
- * same shape plus three Telegram-specific fields of its own), with a type-cast
- * (`as "dev" | "prod"`) doing the work a real check should and `Number(getEnvVar(...))` accepting
- * `NaN` for a malformed number without complaint. `loadConfig` replaces the per-field calls with
- * one schema: every field is named once, its shape is checked once, and a bad or missing value
+ * Every field is named once, its shape is checked once, and a bad or missing value
  * fails at start-up instead of turning into `NaN` or an unchecked cast three requests later.
  *
  * **Scope: a flat schema.** `loadConfig` reads exactly the top-level keys an arktype object
@@ -44,7 +39,7 @@
  * validating and rethrows a `ConfigError` that carries none of it, without keeping the original as
  * `cause` (a `cause` is exactly a place for the original's message, value included, to survive
  * un-scrubbed). A morph that needs to fail without carrying its own value can report the variable
- * by name instead, with `.pipe.try` or `ctx.error` — see `server/README.md`.
+ * by name instead, with `.pipe.try` or `ctx.error` — see `index.ts`.
  */
 import { type SchemaOutput, validate, type ValidationResult } from "@spy4x/validation/validate"
 import { type } from "arktype"

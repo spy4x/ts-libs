@@ -227,7 +227,7 @@ describe("validatePublicUrl", () => {
   })
 
   it("rejects an IPv6 literal that wraps an internal IPv4 address", async () => {
-    // Every one of these was accepted as public before #61: the wrapper hides
+    // Each of these looks public: the wrapper hides
     // the address the packet actually reaches.
     for (
       const input of [
@@ -904,7 +904,7 @@ describe("DENY_NET_ADDRESSES", () => {
     // IPv6 range is rejected as a host ("ipv6 addresses must be enclosed in
     // square brackets"), and denying 0.0.0.0 in any form also stops
     // `Deno.serve` binding its default wildcard address, which stops the
-    // application dead. That is why `0.0.0.0` is the gap the README names and
+    // application dead. That is why `0.0.0.0` is the gap the module doc names and
     // `[::]` is not: denying `[::]` leaves the default bind working.
     assertEquals(DENY_NET_ADDRESSES.filter((e) => e.includes(":") && e.includes("/")), [])
     assertEquals(DENY_NET_ADDRESSES.filter((e) => e.startsWith("0.0.0.0")), [])

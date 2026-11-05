@@ -1,25 +1,15 @@
 // Server-side sessions: create, validate (extending when due), sign out.
 //
-// Rewritten from `template/apps/api/services/auth/session.ts`. What changed and why:
-//
-// - The token was hashed with PBKDF2 at 100 000 iterations and re-derived on every request, so each
-//   authenticated request paid for a password-strength derivation, and any signed-in client could
-//   make the server repeat it at will. A session token is 256 random bits, so one HMAC-SHA-256
-//   keyed by the pepper is enough and costs the same every time.
-// - The token came from `getRandomString`, which maps each random byte to `byte % 36`; 256 is not a
-//   multiple of 36, so four characters were more likely than the rest. `randomBase64Url` has no
-//   such bias.
-// - The cookie value was parsed with `Number()`, which accepts `1e3`, `0x10` and ` 7 `, and any text
-//   after a second `:` was ignored. Parsing is now one exact pattern.
-// - An expired or signed-out token was cached under the raw token itself, which put a bearer
-//   credential into a cache key. There is no cache here: every validation reads the store, so a
-//   signed-out session is refused on the very next request.
-// - The extension wrote the new expiry with an unconditional update and returned whatever row came
-//   back, so a session signed out between the read and the write was answered as valid. The store's
-//   `extend` now only touches an active session and says whether it did.
-// - `expiresAt < now` let a session through at the exact instant it expired, and an invalid date
-//   compared false and so never expired. Expiry is now `expiresAt <= now`, and a value that is not
-//   a valid `Date` stops the request.
+// - A session token is 256 random bits from `randomBase64Url` (no modulo bias), so one HMAC-SHA-256
+//   keyed by the pepper is enough to store it and costs the same every time; a password-strength
+//   derivation per request would let any signed-in client make the server repeat it at will.
+// - The cookie value is parsed with one exact pattern, not `Number()`, which accepts `1e3`, `0x10`
+//   and ` 7 `.
+// - There is no cache: every validation reads the store, so a signed-out session is refused on the
+//   very next request, and no bearer credential ever becomes a cache key.
+// - The store's `extend` only touches an active session and says whether it did, so a session
+//   signed out between the read and the write is not answered as valid.
+// - Expiry is `expiresAt <= now`, and a value that is not a valid `Date` stops the request.
 
 import { constantTimeEquals, randomBase64Url } from "@spy4x/platform/tokens"
 import { type Clock, systemClock } from "@spy4x/platform/universal/time"

@@ -1,17 +1,14 @@
 /**
  * Reconnect backoff: exponential, jittered, capped.
  *
- * Financy reconnected on a fixed `1500 + Math.random() * 2000` interval forever, so a server
- * restart had every client retry at the same rate, and a client that could not connect never
- * slowed down. This is the replacement: exponential growth with a cap, plus jitter so a fleet that
- * dropped together does not return together.
+ * Exponential growth with a cap, so a client that cannot connect slows down, plus jitter so a
+ * fleet that dropped together does not return together.
  *
  * The `random` source is injected, so a test asserts the cap and the jitter band without waiting.
  *
- * The capping and jittering delegates to `@spy4x/platform/universal/async`'s `backoffDelay`
- * : this module still owns the growth formula (`baseMs * factor ** attempt`) and the
- * 0-based attempt numbering, and `nextBackoffDelay` still returns exactly what it returned before
- * that extraction.
+ * The capping and jittering delegates to `@spy4x/platform/universal/async`'s `backoffDelay`;
+ * this module owns the growth formula (`baseMs * factor ** attempt`) and the 0-based attempt
+ * numbering.
  */
 
 import { backoffDelay } from "@spy4x/platform/universal/async"

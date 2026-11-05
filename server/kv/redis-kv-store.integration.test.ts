@@ -152,7 +152,7 @@ describe("RedisKvStore against a real server", () => {
   })
 
   it("a store's own prefix reaches a sibling that extends it with a colon", async () => {
-    // Not a bug: documents the design note in server/README.md. A prefix is a plain
+    // Not a bug: documents the design note in `kv/mod.ts`. A prefix is a plain
     // string match, not a namespace, so `outer`'s key `sub:k` and `inner`'s key `k`
     // are the same Redis key, and this overlap is expected.
     const settings = redisSettings()

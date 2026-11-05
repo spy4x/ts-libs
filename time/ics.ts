@@ -6,7 +6,7 @@
  * It depends only on `time/ics-core.ts` — deliberately not on `time/tz.ts` —
  * so the entire timezone contract is "give me the correct UTC instant".
  *
- * Out of scope by design (documented in `time/README.md`): RRULE/EXDATE/
+ * Out of scope by design: RRULE/EXDATE/
  * RECURRENCE-ID, VTIMEZONE/TZID, VALARM/DURATION, VTODO, multiple VEVENTs, and
  * any parsing of existing calendars.
  *
@@ -79,8 +79,7 @@
  * - **No CalDAV wire concerns.** `RELATED-TO`, `ETag`/`If-Match` and HTTP transport are not this
  *   package's job.
  * - **No product domain.** No bookings, hosts, guests, availability, rate limits or cancel tokens —
- *   callers map their own types onto `IcsEvent`. `meetingSummary()` and the `Booking`/`Config`
- *   coupling from the source are deliberately not ported; a human-readable summary of an instant is
+ *   callers map their own types onto `IcsEvent`. A human-readable summary of an instant is
  *   `formatInstantLong(start, zone)` from `time/tz`, not a calendar concern.
  *
  * @module

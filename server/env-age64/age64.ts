@@ -6,11 +6,8 @@
  * value produces the exact same ciphertext on a re-run (no diff noise in git) and a changed value
  * touches only its own line.
  *
- * Extracted from two existing copies: rostok's `cli/age.ts`/`cli/encrypt.ts` (worktree-aware
- * key lookup, the occurrence-matched byte-stable renderer) and the template's
- * `infra/scripts/env/age.ts` (`export KEY=` support, rejecting unsupported syntax instead of
- * silently mangling it). The cryptography itself is new: both sources shelled out to the `age`
- * binary; this module calls `jsr:@age/age-encryption` (typage) in-process, so no `--allow-run` is
+ It supports `export KEY=` lines and rejects unsupported syntax instead of silently mangling it.
+ * The cryptography runs in-process: this module calls `jsr:@age/age-encryption` (typage) in-process, so no `--allow-run` is
  * needed anywhere in the module or its callers.
  */
 
@@ -55,9 +52,8 @@ const EXPORT_PREFIX = /^\s*export\s+/
 // A key must look like this AFTER `export ` is stripped and the result trimmed: rostok-style
 // `my-key` and `a.b` still match, but a base64 continuation line of an unquoted multi-line value
 // (which can contain `+`, `/`, digits and letters) does not, because `+` and `/` aren't in this
-// set — see the review round that found #173's key-name relaxation could otherwise turn such a
-// continuation line into a "key" whose "value" is then encrypted while the key itself, plaintext,
-// is exactly the ciphertext fragment that used to be part of a secret.
+// set. Otherwise such a continuation line would become a "key" whose "value" is encrypted while the
+// key itself, a fragment of the secret, stays plaintext.
 const KEY_PATTERN = /^[A-Za-z_][A-Za-z0-9_.-]*$/
 
 /** Appended to every {@link UnsupportedEnvSyntaxError}: the lines a caller may write instead. */
@@ -123,8 +119,7 @@ export class CrlfNotSupportedError extends Error {
  *   still accepts every rostok-produced key (hyphens, dots) but excludes `+` and `/`, which is
  *   what a base64 fragment needs to slip through. A continuation line that happens to be made of
  *   ONLY letters and digits (no `+`, `/`, `=`) still isn't caught by this check — that shape was
- *   never valid dotenv in either source repo and remains the caller's problem; see the module
- *   README.
+ *   never valid dotenv and remains the caller's problem.
  *
  * `export KEY=value` is recognised: the keyword stays in `prefix` (so a re-render keeps it) but is
  * stripped from the reported `key` before the character-set check above runs against it.
@@ -270,7 +265,7 @@ export function parsePublicKey(keyFileContent: string): string {
  * `cwd` has no `.git` at all, or already IS the main checkout (its own `.git` is a directory, not a
  * worktree pointer file), or the pointer/`commondir` files don't parse.
  *
- * This is what closes #173's poisoned-environment case by construction rather than by a guard:
+ * This closes the poisoned-environment case by construction rather than by a guard:
  * there is no `Deno.env.get` call anywhere in this function for a `GIT_DIR` (or similar) to
  * poison — a parent process exporting one has nothing to affect here.
  */

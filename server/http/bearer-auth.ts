@@ -9,9 +9,8 @@
  * `redactor`, `formatLogLine`, `AUTHORIZATION_HEADER`, `REDACTED_TOKEN`, and the `TokenVerifier`
  * interface.
  *
- * Moved here from `mcp/auth.ts` when `mcp/` was removed: a generic "extract and verify a
- * bearer token, never in the environment at module scope, never compared with `===`" helper, with
- * nothing MCP-specific about it. Both sides of the comparison are SHA-256 digested before
+ * The token is never read from the environment at module scope and never compared with `===`.
+ * Both sides of the comparison are SHA-256 digested before
  * `timingSafeEqual`, so neither the presented token's length nor a shared prefix is observable by
  * timing. `redactor`/`formatLogLine` strip every configured secret from a log line, so a raw
  * `Authorization` header cannot reach a log by accident.
@@ -56,7 +55,7 @@ export const AUTHORIZATION_HEADER = "authorization"
 
 /**
  * Extract the token from `Authorization`. Accepts `Bearer <token>` and a bare
- * `<token>`, the two forms the source accepted from this header. Returns `undefined`
+ * `<token>`. Returns `undefined`
  * for a missing or malformed header. Query parameters are deliberately not consulted:
  * `?api_key=` ends up in proxy and access logs.
  */

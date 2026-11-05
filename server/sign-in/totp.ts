@@ -1,19 +1,14 @@
 // Authenticator-app codes (TOTP, RFC 6238): secret generation, the enrolment QR code, and
 // verification that refuses a code twice.
 //
-// Rewritten from `template/apps/api/services/auth/totp.ts`. What changed and why:
+// - The issuer and account label are parameters.
+// - The secret is 20 random bytes, the length RFC 4226 recommends.
+// - `verifyTotp` returns the time step it accepted, and refuses any code whose step is not later
+//   than the last one accepted for that user, so a code seen over a shoulder or in a log cannot be
+//   replayed inside the window.
 //
-// - The issuer and account label were hard-coded to one customer's names. They are parameters now.
-// - The secret was the base32 of the text of a password hash of a config value and the user's login
-//   name, which is 97 bytes of hex digits and a colon rather than random bytes, and depended on two
-//   config secrets for no benefit. It is now 20 random bytes, the length RFC 4226 recommends.
-// - A code could be used again as often as it liked for as long as it stayed inside the window, so
-//   a code seen over a shoulder or in a log could be replayed for up to a minute and a half.
-//   `verifyTotp` returns the time step it accepted, and refuses any code whose step is not later than
-//   the last one accepted for that user.
-//
-// Kept from the source: SHA-1, six digits, 30-second steps, and one step of tolerance either side.
-// Every mainstream authenticator app supports exactly that configuration.
+// SHA-1, six digits, 30-second steps, and one step of tolerance either side: every mainstream
+// authenticator app supports exactly that configuration.
 //
 // Guessing is not limited here. Six digits across three accepted steps means a random guess succeeds
 // about once in 333 000 tries, so the app must rate-limit this check per user (see

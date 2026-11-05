@@ -5,16 +5,12 @@
  * - {@link QueryBus} — same shape as `CommandBus`, kept distinct so a read cannot register where a
  *   write is expected.
  * - {@link EventBus} — publish/subscribe, delivered on a microtask, with per-listener error
- *   isolation (see `event-bus.ts` for what changed from the source this was ported from).
+ *   isolation.
  *
  * `CommandBus.use` and `QueryBus.use` add a {@link CqrsMiddleware}: a step that runs around every
  * dispatch, before the handler, and may stop it.
  *
  * None of the three keeps state outside its own instance.
- *
- * An in-process command bus, query bus and event bus, ported from `template/libs/platform/cqrs`
- * (cross-checked against `financy/libs/shared/cqrs`, which differs only in comments — the two are the
- * same code).
  *
  * | Module             | Contents                                                           |
  * | ------------------ | ------------------------------------------------------------------ |
@@ -24,12 +20,10 @@
  * | `cqrs/types`       | `Command`, `Query`, `Event` and their constructor/handler types    |
  * | `cqrs/middleware`  | internal: the runner behind `CommandBus.use` and `QueryBus.use`    |
  *
- * `EventBus.emit` isolates listeners from each other: the source's `for` loop let the first listener
- * that threw abort every listener after it, and the throw surfaced as an uncaught exception inside
- * the microtask `emit` schedules it on. Here a listener failure — a synchronous throw or a rejected
- * returned promise — is reported through a constructor-supplied `onListenerError` (`console.error` by
- * default) instead. `once` also used to leak a subscription when its listener threw, because the
- * source unsubscribed _after_ calling the listener; here the unsubscribe runs first.
+ * `EventBus.emit` isolates listeners from each other: a listener failure — a synchronous throw or a
+ * rejected returned promise — is reported through a constructor-supplied `onListenerError`
+ * (`console.error` by default) instead of aborting the listeners after it. `once` unsubscribes
+ * before it calls the listener, so a throwing listener does not leak its subscription.
  *
  * ## Middleware
  *

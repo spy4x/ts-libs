@@ -138,7 +138,7 @@ Deno.test("links a brand to the schemes a mail client does follow", () => {
   }
 })
 
-// --- issue #88's fifth finding: the shell had one app's theme baked in ------
+// --- the shell had one app's theme baked in ------
 
 Deno.test("defaults to a neutral light shell, not the old dark theme", () => {
   const html = htmlWrap({ body: "<p>hi</p>" })

@@ -141,11 +141,9 @@ export enum UserSecretErrorCode {
  * The message is deliberately not parameterised: a caller value in a message is how a provider
  * name or a raw driver message ends up rendered to a user next to secret material. The error
  * therefore carries **no `cause`** either: `cause` is a live handle on
- * a rejection that a driver or cipher may have populated with the value it failed on, and the
- * reviewer recovered a plaintext api key from exactly that handle. The house rule is that only the
+ * a rejection that a driver or cipher may have populated with the value it failed on, such as a
+ * plaintext API key. The house rule is that only the
  * error's *type* crosses a boundary, never `message`, `stack`, `cause` or any field of the error.
- * (It used to be stated by `server/http/redact.ts`, which was deleted with `server/jwt.ts` in
- * #60/PR #79; the rule outlived the file.)
  *
  * What a caller gets for an underlying failure is {@link UserSecretError.rejectionName}: one of a
  * closed set of known type identities, or a primitive `typeof` for a non-`Error` throw (see
@@ -514,9 +512,8 @@ async function callPort<T>(
  * error type, resolved by `instanceof` against a closed whitelist.
  *
  * Never a string the injected implementation supplies. `error.name` is attacker-controlled text —
- * a driver can set it to the api key it failed on, and an earlier revision of this helper filtered
- * `name` to `[A-Za-z0-9_]`, which stopped punctuation but let an alphanumeric-only secret straight
- * through. Identity cannot carry a payload: the result is always one of `"CryptoError"`,
+ * a driver can set it to the api key it failed on, and a character filter would let an
+ * alphanumeric-only secret straight through. Identity cannot carry a payload: the result is always one of `"CryptoError"`,
  * `"DOMException"`, `"TypeError"`, `"RangeError"`, `"SyntaxError"`, `"Error"`, or a primitive
  * `typeof` such as `"string"`.
  *

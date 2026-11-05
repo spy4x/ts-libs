@@ -51,7 +51,7 @@
  * await storage?.upload("media/photo.png", bytes)
  * ```
  *
- * `loadStorageProvider("s3" | "local", s3Config?)` keeps the source's dynamic
+ * `loadStorageProvider("s3" | "local", s3Config?)` uses a dynamic
  * `import()`: a deployment that selects `local` never evaluates or fetches the S3
  * provider. The key is an **argument**, not a module-scope `$env` read, so
  * importing the package has no environment dependency and cannot fail on a missing
@@ -153,9 +153,8 @@
  *
  * ## The ACL default
  *
- * The source presigned every upload with `ACL: 'public-read'`, so every object
- * uploaded through a returned URL became world-readable. The default here is **no
- * ACL at all**: the canonical request contains no `x-amz-acl` parameter, the
+ * The default is **no ACL at all**, so an object uploaded through a returned URL is
+ * never world-readable: the canonical request contains no `x-amz-acl` parameter, the
  * object inherits the bucket's private default, and `X-Amz-SignedHeaders` is
  * `host` alone. Both are asserted in `storage.test.ts`.
  *
@@ -350,8 +349,8 @@ export type StorageProviderKey = "local" | "s3"
 /**
  * Load and construct a provider by dynamic `import()`.
  *
- * The dynamic import is kept from the source: a deployment that never selects
- * `s3` never evaluates or fetches the S3 provider. Unlike the source, no
+ * The import is dynamic: a deployment that never selects
+ * `s3` never evaluates or fetches the S3 provider. No
  * environment is read — the caller passes the key, so this is reachable from a
  * test and importing the package has no import-time environment dependency.
  * The S3 provider needs its credentials, so they are passed in rather than

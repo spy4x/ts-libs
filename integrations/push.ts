@@ -1,9 +1,7 @@
 /**
  * Web Push sender: one notification to every stored subscription of one user.
  *
- * Ported from `template/apps/api/services/web-push-service.ts` and `webPush.ts`. The
- * template's Postgres store, its `UserPushTokenPublic` shape and its welcome push stay in the
- * app; the store is a two-method port ({@link PushSubscriptionStore}) and the subscription is
+ * The store is a two-method port ({@link PushSubscriptionStore}) and the subscription is
  * `platform/model`'s `PushSubscriptionJson`, not a second shape.
  *
  * Keys, encryption (RFC 8291) and VAPID signing come from `@negrel/webpush` and

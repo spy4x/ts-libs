@@ -1,12 +1,8 @@
 /**
- * Adapter from the platform `WebSocket` to this package's {@link ManagedSocket} port (issue #65,
- * finding 4).
+ * Adapter from the platform `WebSocket` to this package's {@link ManagedSocket} port.
  *
- * No adapter shipped before this file, so the mismatch below was never exercised: the browser's
- * `readyState` is numbered 0-3 (`CONNECTING`, `OPEN`, `CLOSING`, `CLOSED`), while this package's
- * {@link SocketState} is numbered 1-4 for the same four states — `socket-port.ts` says so directly,
- * "mirroring the platform `WebSocket` constants", but the numbers do not actually line up. The
- * obvious adapter, `get state() { return this.#ws.readyState }`, therefore reads a real open socket
+ * The browser's `readyState` is numbered 0-3 (`CONNECTING`, `OPEN`, `CLOSING`, `CLOSED`), while this
+ * package's {@link SocketState} is numbered 1-4 for the same four states. The obvious adapter, `get state() { return this.#ws.readyState }`, therefore reads a real open socket
  * (native `1`) as this package's `SocketState.Connecting` (`1`), so `ClientTransport` never
  * considers it open and every `send` is refused — silently, since {@link ClientTransport.send}
  * returns `false` rather than throwing — before it ever reaches the socket. {@link READY_STATE_MAP}

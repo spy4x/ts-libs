@@ -15,7 +15,7 @@ import type { KeyValueStore as PlatformKeyValueStore } from "@spy4x/platform/uni
  * @deprecated Use `KeyValueStore` from `@spy4x/platform/universal/key-value-store` — the same
  * three methods, homed there since this package has no dependency of its own to protect
  * either way and `@spy4x/platform` cannot depend on `@spy4x/realtime` without a publish-time
- * dependency cycle (see #181's `realtime/backoff.ts` importing `@spy4x/platform/universal/async`).
+ * dependency cycle (`realtime/backoff.ts` imports `@spy4x/platform/universal/async`).
  */
 export type KeyValueStore = PlatformKeyValueStore
 

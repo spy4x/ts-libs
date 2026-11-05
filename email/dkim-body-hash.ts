@@ -2,24 +2,15 @@
  * Caches a message body's canonical-octet hash per canonicalisation mode and
  * `l=` bound, for the lifetime of one verification call.
  *
- * RFC 6376 §6.1 verifies every `DKIM-Signature` field independently, and
- * before this file existed each field re-canonicalised and re-hashed the
- * whole body from scratch. Ten signatures on one message did ten times the
- * body work, however many of them shared the same `c=` and `l=` — which is
- * the common case, since almost every real message signs the body once, no
- * matter how many `DKIM-Signature` fields it carries. `createBodyHashCache`
- * gives every field of one message a shared cache keyed by that combination,
- * so the canonicalisation pass and the digest each run at most once per
- * distinct combination the message actually asks for.
+ * RFC 6376 §6.1 verifies every `DKIM-Signature` field independently, but
+ * almost every real message signs the body once, however many fields it
+ * carries. `createBodyHashCache` gives every field of one message a shared
+ * cache keyed by `c=` and `l=`, so the canonicalisation pass and the digest
+ * each run at most once per distinct combination the message asks for.
  *
- * Split out of `dkim-verify.ts` — which keeps its imports few for
- * itself — so this caching seam has a name a test can import directly
- * without widening the package's public surface: this file is not listed in
- * `email/deno.json`'s `exports` map, and `mod.ts` does not re-export it, so
- * nothing outside `email/` can reach it. `dkim-verify.ts` imports it as an
- * ordinary sibling module of the same package, not an external dependency —
- * the import rule that file states for itself is about that, not
- * about splitting one package across two files.
+ * A module of its own so a test can import this seam directly. It is internal
+ * to the package: not in `email/deno.json`'s `exports` map and not
+ * re-exported by `mod.ts`; the DKIM verifier imports it as a sibling module.
  */
 
 /** Canonicalisation modes RFC 6376 §3.4 defines for a body. */

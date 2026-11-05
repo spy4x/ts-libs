@@ -340,7 +340,7 @@ describe("createJsonCodec", () => {
   })
 
   it("rejects a hint carrying a negative sequence", () => {
-    // #74: a negative sequence reaching CursorTracker unrejected was a break the suite missed;
+    // A negative sequence reaching CursorTracker unrejected was a break the suite missed;
     // rejecting it here, at the wire boundary, means the cursor arithmetic never has to see one.
     const result = codec.decode(
       JSON.stringify({ kind: "change.hint", groupId: "group-1", sequence: -1 }),

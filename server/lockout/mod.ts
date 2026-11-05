@@ -4,8 +4,7 @@
  * shared by every server instance; past a free budget, each wrong guess locks the subject for
  * longer.
  *
- * Ported from spy4x/seed `apps/api/services/totp-failures.ts`. The policy and the flow
- * are the template's; the table and its columns are now the caller's, behind {@link LockoutStore}.
+ * The table and its columns are the caller's, behind {@link LockoutStore}.
  *
  * How a check goes: {@link Lockout.begin} runs first and counts the check as a failure in advance;
  * a correct secret then calls {@link Lockout.refund}, which gives that one slot back. A correct
@@ -22,7 +21,7 @@
  *
  * `createLockout`, `lockDelayMs`, `beginCheck`, `resolveLockoutPolicy`, `DEFAULT_LOCKOUT_POLICY`,
  * `MAX_LOCK_LIMIT_MS` and the `LockoutStore` port; `createPostgresLockoutStore` in
- * `server/lockout/postgres`; `MemoryLockoutStore` in `server/lockout/memory-store`. Ported from spy4x/seed `apps/api/services/totp-failures.ts`.
+ * `server/lockout/postgres`; `MemoryLockoutStore` in `server/lockout/memory-store`.
  *
  * An escalating lockout for any secret a person can guess: a one-time code, an e-mail code, a PIN, a
  * recovery code. Counters are kept per subject, a key the caller chooses (a user id, an address), in a
@@ -107,17 +106,12 @@
  * sweeps run inside `update`, at most once per `quietResetMs` or every 512 calls. Neither option works
  * with `createMissing: false`, where a dropped subject would stop being counted.
  *
- * **Fixes applied at extraction time.**
- *
- * - `lockDelayMs` capped the doublings at 30 to keep the number finite. With the numbers now options,
- *   a maximum lock more than 2^30 times the first one could never be reached. The cap is gone:
- *   `Math.min` already turns an infinite product into the maximum lock.
- * - A check that `begin` counted but whose `fail` never ran (the process crashed, the request was
- *   dropped) was never forgotten for a subject with no wrong guess on record, because the quiet reset
- *   counted from a time that was never stamped. `begin` now stamps that time when it is empty.
- * - The source's year test called a guesser who tries again the moment each lock ends "the worst
- *   case". It is not: stopping after 12 guesses and waiting out the quiet reset gets about 576
- *   guesses a year, not 376. The test here tries every burst length from 1 to 40.
+ * The doublings of `lockDelayMs` are not capped at a count: `Math.min` already turns an infinite
+ * product into the maximum lock. A check that `begin` counted but whose `fail` never ran (the process
+ * crashed, the request was dropped) is still forgotten after the quiet reset, because `begin` stamps
+ * the time the reset counts from when it is empty. The year test tries every burst length from 1 to
+ * 40: stopping after 12 guesses and waiting out the quiet reset gets about 576 guesses a year, more
+ * than a guesser who tries again the moment each lock ends.
  *
  * @module
  */

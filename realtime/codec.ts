@@ -186,8 +186,7 @@ export type WireMessage = ClientMessage | ServerMessage
 
 // `SEQUENCE_START` (cursor.ts) is 0 and sequences only ever increase from there, so a negative or
 // fractional sequence is never legitimate wire data — it is refused here, at the boundary, rather
-// than relied on to fall out safely from the cursor arithmetic downstream (#74: a negative sequence
-// reaching `CursorTracker` unrejected was a break the existing suite did not catch).
+// than relied on to fall out safely from the cursor arithmetic downstream.
 const sequenceSchema = "number.integer >= 0"
 
 // Identifiers and names are bounded so a frame cannot smuggle an unbounded string into a log line or

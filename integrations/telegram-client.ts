@@ -2,7 +2,7 @@
  * Telegram Bot API client: typed calls for what a bot needs every day, and the arktype check that
  * turns an untrusted JSON value into a {@link TelegramUpdate}.
  *
- * Ported in behaviour from Financy's hand-written bot client. It follows this package's other
+ * It follows this package's other
  * clients: a per-request timeout, retries with backoff under a {@link RetryPolicy}, no redirect
  * following, never a thrown error, and never the bot token in a result.
  *

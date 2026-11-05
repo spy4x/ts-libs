@@ -368,7 +368,7 @@ const NON_PUBLIC_IPV4_RANGES: readonly string[] = [
  * `--deny-net` does close it, because Deno applies it at connect time, against
  * the address the connection is actually going to. Start the process with these
  * denied and a rebind lands on a refused connection instead of on the internal
- * service — see `denyNetFlag()` and the README.
+ * service — see `denyNetFlag()`.
  *
  * **What this layer cannot cover.** Deno 2.9.7 takes a CIDR range for IPv4 but
  * not for IPv6: `--deny-net=fc00::/7` stops the process from starting at all
@@ -382,7 +382,7 @@ const NON_PUBLIC_IPV4_RANGES: readonly string[] = [
  * either, and `Deno.serve` binds the wildcard address by default, so
  * `0.0.0.0/8` or `0.0.0.0/32` in this list stops the application from starting
  * its own server. A process that never listens can add `0.0.0.0/32` to the flag
- * itself and close it; one that serves cannot, and the README says so plainly.
+ * itself and close it; one that serves cannot.
  *
  * Every address here is one `isPublicAddress` also refuses, which
  * `url-policy.test.ts` checks; the other direction does not hold, and this list

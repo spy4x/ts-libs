@@ -304,7 +304,7 @@ export function objectUrl(calendarUrl: string | URL, entityId: string): string {
   return childUrl(calendarUrl, `${entityId}.ics`).href
 }
 
-/** Reads a failed CalDAV call as the queue needs it. See the table in the module README. */
+/** Reads a failed CalDAV call as the queue needs it. See the table in this module's doc. */
 export function classifyCalDavError(error: CalDavError): CalDavSendFailure {
   switch (error.code) {
     case CalDavErrorCode.Conflict:

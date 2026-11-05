@@ -330,7 +330,7 @@ Deno.test("PayloadTooLargeError is the same class object as the canonical one", 
 
 Deno.test("parseBoundedFormData is the same function as the one in net", () => {
   // Its behaviour is tested in `net/bounded-body.test.ts`, where it lives since
-  // #222; this entry point only has to keep handing out that one function.
+  // This entry point only has to keep handing out that one function.
   assertStrictEquals(parseBoundedFormData, netParseBoundedFormData)
 })
 

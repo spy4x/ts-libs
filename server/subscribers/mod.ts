@@ -1,15 +1,14 @@
 /**
  * Double opt-in mailing lists: signed confirm and unsubscribe links that keep the address out of
  * the URL, a store port with the replay rule, and the subscribe, confirm and unsubscribe flows. The
- * app keeps its wording, pages and routes. Ported from spy4x/antonshubin.com.
+ * app keeps its wording, pages and routes.
  *
  * `createSubscriptionCrypto`, `CONFIRM_TTL_MS`, the `SubscriberStore` port, the flows
  * `requestSubscription`, `previewConfirmation`, `confirmSubscription`, `previewUnsubscribe` and
  * `unsubscribe`, `unsubscribeTokenFrom`, `UNSUBSCRIBE_FORM_MAX_BYTES` and `TOKEN_PAGE_HEADERS`;
  * `sendIssue` and the `SendLog` port; `createMemorySubscriberStore` and `createMemorySendLog` in
  * `server/subscribers/memory`, `createFileSendLog` in `server/subscribers/file`; `createPostgresSubscriberStore`,
- * `createPostgresSendLog` and `SUBSCRIBERS_POSTGRES_SCHEMA` in `server/subscribers/postgres`. Ported from
- * spy4x/antonshubin.com.
+ * `createPostgresSendLog` and `SUBSCRIBERS_POSTGRES_SCHEMA` in `server/subscribers/postgres`.
  *
  * A double opt-in mailing list. A visitor enters an address, gets a confirm link, and joins the list
  * only after clicking it. Every mail after that carries an unsubscribe link that holds no address.
@@ -196,26 +195,19 @@
  * parse, or is not an array, is left alone and every call throws, so a corrupt log stops a send
  * instead of allowing a second one.
  *
- * **Fixes applied at extraction time.**
+ * **Guarantees:**
  *
- * - The site's relay-error redaction matched the address exactly as stored, so a mail server that
- *   echoed `JANE@EXAMPLE.COM` for `jane@example.com` put the address in the log. Redaction is now
- *   case-insensitive, and store and link-building errors are redacted too.
- * - Every unsubscribe GET checked the token against each subscriber in turn, one HMAC per address,
- *   for anyone holding any string. Version 2 links cost one lookup, and the version 1 scan is
+ * - Relay-error redaction is case-insensitive, so a mail server that echoes `JANE@EXAMPLE.COM` for
+ *   `jane@example.com` does not put the address in the log; store and link-building errors are
+ *   redacted too. `sendIssue` logs the row number, never the address.
+ * - A version 2 unsubscribe link costs one lookup; the version 1 scan, one HMAC per subscriber, is
  *   rate-limited per client.
- * - The site derived a confirm link's issue time from its expiry minus the current TTL, so shortening
- *   the TTL made older links look newer and let a replay through. Version 2 links carry their issue
- *   time.
- * - Many clients could each send a few subscribe requests for one address and flood its inbox; the
- *   per-recipient limit stops that.
- * - The site overwrote a damaged `.unsubscribed` file on the next unsubscribe, losing the replay
- *   record without a trace, and treated it as empty, so `add` let a replayed confirm link in. The file
- *   store keeps every damaged text under its own name before writing, and refuses `add` meanwhile;
- *   the new record keeps every mark it could still read.
- * - The site's send loop logged every recipient's address, once per mail sent and once per failure
- *   (`lib/newsletter.ts:89` and `:93`). `sendIssue` logs the row number, and a relay error has the
- *   address redacted in any letter case.
+ * - Version 2 links carry their issue time, so shortening the TTL cannot make an older link look
+ *   newer and let a replay through.
+ * - A per-recipient limit stops many clients flooding one address with subscribe requests.
+ * - The file store keeps a damaged `.unsubscribed` file under its own name before writing, and
+ *   refuses `add` meanwhile, so a replayed confirm link cannot get in; the new record keeps every
+ *   mark it could still read.
  *
  * @module
  */

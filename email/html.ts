@@ -13,7 +13,7 @@
  * So `htmlWrap({ body: \`<p>${escapeHtml(name)}</p>\` })` is correct and
  * `htmlWrap({ body: escapeHtml(\`<p>${name}</p>\`) })` is not: the second escapes
  * the markup too, and the recipient reads `<p>` instead of seeing a paragraph.
- * `'` is escaped as well as the four characters `mig` handled — an apostrophe is
+ * `'` is escaped as well as `&`, `<`, `>` and `"` — an apostrophe is
  * harmless in element text and terminates a single-quoted attribute, and an
  * escaper that is safe only in one of the two positions is a trap.
  *
@@ -158,7 +158,7 @@ export const DEFAULT_HTML_SHELL_THEME: HtmlShellTheme = Object.freeze({
 
 /**
  * The look `htmlWrap` had before {@link HtmlShellOptions.theme} existed: a dark
- * navy body with light text and an orange brand link, ported as-is from `mig`.
+ * navy body with light text and an orange brand link.
  * Pass this as `theme` for a caller that already copied that appearance and
  * wants to keep it.
  */
@@ -172,15 +172,10 @@ export const DARK_HTML_SHELL_THEME: HtmlShellTheme = Object.freeze({
 /**
  * Wrap a body in the shared letter-shaped shell.
  *
- * Ported from `mig`'s `htmlWrap`, with the app-specific config removed: the
- * brand label and link were already options instead of a hard-coded product
- * name and `githubUrl`; the colours, the column width and the footer's
- * "Sent by" wording are options now too; a caller with no opinion gets a
- * neutral light shell ({@link DEFAULT_HTML_SHELL_THEME}) rather than one
- * `mig`'s own dark palette baked in as the only look. Nothing in this
- * repository imports `htmlWrap`, so nothing here needed the old default kept —
- * an outside caller that already copied `mig`'s look gets it back by passing
- * `theme: DARK_HTML_SHELL_THEME`.
+ * The brand label and link, the colours, the column width and the footer's
+ * "Sent by" wording are options; a caller with no opinion gets a
+ * neutral light shell ({@link DEFAULT_HTML_SHELL_THEME}); a caller that wants
+ * the dark look passes `theme: DARK_HTML_SHELL_THEME`.
  *
  * The letter column defaults to 480px so it reads as a letter instead of
  * stretching across a desktop pane; the background still reaches the viewport

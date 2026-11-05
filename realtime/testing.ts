@@ -3,7 +3,7 @@
  *
  * Shipped rather than hidden in `*.test.ts` because a host application needs the same doubles to
  * test its own wiring, and because "testable without a network, a browser or a sleep" is a promise
- * this package makes in its README. Everything here is dependency-free: no fake-timer library, no
+ * this package makes. Everything here is dependency-free: no fake-timer library, no
  * mocking framework.
  *
  * ```bash
@@ -37,7 +37,7 @@
  * own wiring without inventing a second set.
  *
  * Dependencies: arktype (the repository's only validator) for the wire schemas,
- * `@spy4x/platform` (`universal/time`, `#71`) for the plain instant source
+ * `@spy4x/platform` (`universal/time`) for the plain instant source
  * `clock.ts`'s `TimerClock` extends, `@spy4x/net` (`bounded-body`) for the capped body read in
  * `operations.ts`, and `@std/*` in tests. No WebSocket library, no
  * framework, no Preact, no signals. `web-socket-adapter.ts` is the one file that
@@ -220,8 +220,8 @@ export class FakeSocket implements ManagedSocket {
    * `close` event — and the move to `Closed` — happens on a later microtask.
    *
    * A real `WebSocket.close()` does not close synchronously; a caller that reads `state` right
-   * after calling it sees `Closing`, and code that assumed otherwise (a fixed bug in this package,
-   * issue #74) has to be wrong in a way a test can catch. `closeCalls` still records the call
+   * after calling it sees `Closing`, and code that assumes otherwise has to be wrong in a way a test
+   * can catch. `closeCalls` still records the call
    * immediately, so a test asserting *that* a close was requested does not need to await anything.
    *
    * The close event reports a clean close of an open socket as `abnormal: false` with the given

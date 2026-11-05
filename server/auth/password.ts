@@ -1,8 +1,7 @@
 /**
  * Sign-in with an email address and a password, built on `AuthStore` and `SessionManager`.
  *
- * Written from the rules in issue #57, not moved from the earlier `providers/email-password.ts`. The
- * rules this file carries:
+ * The rules this file carries:
  *
  * - **Sign-in takes the same work as an account whose hash the current hasher made, whether or not
  *   the account exists.** A missing account is checked against a fixed dummy hash made once when
@@ -31,8 +30,7 @@
  * `DEFAULT_MAX_RESET_ATTEMPTS`, and the input and option interfaces.
  *
  * Sign-up, sign-in, password change and password reset with an address and a password, on the
- * `server/auth` store and the `server/sign-in` session manager and hasher. Written from #57's
- * rules, not moved from the earlier `email-password.ts`. Every refusal is thrown as a
+ * `server/auth` store and the `server/sign-in` session manager and hasher. Every refusal is thrown as a
  * `PasswordSignInError` whose `reason` names it.
  *
  * The hasher also works on its own:

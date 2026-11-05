@@ -1,28 +1,19 @@
 /**
  * ntfy push client — failure-only, retrying, header-safe.
  *
- * Ported from two sources: the `ntfy` half of
- * `rostok/scripts/backup/src/reporting.ts` (retries, priority, tags) and
- * `mig/lib/notify.ts` (gating, fail-soft, and the non-ASCII header fix). The
- * backup domain is gone: nothing here imports or references `BackupResult`, so
- * the notifier works from any caller.
+ * Retries, priority, tags, gating, fail-soft delivery and safe non-ASCII
+ * headers, with no domain of its own, so the notifier works from any caller.
  *
- * Deviations from the sources, each pinned by a test:
+ * Each pinned by a test:
  *
- *  - `mig` ran the message **body** through its header sanitiser
- *    (`notify.ts:119`), so `Café ☕` arrived as `Caf? ?`. Only headers are
- *    transliterated here; the body is UTF-8 end to end.
- *  - `mig` returned `void` and logged transport failures
- *    (`notify.ts:121-128`), so a caller could not tell a delivered push from a
- *    dropped one. Every method returns a discriminated result.
- *  - `rostok` gated on `successCount === totalCount` (`reporting.ts:45`), a
- *    backup concept. The gate is now an explicit `NotificationSeverity`.
- *  - Neither source honoured `Retry-After`; `rostok` used a fixed 3s delay
- *    (`reporting.ts:53`). Transient statuses now honour the header.
- *  - `mig` read `NTFY_URL`, `NTFY_TOPIC` and `NTFY_TOKEN` at call time but
- *    `rostok` used a bearer token in `Authorization` directly
- *    (`reporting.ts:193`). The token is a constructor parameter here, never
- *    read at module scope and never logged.
+ *  - Only headers are transliterated; the body is UTF-8 end to end, so
+ *    `Café ☕` arrives as written.
+ *  - Every method returns a discriminated result, so a caller can tell a
+ *    delivered push from a dropped one.
+ *  - The gate is an explicit `NotificationSeverity`.
+ *  - Transient statuses honour `Retry-After`.
+ *  - The token is a constructor parameter, never read at module scope and
+ *    never logged.
  *
  * ```ts
  * const client = new NtfyClient({ baseUrl, topic, token })
@@ -35,8 +26,7 @@
  *
  * **Result.** `{ ok: true, status: "pushed", httpStatus, attempts, title, tags }`,
  * `{ ok: true, status: "skipped", … }`, or `{ ok: false, code, message, status?, attempts }`, `code`
- * being `"http_error"`, `"network_error"`, `"timeout"` or `"redirected"`. The source returned `void`
- * and logged failures, so a dropped push looked like a delivered one.
+ * being `"http_error"`, `"network_error"`, `"timeout"` or `"redirected"`.
  *
  * **The base URL must be the final address.** Redirects are not followed. Following a 301, 302 or 303
  * re-sends the push as a bodiless GET, which ntfy answers with its web app and a 200, so a lost push
@@ -58,19 +48,18 @@
  * which returns the error's class name and `transport failure (url withheld)` — never the URL. The
  * same helper covers `HealthchecksClient` (the ping URL carries the check's capability key).
  *
- * ## Header safety — the trap `ntfy.ts` carries a fix for
+ * ## Header safety
  *
  * `Headers.set` rejects code points the platform will not accept in a header value, and the rejection
  * surfaces from inside `fetch` as an opaque `TypeError: Value is not a valid ByteString`. Two
- * different needs follow, and `mig`'s source conflated them:
+ * different needs follow:
  *
  * - A **header value** must be transliterated to printable ASCII. `toAsciiHeaderValue` maps the
  *   characters that matter for readability (`—` → `-`, `"` → `"`, `…` → `...`, non-breaking space →
  *   space) and replaces everything else — Latin-1 accents, Cyrillic, CJK, emoji — with `?`. Each run
  *   of HT, LF and CR becomes one space, because `Headers.set` throws on a line break inside a value.
- * - A **message body** must be left alone. `mig` passed the body through the same sanitiser, so
- *   `Café ☕` reached ntfy as `Caf? ?` and every accented, Cyrillic, CJK and emoji payload was
- *   destroyed. Only headers are transliterated here.
+ * - A **message body** must be left alone: through the same sanitiser, `Café ☕` would reach ntfy
+ *   as `Caf? ?`. Only headers are transliterated here.
  *
  * `createAsciiHeaders` applies the transliteration to every value, so the failure cannot come back
  * through a new call site. Both halves are pinned by tests, including the body round-trip.
@@ -253,7 +242,7 @@ export interface NtfyClientOptions {
 }
 
 /**
- * 5 attempts, 3s doubling, mirroring `rostok`'s ntfy loop, plus +/-20% jitter so
+ * 5 attempts, 3s doubling, plus +/-20% jitter so
  * many callers hitting the same endpoint at once do not retry in lockstep.
  *
  * Delay ranges with jitter applied: 2.4-3.6s, 4.8-7.2s, 9.6-14.4s, 12-15s (the
@@ -298,9 +287,9 @@ const describeUrlShape = (value: string): string => {
  *
  * All of `NTFY_URL` and `NTFY_TOPIC` are required; `NTFY_TOKEN` is optional
  * because a self-hosted ntfy on a private network may not use auth. `null`
- * when incomplete, so "not configured" stays a caller decision — `mig`
- * collapsed it into a silent no-op, which means a typo'd variable name looks
- * exactly like a deliberate disable. The default reader is `processEnv` from
+ * when incomplete, so "not configured" stays a caller decision — a silent
+ * no-op would make a typo'd variable name look exactly like a deliberate
+ * disable. The default reader is `processEnv` from
  * `@spy4x/platform/server/process`, so it works on Deno, Node and Bun; on Deno
  * it needs `--allow-env`.
  */

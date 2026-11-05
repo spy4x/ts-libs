@@ -4,8 +4,6 @@
  * `deletedAt` on top of that — three tiers so a read-only or never-deleted projection is not
  * forced to carry a field it will never receive.
  *
- * Moved from `template/libs/platform/types/+index.ts`, unchanged.
- *
  * **`"+": "reject"` decision: none of the three declares it.** An app is expected to extend these
  * with its own fields via `.and()` (`BaseModelSchema.and({ name: "string" })`), and arktype
  * resolves `"+": "reject"` at intersection time by making every key the left side does not already

@@ -1,8 +1,7 @@
 /**
  * The Postgres `AuthStore` and `SessionStore`, and the tables they need.
  *
- * Written from the rules in issue #57, not moved from the earlier `postgres-adapter.ts`. The
- * database enforces the rules itself, so a bug in a provider cannot break them:
+ * The database enforces the rules itself, so a bug in a provider cannot break them:
  *
  * - `UNIQUE (method, subject)` on `auth_keys`: one key per sign-in identity.
  * - `auth_email_owners` has the address as its primary key: at most one user owns a proven address.

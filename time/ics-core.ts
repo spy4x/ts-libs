@@ -7,15 +7,10 @@
  * copy of its own. It deliberately contains no VCALENDAR/VEVENT
  * structure and no parser: it is the byte-level layer, not the format on top.
  *
- * The folding algorithm originates in `mig/lib/ics.ts` (fold) and this port
- * keeps its UTF-8 boundary handling unchanged.
- *
  * `time/ics-core.ts` holds the byte-level RFC 5545 primitives: 75-octet folding, unfolding, TEXT
  * escaping, RFC 6868 parameter escaping, control-character stripping and the UTC DATE-TIME format.
  * `time/ics.ts` builds VCALENDAR/VEVENT on top of it, and the `caldav/` package imports the same
- * module instead of carrying a copy of its own. `caldav-mcp`'s `ical.ts` — a separate repo, not part
- * of this library — slices folded lines by character (`ical.ts:10-19`), which splits
- * multi-byte UTF-8; `ics-core.ts` does not.
+ * module instead of carrying a copy of its own. Folding never splits a multi-byte UTF-8 character.
  *
  * ## Folding
  *
@@ -230,8 +225,7 @@ export function foldLine(line: string): string {
  * Unfold every content line in an iCalendar document: a CRLF (or bare LF)
  * followed by SPACE or HTAB continues the previous line (RFC 5545 §3.1).
  *
- * Exported because it is the inverse of {@link foldLine} and because #13 needs
- * the same definition; tests use it to assert octet-exact round trips.
+ * Exported because it is the inverse of {@link foldLine}; tests use it to assert octet-exact round trips.
  */
 export function unfoldLines(text: string): string {
   return text.replace(/\r?\n[ \t]/g, "")

@@ -19,7 +19,7 @@
  *  - The request is bounded by `AbortSignal.timeout`, and the reply is read under a byte cap
  *    (`readBoundedJson`).
  *
- * Endpoints checked against each provider's own docs on 2026-11-04 (see the package README).
+ * Endpoints checked against each provider's own docs on 2026-11-04 (see the table below).
  *
  * Sends a conversation to any server that speaks OpenAI's `POST /chat/completions` and returns the
  * reply's JSON, checked with an arktype schema. A thin `fetch` wrapper, no SDK.

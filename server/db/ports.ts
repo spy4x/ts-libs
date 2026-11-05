@@ -18,9 +18,7 @@ export type Transaction = postgres.TransactionSql<Record<string, unknown>>
 /**
  * The cache a {@link DbServiceBase} may be given.
  *
- * Adapted from the template's `PublicAPICacheModel` (`template/libs/server/db/+index.ts:51-90`),
- * which this package cannot import: it is a domain class from a host app. The
- * four operations used are all that is required, so a caller passes the cache it
+ * The four operations used are all that is required, so a caller passes the cache it
  * already has rather than one shaped here. Keys are `string | number` because the
  * template keys rows by numeric id and other callers key by string.
  */

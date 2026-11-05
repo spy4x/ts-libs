@@ -10,17 +10,16 @@
  * return `undefined` (no CORS headers), which is not a rejection — browsers only
  * enforce CORS when an `Origin` is present.
  *
- * Deviations from the source, all covered by tests below:
- *  - the allowed origins are a required argument rather than a module constant
- *    baked to one product, and a resolver built from an empty allowlist throws
- *    instead of accepting every origin — the "no config" default must be refuse,
- *    and for a factory "refuse" means refusing to build;
+ * Rules, all covered by tests:
+ *  - the allowed origins are a required argument, and a resolver built from an
+ *    empty allowlist throws instead of accepting every origin — the "no config"
+ *    default must be refuse, and for a factory "refuse" means refusing to build;
  *  - no Chrome extension is accepted unless its exact `chrome-extension://<id>`
- *    origin is in the allowlist: the source echoed every extension's origin, so
- *    any installed extension could read credentialed responses;
+ *    origin is in the allowlist, so an installed extension cannot read
+ *    credentialed responses;
  *  - plain-http loopback origins are accepted only for the hosts the caller
- *    passes as `devHosts` (none by default): the source accepted them in every
- *    deployment, so any page served from a port on the visitor's machine could.
+ *    passes as `devHosts` (none by default), so a page served from a port on the
+ *    visitor's machine cannot.
  *
  * `resolveAllowedOrigin`, `createCorsOriginResolver`, `CORS_ALLOW_METHODS`, `CORS_ALLOW_HEADERS`,
  * `DEV_ORIGIN_HOSTS`.

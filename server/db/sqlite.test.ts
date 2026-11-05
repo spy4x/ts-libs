@@ -893,9 +893,8 @@ async function recordingMemory(): Promise<{
 /**
  * The payloads a caller must not be able to get through `table`.
  *
- * The first two are the ones the PR #56 review probed; both are malformed enough that
- * SQLite rejects the *first* statement, which is why they appeared safe. The third is
- * the well-formed one the coordinator measured data loss with: SQLite admits
+ * The first two are malformed enough that SQLite rejects the *first* statement, which
+ * is why they appear safe. The third is well-formed: SQLite admits
  * `CREATE TABLE IF NOT EXISTS migrations (name TEXT)`, the `;` then separates a real
  * `DROP TABLE victims`, and the trailing `--` comments the rest of the template out.
  */

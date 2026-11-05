@@ -7,32 +7,16 @@
  * `EnvReader`, `MissingEnvError`, `systemEnv`, `createEnvReader`, `readEnvVar`, `loadConfig`,
  * `ConfigError`, `ConfigIssue`, `stringBoolean`.
  *
- * Six apps carry their own version of "read the environment into a config object" today — a class
- * whose fields are one `getEnvVar("NAME")` call apiece (`template/apps/api/services/config.ts`;
- * `financy`'s carries the same shape plus three Telegram-specific fields of its own — not identical,
- * just the same pattern), a type-cast (`as "dev" | "prod"`) standing in for a real check, and
- * `Number(getEnvVar(...))` silently accepting `NaN` for a malformed number. `loadConfig` replaces the
- * per-field calls with one arktype schema, validated once at start-up: every field is named once, its
- * shape is checked once, and a bad or missing value fails loudly instead of turning into `NaN` or an
- * unchecked cast three requests later.
+ * `loadConfig` reads the environment through one arktype schema, validated once at start-up: every
+ * field is named once, its shape is checked once, and a bad or missing value fails loudly instead of
+ * turning into `NaN` or an unchecked cast three requests later. `readEnvVar` is the small
+ * single-variable helper for the one value a caller needs before the rest of its configuration can
+ * even be assembled (`ENV`, deciding which schema to validate against, for example).
  *
- * `EnvReader`/`systemEnv`/`createEnvReader` are moved from this repository's own `ops/env.ts`, removed
- * from the tree in #67 (`git log --all --oneline -- ops/env.ts`), trimmed to the environment-reading
- * primitive — `absPath`, `substituteEnvVars` and `rewriteEnvValues` were `ops`-specific
- * deploy-templating helpers, not part of "environment to typed config", and are not ported.
- * `readEnvVar` is the small single-variable helper for the one value a caller needs before the rest of
- * its configuration can even be assembled (`ENV`, deciding which schema to validate against, for
- * example); `loadConfig` is the entry point for everything else.
- *
- * **Bug fixed at extraction time.** The source's `systemEnv.get` returned a real blank environment
- * variable unchanged, while `createEnvReader` — the only path the source's own tests exercised —
- * folded a blank value to `undefined`. A variable that was genuinely blank in production therefore
- * behaved differently from the identical case under test. Both readers now normalise a blank value to
- * `undefined` at the same boundary, so "an empty string counts as missing" is one rule instead of two
- * inconsistent ones. This is also this module's answer to what an empty string means: a placeholder
- * that expanded to nothing (`${VAR}` with no value, a blank `.env` line) is indistinguishable from a
- * real empty string once it reaches the process environment, and treating it as present would let a
- * broken deploy script configure a service with `""` instead of failing at start-up.
+ * **An empty string counts as missing, in every reader.** A placeholder that expanded to nothing
+ * (`${VAR}` with no value, a blank `.env` line) is indistinguishable from a real empty string once it
+ * reaches the process environment, and treating it as present would let a broken deploy script
+ * configure a service with `""` instead of failing at start-up.
  *
  * **Scope: a flat schema.** `loadConfig(schema, env = systemEnv)` reads exactly the top-level keys an
  * arktype object schema declares — `type({ AUTH_PEPPER: "string", PORT: "string.integer.parse" })`

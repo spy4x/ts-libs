@@ -19,8 +19,8 @@ export interface LocalStorageConfig {
  * Local-filesystem provider for development.
  *
  * Carries no presigned-URL story: a file URL is not an authorisation, so
- * `getUploadURL`/`getDownloadURL` return the object's `file:` URL and the README
- * says plainly that they are dev-only. Bytes are written and read verbatim —
+ * `getUploadURL`/`getDownloadURL` return the object's `file:` URL and are
+ * dev-only. Bytes are written and read verbatim —
  * this provider never decodes a body to text.
  */
 export class LocalStorage implements FileStorage {

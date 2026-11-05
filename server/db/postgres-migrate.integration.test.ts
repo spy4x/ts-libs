@@ -68,9 +68,8 @@ interface Run {
  * `transform` defaults to none — a plain client, column names exactly as Postgres sends
  * them. Passing `postgres.camel` is what the template's own client used
  * (`template/libs/server/db/+index.ts:13`); the "against a camelCase client" tests below
- * pass it to prove the same driver behaviour holds under that transform, which is the
- * client shape #77 found failing. Passing `postgres.pascal` is what the "against a
- * postgres.pascal client" tests below use for #137: unlike `postgres.camel`, it rewrites
+ * pass it to prove the same driver behaviour holds under that transform. Passing `postgres.pascal` is what the "against a
+ * postgres.pascal client" tests below use: unlike `postgres.camel`, it rewrites
  * every column name, including the bare lower-case words (`locked`, `tableexists`, …)
  * `postgres.camel` leaves alone.
  */
@@ -181,7 +180,7 @@ describe("the Postgres migration runner against a real server", () => {
   })
 
   it("gives up by name when another runner holds the lock past the bound", async () => {
-    // Issue #109. The lock used to be `pg_advisory_lock`, which waits for ever, so one
+    // The lock used to be `pg_advisory_lock`, which waits for ever, so one
     // stuck runner stopped every other instance from starting and the deployment hung with
     // nothing in the log. The holder here is a real backend holding a real advisory lock,
     // which is the part a fake cannot show.
@@ -378,11 +377,11 @@ describe("the Postgres migration runner against a camelCase client", () => {
   // read them the same way a plain client does. Before that alias existed, the probe read
   // `undefined` for both flags on a camelCase client, so `createHistoryTable` treated an
   // existing history table as absent and reissued `CREATE TABLE`, failing every run after
-  // the first with `relation "migrations" already exists` — measured on #77, where the
+  // the first with `relation "migrations" already exists`, where the
   // template's API container runs migrations on every start. The alias no longer does the
   // work — every probe is read by column position now, which is what also fixed
   // `postgres.pascal` below — but this test still holds and the alias still reads
-  // fine under `postgres.camel`, so it stays as the regression test for #77.
+  // fine under `postgres.camel`, so it stays as a regression test.
 
   it("skips on the second run instead of failing on relation already exists", async () => {
     await withRun(async ({ sql, table, subject }) => {
@@ -394,7 +393,7 @@ describe("the Postgres migration runner against a camelCase client", () => {
       const first = await runMigrations(new PostgresMigrationDriver({ sql, table }), options)
       assertEquals(first, { applied: ["0001_init"], skipped: [], missing: [] })
 
-      // Reproduces #77 as reported: before the fix, this run's `createHistoryTable` saw
+      // Before the fix, this run's `createHistoryTable` saw
       // `tableexists: undefined` and reissued `CREATE TABLE`, which Postgres rejects with
       // `relation "…" already exists` rather than skipping the already-applied migration.
       const second = await runMigrations(new PostgresMigrationDriver({ sql, table }), options)
@@ -503,7 +502,7 @@ describe("the Postgres migration runner against a camelCase client", () => {
 })
 
 describe("the Postgres migration runner against a postgres.pascal client", () => {
-  // #137. `postgres.pascal` upper-cases every column's first letter, including a bare
+  // `postgres.pascal` upper-cases every column's first letter, including a bare
   // lower-case word with no underscore — `locked` back as `Locked`, `tableexists` as
   // `Tableexists` — which is exactly what the `postgres.camel` alias above does not
   // rewrite. Before the fix every probe in this driver, and the table listing in
@@ -524,7 +523,7 @@ describe("the Postgres migration runner against a postgres.pascal client", () =>
       const first = await runMigrations(new PostgresMigrationDriver(driverOptions), options)
       assertEquals(first, { applied: ["0001_init"], skipped: [], missing: [] })
 
-      // Reproduces #137 as reported: before the fix this run's `takeLock` read `Locked`
+      // Before the fix this run's `takeLock` read `Locked`
       // where it looked for `locked`, always found it `undefined`, and gave up with
       // `PostgresMigrationLockError` after waiting out `lockWaitMs` — although this
       // process itself was the only one that ever tried to take the lock.
@@ -578,7 +577,7 @@ describe("the Postgres migration runner against a postgres.pascal client", () =>
   })
 
   it('a driver with no schema and a driver with schema: "public" lock each other out', async () => {
-    // `resolvedTableRef`'s schema probe is read through `.values()` too (round 2 of #137):
+    // `resolvedTableRef`'s schema probe is read through `.values()` too:
     // reverting it to a name-based `rows[0]?.schema` read left every other test in this file
     // green, because `takeLock` and the rest already worked under pascal — only the *key* was
     // wrong, silently, with the old fallback ("" instead of "public") producing a `.table` key
@@ -665,7 +664,7 @@ const collidingColumnTransform = {
 }
 
 describe("the Postgres migration runner against a client with a custom row or column transform", () => {
-  // #137 round 2. The positional `resultColumns`/`Object.values(row)` fix this replaced read
+  // The positional `resultColumns`/`Object.values(row)` fix this replaced read
   // whatever a name-keyed row object happened to look like after a client's own transform ran
   // on it — which a `transform.row.from` that added a field (by spreading, `{ ...row, x: 1 }`)
   // could reorder, and which a `transform.column.from` that mapped two columns to the same
@@ -721,7 +720,7 @@ describe("the Postgres migration runner against a client with a custom row or co
 
 describe("the Postgres migration runner against a client with a custom value transform", () => {
   it("takeLock refuses a stringified lock flag instead of reporting a false lock conflict", async () => {
-    // #137 round 3. `.values()` sidesteps a column-name transform, but a client's
+    // `.values()` sidesteps a column-name transform, but a client's
     // `transform.value.from` still runs on the value itself
     // (`postgres@3.4.7/src/connection.js:505-509`). A client whose value transform
     // stringifies every boolean — or a custom bool parser doing the same — turns
@@ -769,7 +768,7 @@ describe("the Postgres migration runner against a client with a custom value tra
 
 describe("the Postgres migration runner against a client built with fetch_types: false", () => {
   it("runs twice without hanging", async () => {
-    // #156. `createSql` has no `fetch_types` knob, so this client is built from `postgres`
+    // `createSql` has no `fetch_types` knob, so this client is built from `postgres`
     // directly, the way a caller who wants a faster cold start or a pooler that does not
     // support the type lookup would build one.
     //

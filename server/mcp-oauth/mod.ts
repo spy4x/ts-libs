@@ -1,6 +1,6 @@
 /**
  * Single-user OAuth 2.1 for remote MCP connectors: the authorization server, the resource-server
- * guard, and the pieces they are built from. See the `server/mcp-oauth` section of the README.
+ * guard, and the pieces they are built from.
  *
  * A single-user OAuth 2.1 authorization server, so one person can connect their own remote MCP
  * server to claude.ai, the Claude apps and Claude Code, plus the Hono guard the MCP server puts in
@@ -86,7 +86,7 @@
  *   address. Deno's `--deny-net` is checked at connect time and closes that gap: start the server
  *   with the flag `denyNetFlag()` from `@spy4x/net/url-policy` returns. It denies loopback and the
  *   private ranges, so the process cannot reach a database or service on those addresses either;
- *   see `net/README.md` for what it covers and what it cannot.
+ *   see `@spy4x/net/url-policy` for what it covers and what it cannot.
  * - **Redirects.** The redirect URI must be on the server's allowlist and in the client's own
  *   document. The default allowlist is `https://claude.ai/api/mcp/auth_callback` plus
  *   `http://localhost/callback` and `http://127.0.0.1/callback`, which match on any port for Claude

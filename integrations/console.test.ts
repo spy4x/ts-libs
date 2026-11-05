@@ -5,7 +5,7 @@
  * leaves a blind spot: a `console.error` restored in a branch that test does
  * not drive stays green. That is exactly how a restored 4xx `console.error` in
  * `mailchimp.ts` survived a green suite — no test exercised that branch while
- * capturing the console. (Mailchimp and Slack are gone, #68; this file now
+ * Capturing the console. (Mailchimp and Slack are gone; this file now
  * drives the two clients that took their place.)
  *
  * This file drives every path of both clients under one capture:

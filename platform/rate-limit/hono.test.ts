@@ -164,9 +164,8 @@ describe("createRateLimitMiddleware", () => {
   })
 
   it("hands the connection's peer address to the key resolver", async () => {
-    // Regression guard: `keyResolver` used to receive only a `Request`, which carries no peer
-    // address, so the README's "key on the peer address instead" mitigation could not be wired at
-    // all. Without this test, dropping the second argument again passes the whole suite.
+    // A `Request` carries no peer address, so without the second argument the "key on the peer
+    // address instead" mitigation cannot be wired at all.
     const seen: (string | undefined)[] = []
     const limiter = createMemoryRateLimiter({ windowMs: 1000, limit: 1, clock: () => T0 })
     const app = new Hono<{ Variables: never; Bindings: { remoteAddr?: string } }>()

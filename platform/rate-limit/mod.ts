@@ -6,12 +6,7 @@
  * - {@link createRateLimitMiddleware} — Hono middleware emitting draft-6 `RateLimit-*` headers.
  * - {@link clientIp} — proxy-header extraction, with the trust boundary documented there.
  *
- * See `README.md` for the eviction policy and the sliding-vs-fixed decision.
- *
- * Sliding-window rate limiting for Deno and Hono, with a pluggable store. Extracted from
- * `mig/lib/ratelimit.ts`, an earlier internal project's rate limiter and `caldav-mcp/main.ts`, and it
- * closes a live gap: `seed`'s auth routes ship with both `.use(rateLimiter)` calls commented out and
- * no implementation anywhere in that repo.
+ * The eviction policy and the sliding-vs-fixed decision are in `memory.ts`'s module doc.
  *
  * ```ts
  * import { Hono } from "hono"
@@ -57,13 +52,9 @@
  * needs. For several instances use an atomic store (see below).
  *
  * **Same semantics as the in-process limiter**, asserted by a parity test that drives both with one
- * multi-event sequence and compares `allowed` and `remaining` decision for decision. An earlier revision
- * did **not** hold that invariant: the entry's TTL was derived from the bucket's _oldest_ event, so a
- * bucket holding several events expired as soon as the first left the window, the next request read an
- * absent key, and the window restarted early. Measured at `limit: 3` / `windowMs: 1000` the store path
- * accepted **5** requests inside one window where the memory path accepted 3. The TTL now comes from the
- * **newest** event (`newest + windowMs − now`) on both branches of `StoreRateLimiter`, so early expiry
- * cannot happen.
+ * multi-event sequence and compares `allowed` and `remaining` decision for decision. The entry's TTL
+ * comes from the bucket's **newest** event (`newest + windowMs − now`) on both branches of
+ * `StoreRateLimiter`: a TTL from the oldest event would expire the bucket early and restart the window.
  *
  * **Read-modify-write is not atomic across instances, and it loses writes.** Two instances can read the
  * same window and both accept; the later `write` then overwrites the earlier one, so an accepted request
@@ -97,10 +88,6 @@
  *
  * ## Notes
  *
- * - **Not ported:** `lyrics-populator/src/sources/rate-limiter.ts`, a 36-LOC min-gap spacer that is not
- *   per-key or per-host (MusicBrainz and CoverArtArchive hold separate instances, so their shared
- *   1 req/s was never enforced) and has no burst, concurrency cap, 429/503 backoff or jitter. The
- *   limiter here supersedes it.
  * - **Not here:** quota and usage accounting (`server/quota`) — metering
  *   is a separate concern with a different lifetime.
  * - **Not installed:** `hono-rate-limiter` and `rate-limit-redis`. The first is this middleware; the

@@ -1,11 +1,9 @@
 /**
  * Typed `localStorage` / `sessionStorage` wrapper.
  *
- * Two deliberate changes from the source (`financy/libs/shared/local-storage/+index.ts`):
- *
- * 1. **No global at import time.** The source constructed `new StorageHelper(localStorage)` at
- *    module scope, which throws under SSR (Deno, a worker without storage, a prerender pass) and
- *    makes the module untestable without a global stub. Here the `Storage`-shaped object is a
+ * 1. **No global at import time.** Constructing a helper over `localStorage` at module scope would
+ *    throw under SSR (Deno, a worker without storage, a prerender pass) and make the module
+ *    untestable without a global stub. Here the `Storage`-shaped object is a
  *    parameter, so this works against a real `localStorage`, a `Map`-backed fake, or a namespaced
  *    adapter.
  * 2. **Validation through `@spy4x/validation`.** The written value is checked against the schema

@@ -10,10 +10,9 @@
  * {@link CombinedSignatureHeader.signedSeparator}. This is **not** a drop-in verifier for GitHub or
  * Slack: GitHub sends no timestamp at all, so every real GitHub delivery is
  * rejected as `missing_timestamp`, and Slack signs a different string; see the
- * package README for the full comparison.
+ * comparison below.
  *
- * Nothing in the extraction sweep had a receiver, so this is written fresh
- * rather than ported. It is deliberately the smallest correct thing:
+ * It is deliberately the smallest correct thing:
  *
  *  - HMAC-SHA256 over a signed prefix plus the **raw** request body bytes. The
  *    body must be the bytes off the wire, before any JSON parsing or

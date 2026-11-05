@@ -1,13 +1,10 @@
 // Password hashing with a pepper: PBKDF2-HMAC-SHA-256 through WebCrypto.
 //
-// Rewritten from `template/libs/platform/helpers/hash.ts`. The source compared the derived key to
-// the stored one with `===` on hex strings, which leaks through timing how many leading characters
-// match, and it threw on a stored value with no `:` or with odd-length hex instead of answering
-// "no". Its stored value `<salt>:<key>` records no parameters, so the iteration count could never be
-// raised without locking every user out. Here the stored value names its scheme and iteration count,
-// the comparison is `constantTimeEquals`, and a malformed stored value is simply not a match. The
-// source's format is still accepted by `verify` so an existing database keeps working; it always
-// reports `needsRehash`.
+// The stored value names its scheme and iteration count, so the count can be raised without
+// locking users out. The comparison is `constantTimeEquals`, never `===` on hex strings, which
+// leaks through timing how many leading characters match, and a malformed stored value is simply
+// not a match. The legacy format `<salt>:<key>` is still accepted by `verify` so an existing
+// database keeps working; it always reports `needsRehash`.
 
 import { decodeHex, encodeHex } from "@std/encoding/hex"
 import { constantTimeEquals } from "@spy4x/platform/tokens"
@@ -22,7 +19,7 @@ export const PASSWORD_HASH_SCHEME = "pbkdf2-sha256"
  */
 export const DEFAULT_PASSWORD_ITERATIONS = 600_000
 
-/** Lowest iteration count accepted, as an option or in a stored hash: the source's 100 000. */
+/** Lowest iteration count accepted, as an option or in a stored hash: the legacy format's 100 000. */
 export const MIN_PASSWORD_ITERATIONS = 100_000
 
 /**
@@ -61,7 +58,7 @@ export interface PasswordCheck {
   /** True only when the password matches the stored hash. */
   valid: boolean
   /**
-   * True when the password matched but the stored hash uses the source's format or fewer
+   * True when the password matched but the stored hash uses the legacy format or fewer
    * iterations than configured. Hash the password again and store the new value.
    */
   needsRehash: boolean
@@ -111,7 +108,7 @@ export function isPasswordHash(stored: unknown): stored is string {
  * keyed by the pepper, and those 32 bytes are the PBKDF2 input, with a 16-byte random salt and a
  * 32-byte output. The pepper is therefore a key, not text appended to the password.
  *
- * Hashes in the source's format, `<32 hex salt>:<64 hex key>`, are verified the way the source made
+ * Hashes in the legacy format, `<32 hex salt>:<64 hex key>`, are verified the way that format made
  * them: PBKDF2 over `password + pepper` at 100 000 iterations. A match reports `needsRehash`.
  *
  * @throws {TypeError} When the pepper is missing or shorter than 32 characters.

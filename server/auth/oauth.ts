@@ -1,8 +1,7 @@
 /**
  * Sign-in with an OAuth2 / OpenID Connect provider (Google, or any provider the app configures).
  *
- * Written from the rules in issue #57, finding 2, not moved from the earlier
- * `providers/oauth2.ts`. The rules this file carries:
+ * The rules this file carries:
  *
  * - An existing key is matched by the provider's own user id (`sub`), never by email. The key's
  *   `method` is `oauth:<provider id>` and its `subject` is the `sub`, looked up with `findKey`. An

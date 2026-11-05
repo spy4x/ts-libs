@@ -43,8 +43,8 @@
  *   wording and every other domain string stay in the application. This package owns
  *   the transport, the escaping, the HTML shell, timezone framing and ICS
  *   attachment plumbing; it does not own your words.
- * - **An SES adapter.** The internal source's would drag in `@aws-sdk/client-sesv2`. The port
- *   makes one a small `fetch` against the SES API when a caller needs it; until
+ * - **An SES adapter.** The {@link EmailSender} port makes one a small `fetch` against the SES
+ *   API, without `@aws-sdk/client-sesv2`, when a caller needs it; until
  *   then it is unbuilt surface.
  * - **Binary attachments.** `EmailAttachment.content` is UTF-8 text, which is what
  *   an ICS file and a rendered HTML part need. A `Uint8Array` variant is the change

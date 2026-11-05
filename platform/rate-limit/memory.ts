@@ -1,9 +1,6 @@
 /**
  * Sliding-window rate limiter with an injected clock and bounded memory.
  *
- * Ported from `mig/lib/ratelimit.ts` (booking submissions) and `caldav-mcp/main.ts` (per-IP
- * limiter), with two source bugs fixed — see {@link MemoryRateLimiter} and `README.md`.
- *
  * **Window semantics: sliding, not fixed.** A bucket holds one timestamp per accepted request and
  * only the timestamps newer than `now - windowMs` count, so a client that spends its whole budget
  * at second 0 still has to wait a full window from its *oldest* request before the next one lands.
@@ -17,7 +14,7 @@
  *   for a rejected one, so a client that hammers the endpoint cannot grow its own bucket;
  * - across buckets, by the sweep: a bucket whose newest event is older than
  *   `windowMs + idleMs` is dropped, so a client rotating its source address cannot grow the map
- *   forever. `caldav-mcp`'s map never evicted, which is a memory-exhaustion vector.
+ *   forever: a map that never evicts is a memory-exhaustion vector.
  *
  * Eviction never targets a bucket that is still holding events inside its window, and it is
  * triggered by time rather than by insertion, so a request from a brand-new key can never free a
@@ -61,12 +58,7 @@
  * not capture: the key is caller-supplied and unbounded, so a resolver returning a long header-derived
  * string retains it for 660 s per distinct value.
  *
- * **Compared with `mig`,** which this replaces: `mig` prunes every `pruneIntervalMs` (600 s, its line 29)
- * and deletes only buckets left _empty_ at that prune, so its bound is `request_rate × (windowMs +
- * pruneInterval)` — the same 660 s shape as here, not `request_rate × windowMs`. Measured at 1,000 req/s
- * that is 1.24M buckets there against 601k here: **≈1.3× overall**, not the 11× an earlier revision of
- * this README claimed (that figure divided 660 s by 60 s and ignored `pruneIntervalMs`). `idleMs` is the
- * knob either way: lowering it towards `windowMs` trades memory for extra sweep churn.
+ * `idleMs` is the knob: lowering it towards `windowMs` trades memory for extra sweep churn.
  *
  * Two consequences worth stating, because both are security properties:
  *
@@ -76,8 +68,8 @@
  * - **A busy bucket is never swept.** `seenAt` alone would be wrong: a bucket whose most recent check
  *   was a _rejection_ stores no event and would look idle. Both conditions are therefore required.
  * - **No wall clock, and no per-event shifting.** Every timing decision goes through the injected
- *   `Clock`, including the seed for the automatic sweep, and a prune costs one binary search plus one
- *   `slice` rather than a `shift()` per stale event. Both regressions are now caught: seeding
+ *   `clock`, including the seed for the automatic sweep, and a prune costs one binary search plus one
+ *   `slice` rather than a `shift()` per stale event. Tests guard both: seeding
  *   `lastSweepAt` from `Date.now()` fails `schedules its automatic sweep from the injected clock, never
  *   the wall clock`, and restoring the loop fails the array-operation guard.
  *
@@ -100,8 +92,7 @@
  * between cost no walk.
  *
  * Per-bucket memory is bounded by `limit` — nothing is stored for a rejected request — so a client
- * hammering one key grows nothing. Across keys, the sweep is the bound. `caldav-mcp`'s map had none,
- * which is a memory-exhaustion vector rather than untidiness.
+ * hammering one key grows nothing. Across keys, the sweep is the bound.
  *
  * Rejected requests are not recorded, which is what stops a blocked client from extending its own
  * window by retrying.
@@ -115,11 +106,8 @@ import { type NowFn, systemNow } from "../universal/time.ts"
  * Monotonic millisecond clock. Inject a fake in tests; never read `Date.now()` behind one.
  *
  * @deprecated The same type as `NowFn` from `@spy4x/platform/universal/time`, which is
- * now the home for this shape. Use that instead in new code. Kept as its own
- * `type Clock = () => number` declaration, not a `= NowFn` reference, because `deno doc`'s text
- * rendering renders a reference to another named
- * type differently from an inline function type; the two are already structurally
- * interchangeable, so nothing is lost by keeping this declaration's own text.
+ * now the home for this shape. Use that instead in new code. Kept as its own declaration, not a
+ * `= NowFn` alias, so its published signature stays as it was; the two are interchangeable.
  */
 export type Clock = () => number
 
@@ -246,11 +234,8 @@ function storeTtlMs(events: number[], windowMs: number, now: number): number {
  * what the middleware path wants. For several instances, use `createStoreLimiter` from `kv.ts`
  * with a shared store — the two are interchangeable through {@link RateLimitStore}.
  *
- * Source fix 1: the source read `Date.now()` inline for `lastPrune`, so the sweep could not be
- * tested or advanced; the clock is now injected.
- * Source fix 2: the source pruned with `while (events[0] <= cutoff) events.shift()`, which is
- * O(n²) on a full bucket; a binary search plus `slice` makes the per-request work independent of
- * how full the bucket is.
+ * The clock is injected so a test can advance the sweep, and a prune is a binary search plus
+ * `slice`, not a `shift()` per event, so the per-request work does not grow with the bucket.
  */
 export class MemoryRateLimiter {
   private readonly buckets = new Map<string, EventBucket>()
@@ -691,7 +676,7 @@ export function failOpenLimiter(
  * Build a limiter key from an identity.
  *
  * Prefixed so one backend can host several limiters (`chart:user:42`) without their counters
- * colliding, matching the `user:<id>` / `ip:<addr>` shape the source middleware used.
+ * colliding, in the `user:<id>` / `ip:<addr>` shape.
  */
 export function rateLimitKey(kind: RateLimitKind, id: string, prefix = ""): string {
   const scope = kind === RateLimitKind.User ? "user" : "ip"

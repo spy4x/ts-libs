@@ -3,7 +3,7 @@
  *
  * With `trustedProxy: false` (the default) only `remoteAddr` is consulted, so the returned value is
  * the address of whoever actually opened the connection — unspoofable. With `trustedProxy: true`
- * the order is the one `mig/lib/ratelimit.ts` used: `CF-Connecting-IP`, then the first
+ * the order is `CF-Connecting-IP`, then the first
  * `X-Forwarded-For` hop, then `X-Real-IP`, then `remoteAddr`. Passing one {@link TrustedProxyHeader}
  * instead of `true` reads only that header — the other two are ignored even when present.
  *
@@ -35,8 +35,7 @@
  * if the header were absent, so the next source is used and in the end the peer address. Every address
  * `clientIp` returns is in one canonical spelling from `normalizeIp` in `@spy4x/net/ip`: `2001:DB8::1`
  * and `2001:db8::1` are one client, and an IPv4-mapped `::ffff:192.0.2.1` is returned as `192.0.2.1`.
- * Earlier versions returned a forged header verbatim, so every distinct string became its own
- * bucket.
+ * A forged header is never returned verbatim, so distinct spellings cannot become separate buckets.
  *
  * **Trusting a header only from known proxies.** The fourth parameter's `trustedProxies` lists CIDR
  * ranges. The header is then read only when the peer address lies inside one of them; any other

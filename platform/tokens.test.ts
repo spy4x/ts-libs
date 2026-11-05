@@ -746,8 +746,8 @@ Deno.test("verifyOpaqueToken — the production call site goes through the const
 // ---------------------------------------------------------------------------
 // constantTimeEqualsText — the arbitrary-text counterpart to constantTimeEquals.
 //
-// Ported from `server/http/bearer-auth.ts`'s own `constantTimeEquals` (issue
-// #71): that function is now a deprecated alias of this one. Unlike the
+// `server/http/bearer-auth.ts`'s `constantTimeEquals` is a deprecated alias of
+// this one. Unlike the
 // hex-digest `constantTimeEquals` above, this function makes no claim about
 // its inputs' shape — it digests whatever string it is given.
 // ---------------------------------------------------------------------------

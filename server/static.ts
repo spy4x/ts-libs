@@ -13,11 +13,8 @@
  *    inside the root that points outside it is not served. Only the realpath can
  *    tell — the path string is already inside the root.
  *
- * The source this was ported from did `Deno.readFile(SPA_DIR +
- * c.req.path)`, which is a path-traversal hole; that part is ported as a fix, not
- * as-is. Its second half — an explicit `app.get("/analyze", spaHandler)` route
- * list — is **not** ported: an SPA fallback is a single flag (`spaFallback`) or
- * the caller's own catch-all route, not a list of page paths.
+ An SPA fallback is a single flag (`spaFallback`) or the caller's own catch-all
+ * route, not a list of page paths.
  *
  * A file is opened, not read whole. `StaticFs.open` returns the file's size and a
  * `ReadableStream` of its bytes, so memory use stays flat for a request whatever

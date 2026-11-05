@@ -2,22 +2,12 @@
  * `RequestInfo` — the request metadata worth attaching to a log line or an error report — and the
  * Hono helper that builds one.
  *
- * Moved from `template/apps/api/services/request-info.ts` and
- * `template/libs/platform/types/+index.ts`, with two bugs fixed at extraction time.
+ * **`X-Forwarded-For` is not trusted by default.** Any client can set it, so it is read through
+ * {@link clientIp} (`platform/rate-limit/client-ip.ts`): with `trustedProxy` false (the default)
+ * only the transport's own peer address is used; a forwarding header is consulted only when the
+ * caller opts in, which is correct only behind a proxy that overwrites it.
  *
- * **Bug 1: an unconditionally trusted `X-Forwarded-For`.** The source read `X-Forwarded-For` (and
- * `X-Real-IP`) straight off the request, so any client could set its own `X-Forwarded-For` and have
- * that string logged as its IP — useful for framing another address in an abuse report, or for
- * defeating anything downstream that keys on this value. Here the header is read through
- * {@link clientIp} (`platform/rate-limit/client-ip.ts`), which already carries this exact trust
- * boundary for the rate limiter: with `trustedProxy` false (the default here, same as there) only
- * the transport's own peer address is used; a forwarding header is consulted only when the caller
- * opts in, which is correct only behind a proxy that overwrites it.
- *
- * **Bug 2 (a coupling, not a runtime bug): importing the app's `APIContext`.** The source's Hono
- * parameter was typed `Context<APIContext>`, an app-specific type a library cannot import. This
- * takes a plain Hono `Context`, generic over the caller's own `Env`, matching how
- * `platform/rate-limit/hono.ts` stays app-agnostic.
+ * It takes a plain Hono `Context`, generic over the caller's own `Env`.
  *
  * **Where the peer address comes from.** `clientIp` wants the transport's peer address as a
  * fallback for when no forwarding header is trusted or present, but Hono has no adapter-agnostic
@@ -27,12 +17,10 @@
  * resolver function: `requestInfoFromContext` is called once per request, not built once as
  * middleware, so the caller resolves the address inline and passes the string through
  * {@link RequestInfoOptions.remoteAddr}. `ip` stays unset when no trusted forwarding header and no
- * `remoteAddr` identify the client, as in the source — `clientIp`'s own placeholder
- * (`UNKNOWN_CLIENT_IP`, `"0.0.0.0"`) is a made-up address, not a real one, and the source's own
- * `apps/api/features/groups/errors.ts` writes `request.ip || null` into an audit row, so a
- * placeholder string would be logged as though it were the client's real address instead of as
- * "unknown". Same reasoning for `userAgent`: an empty header value is treated the same as a
- * missing one (`|| undefined`, matching the source), not kept as `""`.
+ * `remoteAddr` identify the client: `clientIp`'s own placeholder (`UNKNOWN_CLIENT_IP`,
+ * `"0.0.0.0"`) is a made-up address, and a caller that writes `request.ip || null` into an audit
+ * row would log it as the client's real address instead of as "unknown". Same reasoning for
+ * `userAgent`: an empty header value is treated the same as a missing one, not kept as `""`.
  */
 import type { Context, Env } from "hono"
 

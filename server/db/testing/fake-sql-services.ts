@@ -207,9 +207,7 @@ export function createFakeSql(options: FakeSqlOptions = {}) {
    * keys are `length`, `name`, `prototype`, `types`, `typed`, `unsafe`, `notify`, `array`,
    * `json`, `file`, `savepoint` and `prepare`. It has **no `begin`, no `reserve` and no
    * `listen`** — those are assigned to the root client alone (`src/index.js:69-82`), and
-   * calling one on a transaction handle is a plain `TypeError`. An earlier version of this
-   * fake carried `begin` and `reserve` here and a comment claiming the driver does too,
-   * which put two call forms nobody can write into `services.ts`'s list of refusals.
+   * calling one on a transaction handle is a plain `TypeError`.
    *
    * `savepoint` is recorded in `inner`, because a savepoint is a statement on the
    * connection the transaction already holds.

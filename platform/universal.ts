@@ -59,9 +59,7 @@
  *   resolves `deno check` reports `TS2307: Import "@spy4x/validation" not a dependency` at
  *   `platform/universal/errors.ts` and `platform/browser/storage.ts`.
  * - This package ships **no** schema-parser adapter (no object exposing both a throwing parse and a
- *   non-throwing variant), no schema library of its own, and no second envelope. The source's
- *   `validate()` ran the parse twice; the bug is retired by not
- *   porting the function at all — `@spy4x/validation` parses once.
+ *   non-throwing variant), no schema library of its own, and no second envelope: `@spy4x/validation` parses once.
  * - Validation is applied on **write** as well as read in `makeStorage`. A value that fails its own
  *   schema on read is evicted, because a stored value that no longer matches is stale, not missing.
  * - **Strictness is the caller's schema's decision, never this package's.** `@spy4x/validation`

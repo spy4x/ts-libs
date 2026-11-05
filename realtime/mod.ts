@@ -2,7 +2,7 @@
  * `@spy4x/realtime` — transport mechanics for a hint-only realtime connection.
  *
  * The contract, from ADR 002 (`spy4x/seed`, `docs/decisions/002-realtime-transport-and-sync.md`)
- * and restated in `README.md` as an invariant:
+ * as an invariant:
  *
  * - **Requests over the socket are envelopes only.** The socket carries liveness, a sync handshake,
  *   change hints, and request and response frames (`client.command`, `client.query`,
@@ -30,8 +30,7 @@
  *    It never interprets a command or query name or payload, never authorizes and
  *    never dispatches: a host registers one dispatcher with `registry.onRequest`
  *    and maps names to its own buses. Authorization lives in that host code
- *    (ADR 002, Consequences), not in the transport. (ADR 002:50 requires exactly
- *    this; earlier versions of this package declined it. See _Divergence_ below.)
+ *    (ADR 002, Consequences), not in the transport, as ADR 002:50 requires.
  * 2. **A push carries a sequence.** ADR 002:60-61 — "Servers push committed
  *    changes over the socket, stamped with the per-group `next_change_sequence`
  *    they were committed at." A hint names a group and that sequence, and no entity
@@ -50,10 +49,7 @@
  * ## Where this package diverges from ADR 002, and why
  *
  * ADR 002:50 says "`apps/spa` speaks WebSocket for all mutations, queries and
- * realtime updates". Earlier versions of this package declined that half of the
- * ADR: `ClientMessage` had no mutation frame, so it was hint-only by construction.
- * `spy4x/template#79` reverses the ruling, and this package now carries request
- * and response frames.
+ * realtime updates". This package carries request and response frames for that.
  *
  * What still holds, and is the reason the change is additive rather than a second
  * application surface:
@@ -106,9 +102,7 @@
  *
  * ## What "hint-only" buys
  *
- * `financy`'s socket was the only mutation path, so the app did not work with the
- * socket down, and its pushes carried no sequence, so a missed frame silently
- * diverged local state. Here a dropped frame costs one redundant pull, a
+ * A dropped frame costs one redundant pull, a
  * duplicated hint costs nothing, and a reordered hint cannot move a cursor
  * backwards.
  *
@@ -135,7 +129,7 @@
  * `WebSocket`: this package ships `adaptWebSocket` and `createWebSocketFactory`
  * (`web-socket-adapter.ts`), because the mapping from the platform's `readyState`
  * (0-3) to this package's `SocketState` (1-4) is exactly the kind of bug a host
- * would silently reproduce — see "Fixed after ship" below.
+ * would silently reproduce — see `web-socket-adapter.ts`.
  *
  * `UserFanout` deliberately exposes no broadcast. The registry has `sendToAll` for
  * a server-wide notice, but the notify path is only ever given `sendToUsers`, and
@@ -145,8 +139,8 @@
  * ## Explicitly not implemented
  *
  * - **The sync protocol.** Bootstrap, the pull endpoint, `authorization_revision`,
- *   the change log and the 7-day idempotency-key store are the server's job
- *   (`spy4x/template#11`, gaps 4 and 5). This package carries an
+ *   the change log and the 7-day idempotency-key store are the server's job.
+ *   This package carries an
  *   `idempotencyKey` on a command and stores none. This package is the transport: it decides
  *   _when_ a pull is needed, and hands the cursor to whatever performs it.
  * - **A signals binding.** The client transport is deliberately signal-free, so it
@@ -162,8 +156,8 @@
  *   upgraded socket (Hono's, `Deno.upgradeWebSocket`'s, or another's) into
  *   `ManagedSocket` for `registry.attach`, because only the host knows its
  *   upgrade path and its cookie handling. The _client_ side is different: a
- *   browser `WebSocket` has exactly one shape, so this package now ships that
- *   adapter itself (`web-socket-adapter.ts`; see "Fixed after ship" below).
+ *   browser `WebSocket` has exactly one shape, so this package ships that
+ *   adapter itself (`web-socket-adapter.ts`).
  * - **Hint coalescing.** The design doc leaves it open whether a group under rapid
  *   writes should emit at most one hint per client per interval
  *   (`docs/design/realtime-websockets.md:131-132`). `AggregateNotifier` sends one

@@ -149,11 +149,9 @@
  * | Spring-forward gap, wall clock never occurs | Berlin `2026-03-29 02:30` | shifted forward by the gap, `01:30Z`, reads `03:30` |
  * | Ordinary wall clock                         | Berlin `2026-08-28 10:00` | the only instant reading it, `08:00Z`               |
  *
- * That is Temporal's `"compatible"` disambiguation in both branch cases. It is
- * also the fix for the source's single-pass conversion, which read the zone offset
- * at the wall clock treated as UTC — an instant one whole offset away from the
- * answer — and was an hour late or early for the weeks around a transition. See
- * the PR body for the file and line of each such defect.
+ * That is Temporal's `"compatible"` disambiguation in both branch cases. A
+ * single-pass conversion, reading the zone offset at the wall clock treated as UTC,
+ * would be an hour late or early for the weeks around a transition.
  *
  * **`resolveWallClock` says which case applies.** A caller that must know whether
  * a wall clock is skipped or repeated — a booking page hiding slots in the gap, a
@@ -594,7 +592,7 @@ function screenCandidates(date: string, time: string, tz: string): ScreenedCandi
   if (earliestMs === Infinity) {
     // Reachable, not a bug on its own: a handful of zones carry a historical
     // offset with a fractional minute (Africa/Monrovia's LMT was -00:44:30),
-    // and this module is minute resolution only (see the README). No
+    // and this module is minute resolution only. No
     // candidate then rounds back to exactly the requested wall clock, so the
     // request is rejected rather than answered up to a minute wrong.
     throw new RangeError(

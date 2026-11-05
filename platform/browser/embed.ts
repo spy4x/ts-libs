@@ -1,7 +1,6 @@
 /**
  * Helpers for a page that is framed by another site: tell the parent frame how tall the page is,
- * and capture the visitor's time zone. Ported from `mig` (`lib/height-report-script.ts`,
- * `lib/guest-tz-script.ts`), as functions instead of inline script text.
+ * and capture the visitor's time zone.
  *
  * A parent page cannot read a cross-origin frame's height, so the frame has to say it.
  * {@link reportHeight} measures one element's own box (`getBoundingClientRect().height`), not the
@@ -12,7 +11,7 @@
  * only when the caller passes none, so the module is safe to import in a server render and
  * testable with fakes.
  *
- * `browser/embed` (from `mig`'s height-report and time-zone scripts) is for a page inside another
+ * `browser/embed` is for a page inside another
  * site's frame. `reportHeight` posts `{ type, height }` for one element's own box to the parent, on
  * load and on every resize, to a `targetOrigin` the caller must give (there is no `"*"` default);
  * `captureTimeZone` and `fillEmptyTimeZoneField` read the visitor's zone from `Intl` and fill a form

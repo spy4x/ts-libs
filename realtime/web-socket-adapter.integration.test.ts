@@ -126,7 +126,7 @@ describe("the real WebSocket adapter against a real local server", () => {
   })
 
   it("fetches exactly once after exactly one reconnect when the server drops the connection", async () => {
-    // Issue #65, finding 2, over a real socket: the first connection is accepted and dropped once;
+    // The first connection is accepted and dropped once;
     // every connection after it stays open.
     const server = startServer((socket, index) => {
       if (index === 0) {
@@ -166,7 +166,7 @@ describe("the real WebSocket adapter against a real local server", () => {
   })
 
   it("saves the position only once the fetch a real hint triggers actually succeeds", async () => {
-    // Issue #65, finding 1, over a real socket and the real wire codec: the position must not move
+    // The position must not move
     // on a failed fetch, and must move once a retry of the same hint succeeds.
     const hint: { send: (() => void) | null } = { send: null }
     const codec = createJsonCodec()
@@ -220,7 +220,7 @@ describe("the real WebSocket adapter against a real local server", () => {
   })
 
   it("does not storm-reconnect when the server accepts and drops every attempt at once", async () => {
-    // Issue #65, finding 3, over real sockets and real time: a server that accepts and immediately
+    // A server that accepts and immediately
     // drops every attempt must not turn into a reconnect every few milliseconds forever.
     const server = startServer((socket) => {
       socket.addEventListener("open", () => socket.close(1001, "dropped immediately"))

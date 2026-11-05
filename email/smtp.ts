@@ -1,22 +1,19 @@
 /**
  * The SMTP adapter: `npm:nodemailer` behind the {@link EmailSender} port.
  *
- * Why nodemailer rather than a hand-rolled client is recorded in the README and
- * the PR body; the short version is the repo's dependency policy ("own the small,
+ * Why nodemailer rather than a hand-rolled client: the repo's dependency policy ("own the small,
  * keep the huge … also an SMTP lib") and that SMTP is a tarpit: EHLO capability
  * parsing, SASL mechanism selection, STARTTLS with a downgrade-resistant upgrade,
  * MAIL FROM/RCPT TO per-recipient status, MIME assembly, RFC 2047 header encoding
- * and RFC 2231 filename encoding. `antonshubin.com` hand-rolls four of those badly
- * in three places, and none of that code came across.
+ * and RFC 2231 filename encoding.
  *
- * Three port-time decisions worth reading before changing anything here:
+ * Three decisions worth reading before changing anything here:
  *
  * 1. **Nothing is created at module scope.** No `Deno.env`, no transporter, no
  *    connection. A transport belongs to the sender that was constructed from a
  *    configuration, it is built on the first send and memoised *in that sender's
- *    closure*, and two senders never share one. `mig` cached a single module-level
- *    `transporter` keyed to nothing, which made a second configuration silently
- *    reuse the first one's connection and made every test order-dependent.
+ *    closure*, and two senders never share one, so a second configuration never
+ *    reuses the first one's connection.
  * 2. **nodemailer is imported lazily**, on the first send through the default
  *    factory. Its ESM entry reads `process.env.ETHEREAL_API` while loading, so a
  *    static import would make the bare import of this module require `--allow-env`.
@@ -59,9 +56,8 @@
  * **The library never reads the environment** — no `Deno.env`, at module scope or
  * anywhere else. Read your configuration in the application and pass it in.
  *
- * `requireTls` defaults to `true` on a non-implicit-TLS port. That is a deliberate
- * departure from the source, which used opportunistic STARTTLS: an opportunistic
- * upgrade is stripped by any on-path attacker, who then reads the AUTH exchange. A
+ * `requireTls` defaults to `true` on a non-implicit-TLS port: an opportunistic
+ * STARTTLS upgrade is stripped by any on-path attacker, who then reads the AUTH exchange. A
  * relay that genuinely cannot do STARTTLS needs `requireTls: false`.
  *
  * If your process runs the default transport factory, it needs `--allow-env`:
@@ -134,8 +130,7 @@ export interface SmtpOptions {
   /**
    * Require STARTTLS on a non-implicit-TLS connection. Defaults to `true`.
    *
-   * This is a deliberate departure from `mig`, which used nodemailer's default
-   * opportunistic upgrade: an opportunistic STARTTLS is stripped by any on-path
+   * Not nodemailer's default opportunistic upgrade: an opportunistic STARTTLS is stripped by any on-path
    * attacker, who then reads the AUTH exchange. A relay that genuinely cannot do
    * STARTTLS needs `requireTls: false` and an explicit decision to send in the
    * clear.
@@ -323,10 +318,9 @@ function transportConfig(options: SmtpOptions): SMTPTransportOptions {
  *
  * The one behavioural fix carried here: `text` and `html` are each set only when
  * the caller supplied a non-blank one, and neither is derived from the other.
- * `mig` sent `html: opts.html ?? opts.text`, so a text-only message went out as
- * `multipart/alternative` whose HTML half was the plain text verbatim — meaning
- * any `<` in the body was parsed as markup, and every text-only message carried a
- * redundant second part.
+ * Deriving `html` from `text` would send a text-only message as
+ * `multipart/alternative` whose HTML half is the plain text verbatim, so any `<`
+ * in the body would be parsed as markup.
  *
  * `replyTo` arrives already parsed by the same function as `to`, and
  * the key is set only when the caller gave one, so an omitted `replyTo` leaves the

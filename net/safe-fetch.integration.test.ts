@@ -3,7 +3,7 @@
  *
  * Everything else in this package is tested against a `Fetcher` that returns
  * hand-built `Response` objects. That is the right tool for policy decisions,
- * and it is the wrong tool for three claims in #61, because each of them is
+ * and it is the wrong tool for three claims, because each of them is
  * about what happens on the wire: which headers a second site receives, what a
  * body that stops arriving does to the reader, and whether a refused redirect
  * lets go of the connection. A hand-built `Response` cannot be wrong about any

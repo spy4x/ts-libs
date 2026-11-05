@@ -109,11 +109,9 @@ export interface FormatTimeOptions {
  *
  * The one home for the object-shaped clock: `platform/server/ports.ts`'s `ClockPort` is
  * now an alias of this type, and `realtime/clock.ts`'s `TimerClock` extends it with timer methods.
- * `platform/rate-limit/memory.ts` also used to export its own function-shaped clock
- * (`() => number`) under the same names, `Clock`/`systemClock` — a different shape that this
- * extraction cannot merge into the interface above without breaking a 1.x caller of one shape or
- * the other. {@link NowFn}/{@link systemNow} below are that shape's home instead; that module's
- * `Clock`/`systemClock` are now the same type as, and delegate to, these.
+ * The function-shaped clock (`() => number`) lives in {@link NowFn}/{@link systemNow} below, and
+ * `platform/rate-limit/memory.ts`'s deprecated `Clock`/`systemClock` are the same type as, and
+ * delegate to, these.
  */
 export interface Clock {
   /** Current instant in epoch milliseconds. */

@@ -1,11 +1,9 @@
 /**
  * `@spy4x/server/kv` — a Redis-backed key-value store, scoped to a caller-supplied
- * key prefix. Extracted from `template/libs/server/kv/+index.ts`.
+ * key prefix.
  *
  * `RedisKvStore`. A small wrapper over `@iuioiua/redis`'s `RedisClient`: `get`, `set` with a TTL,
- * `take`, `del`, `eval`, `reset`, `close`. Extracted from `template/libs/server/kv/+index.ts`;
- * `financy`'s copy differs from the template's by one import line (its own module alias for the cache
- * interface) and was not otherwise consulted. It runs on Deno, Node and Bun: the socket comes from
+ * `take`, `del`, `eval`, `reset`, `close`. It runs on Deno, Node and Bun: the socket comes from
  * `@spy4x/platform/server/tcp`'s `connectTcp` (`Deno.connect` on Deno, `node:net` on Node and Bun).
  *
  * **Password and ACL user.** `RedisKvStore.connect(host, port, prefix, { username?, password? })` sends
@@ -21,11 +19,9 @@
  * `RedisKvStoreAuthError`.
  *
  * **Structurally compatible with `ICacheStorage`.** `@spy4x/platform/cache`'s `ICacheStorage`
- * names `server/kv` in its own doc as the interface's Redis implementation, briefed against these exact
- * signatures: `get(key): Promise<string | null>`, `set(key, value: string, ttlSec): Promise<void>`,
+ * names `server/kv` in its own doc as the interface's Redis implementation, with these signatures: `get(key): Promise<string | null>`, `set(key, value: string, ttlSec): Promise<void>`,
  * `del(key): Promise<void>`, `reset(): Promise<void>`. This module does not import
- * `@spy4x/platform/cache` — the two were extracted in parallel and neither depends on the other's
- * branch — so the match is verified structurally: `deno check` accepts `const _: ICacheStorage = store`
+ * `@spy4x/platform/cache`, so the match is verified structurally: `deno check` accepts `const _: ICacheStorage = store`
  * and rejects a `{ get }`-only object with `TS2739`.
  *
  * **Rate-limit storage: `redisRateLimitKv(store)`.** Adapts a `RedisKvStore` to the `RateLimitKv` port
@@ -73,9 +69,9 @@
  * - To run scripts, `RedisKvStore.eval(script, keys, args)` was added: keys are prefixed like every
  *   other method's, `args` arrive as `ARGV`.
  *
- * **Every key lives under a mandatory prefix, and `reset()` only touches that prefix.** The ported
- * original's `reset()` sent `FLUSHDB`, which deletes every key in the whole Redis database — another
- * application's keys, another test run's keys, everything. A shared library should not offer that.
+ * **Every key lives under a mandatory prefix, and `reset()` only touches that prefix.** `FLUSHDB`
+ * would delete every key in the whole Redis database — another application's keys, another test
+ * run's keys, everything. A shared library should not offer that.
  * `RedisKvStore.connect` takes a `keyPrefix` and refuses an empty one; every key is stored as
  * `<prefix>:<key>`, and `reset()` walks only that prefix with `SCAN`/`DEL` — `SCAN` rather than `KEYS`,
  * because `KEYS` blocks the whole server for the scan's duration on a large database, which is exactly
@@ -86,29 +82,24 @@
  * `app:sub:k`, which is exactly where `app:sub` addresses its key `k`. Choose prefixes that are not
  * one another's sub-string across the `:` separator, unless that overlap is intended.
  *
- * **Fixed at extraction time**, all in `redis-kv-store.ts`:
+ * **Guarantees**, each pinned by a test in `redis-kv-store.integration.test.ts`:
  *
- * | Bug                                                                                                                                                                                      | Pinned by                                                                                                                                                                                                                     |
- * | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
- * | `reset()` sent `FLUSHDB`, wiping the whole database                                                                                                                                      | `sets, gets, deletes and resets within its own prefix only`                                                                                                                                                                   |
- * | `reset()`'s `SCAN MATCH` pattern did not escape `*`, `?`, `[`, `]` or `\` in the prefix, so a prefix containing one of them matched other stores' keys                                   | `reset() escapes glob metacharacters in the prefix instead of matching them as a pattern`                                                                                                                                     |
- * | `get<T extends Reply>` let a caller cast an arbitrary type onto a `GET` reply                                                                                                            | `get` is typed `Promise<string \| null>`, matching the protocol                                                                                                                                                               |
- * | `set(key, value, ttlSec)` forwarded `ttlSec` straight to `SET … EX`, and Redis refuses a non-integer, zero, negative or infinite value with an opaque protocol error or a `NaN` argument | `rejects a ttlSec that is not a positive integer`                                                                                                                                                                             |
- * | `close()` called `Deno.Conn.close()` unconditionally, which throws `BadResource` on a connection already closed                                                                          | `close() is safe to call more than once`                                                                                                                                                                                      |
- * | every method called the client directly after `close()` or after the connection died, crashing the process with an uncaught `BadResource` instead of rejecting                           | `rejects instead of crashing after close()`; `get` after the connection is killed by `rejects instead of crashing once the connection is killed` and `rejects every call still queued at the moment the connection is killed` |
+ * - `reset()` deletes only the keys under the store's prefix, never the whole database, and escapes
+ *   `*`, `?`, `[`, `]` and `\` in the prefix for `SCAN MATCH`.
+ * - `get` is typed `Promise<string | null>`, matching the protocol.
+ * - `set` rejects a `ttlSec` that is not a positive integer, which Redis would refuse with an opaque
+ *   protocol error.
+ * - `close()` is safe to call more than once, and a call after `close()` or after the connection
+ *   died rejects instead of crashing the process.
  *
  * An ordinary error reply from Redis (`WRONGTYPE`, an out-of-memory refusal, `READONLY`, `BUSY`)
  * rejects that one call with `RedisError` from `@iuioiua/redis` and leaves the store usable; only a
  * failed read or write marks the connection dead. Pinned by
  * `keeps working after Redis answers one command with an error`.
  *
- * `connect()` also dropped the ported original's `console.log("✅ Connected to KV")`: a library
- * primitive should not write to stdout on a caller's behalf. The caller decides whether connecting is
- * worth logging.
+ * `connect()` writes nothing to stdout: the caller decides whether connecting is worth logging.
  *
- * **Reconnects itself once the connection dies.** Earlier, a dead connection was permanent:
- * every method recorded the failure once and threw `RedisKvStoreConnectionError` forever after, even
- * once Redis came back. Nothing watches the connection on its own; a dropped socket is noticed only
+ * **Reconnects itself once the connection dies.** Nothing watches the connection on its own; a dropped socket is noticed only
  * when a call next tries to use it. A call that finds the connection already recorded dead opens a
  * fresh one first (the same TCP connect + `PING` steps `connect()` itself runs, each bounded to a
  * fixed 5-second timeout, because an unreachable host hangs a TCP connect for the OS's multi-minute

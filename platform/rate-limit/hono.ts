@@ -1,15 +1,9 @@
 /**
  * Hono middleware factory over any limiter from `memory.ts`.
  *
- * Ported from an earlier internal project's rate-limiter service and middleware, with the two
- * external packages dropped: `hono-rate-limiter`'s whole job here is "run a limiter, emit draft-6
- * headers", which is this file, and `rate-limit-redis` existed to put the store in Redis — a job
- * the `RateLimitStore` port now does without dragging a Redis client into the limiter.
- *
- * What is emitted is **draft-6**, matching `standardHeaders: "draft-6"` in the source: the three
- * separate fields `RateLimit-Limit`, `RateLimit-Remaining` and `RateLimit-Reset`, plus `Retry-After`
- * on a rejection. Draft-7 replaced them with one combined `RateLimit` field; that is not ported, so
- * a client written against draft-7 will not find the combined header here.
+ * What is emitted is **draft-6**: the three separate fields `RateLimit-Limit`,
+ * `RateLimit-Remaining` and `RateLimit-Reset`, plus `Retry-After` on a rejection. Draft-7 replaced
+ * them with one combined `RateLimit` field, which is not emitted, so a client written against draft-7 will not find the combined header here.
  *
  * Configuration is validated with arktype at factory time: a limiter built with `limit: 0` or a
  * negative window would silently deny or allow everything, and that failure belongs at startup, not
@@ -20,14 +14,14 @@
  *
  * ## Key resolution
  *
- * `keyResolver(req)` is a parameter, never a lookup into framework state. The source's only
- * app-coupled line was `c.get?.("auth")`, and its optional chaining silently degraded every request
- * to a shared `ip:unknown` bucket when the auth middleware had not run. `userThenIp(userId)` provides
+ * `keyResolver(req)` is a parameter, never a lookup into framework state: an optional lookup such as
+ * `c.get?.("auth")` silently degrades every request to a shared `ip:unknown` bucket when the auth
+ * middleware has not run. `userThenIp(userId)` provides
  * the `user:<id>` / `ip:<addr>` shape; anything else is the caller's own resolver.
  *
  * ## Headers
  *
- * Draft-6, matching `standardHeaders: "draft-6"` in the source:
+ * Draft-6 headers:
  *
  * | Header                | Value                                                           |
  * | --------------------- | --------------------------------------------------------------- |
@@ -220,8 +214,7 @@ export type KeyResolver<E extends Env = Record<string, never>> = (
 export interface RateLimitMiddlewareOptions<E extends Env = Record<string, never>> {
   /**
    * Bucket the request. Given the request plus the context, because a request alone carries no peer
-   * address and reaching into Hono context for app state was what made the source's version
-   * uncopyable.
+   * address, and reaching into Hono context for app state would couple the limiter to one app.
    */
   keyResolver: KeyResolver<E>
   /**
@@ -295,10 +288,8 @@ export type RateLimitHonoContext<E extends Env = Record<string, never>> = Contex
 /**
  * Build the middleware for a limiter.
  *
- * The key resolver is a parameter because that was the only app-coupled line in the source
- * (`c.get?.("auth")`). Its optional chaining meant a missing auth middleware silently degraded
- * every request to a shared `ip:unknown` bucket; here the coupling is explicit and the fallback is
- * the caller's own code.
+ * The key resolver is a parameter, so the coupling to an app's auth is explicit and the fallback is
+ * the caller's own code, never a shared `ip:unknown` bucket.
  *
  * @param rateLimiter Limiter to consult. Sync or async, both are awaited.
  * @param options Runtime-validated configuration.
@@ -466,8 +457,8 @@ export interface UserThenIpOptions {
  *
  * An IPv6 client is keyed on its /64 network (`ip:2001:db8:1:2::/64`, see `clientIpBucket`), so a
  * client cannot escape the limit by rotating through the 2^64 addresses one allocation gives it.
- * IPv4 keys are unchanged. `ipv6PerAddress: true` keys every IPv6 address separately, as before
- * #219, for a deployment where one /64 is really shared by unrelated clients.
+ * IPv4 keys are per address. `ipv6PerAddress: true` keys every IPv6 address separately, for a
+ * deployment where one /64 is really shared by unrelated clients.
  */
 export function userThenIp<E extends Env = Record<string, never>>(
   userId: (req: Request, context: RateLimitContext<E>) =>

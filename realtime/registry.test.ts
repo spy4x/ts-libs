@@ -328,8 +328,7 @@ describe("ConnectionRegistry", () => {
       CloseReason.Shutdown,
     ])
     // A real socket's close is asynchronous — `state` is `Closing` right after `close()` is called,
-    // and only reaches `Closed` once the closing handshake finishes (#74; `FakeSocket` used to close
-    // synchronously, which this suite never had a reason to catch).
+    // and only reaches `Closed` once the closing handshake finishes; `FakeSocket` does the same.
     await drainMicrotasks()
     expect(
       factory.sockets.every((socket) => socket.state === SocketState.Closed),
@@ -415,7 +414,7 @@ describe("ConnectionRegistry socketIdsFor", () => {
 
 describe("ConnectionRegistry limits", () => {
   it("refuses a socket once a user is at the connection cap", () => {
-    // Issue #65, finding 5: one user id was measured holding 50 000 sockets.
+    // One user id was measured holding 50 000 sockets.
     const { registry, factory } = createHarness(true, { maxConnectionsPerUser: 2 })
 
     const first = registry.attach("user-1", factory.open("wss://api.example.test/ws"))
@@ -453,7 +452,7 @@ describe("ConnectionRegistry limits", () => {
   })
 
   it("reaps a connection whose frame exceeds the message size limit, without decoding it", () => {
-    // Issue #65, finding 5: a single 6.9 MB message was decoded and validated, costing 81 ms of CPU
+    // A single 6.9 MB message was decoded and validated, costing 81 ms of CPU
     // it should never have spent. `maxMessageBytes` measures the frame before the codec ever runs.
     const { registry, factory } = createHarness(true, { maxMessageBytes: 16 })
     const malformed: string[] = []
@@ -500,7 +499,7 @@ describe("ConnectionRegistry limits", () => {
   })
 
   it("skips delivery to a socket whose peer has stopped draining it, without reaping it", () => {
-    // Issue #65, finding 5: nothing previously slowed delivery to a client that was not reading.
+    // Nothing previously slowed delivery to a client that was not reading.
     // Skipping a hint is safe the same way a dropped one always is — the client notices the gap
     // itself and pulls — so this must not tear the connection down.
     const { registry, factory } = createHarness(true, { maxBufferedBytes: 1_000 })

@@ -9,26 +9,14 @@
  * - {@link reviveIsoDatesEndingInAt} — opt-in `JSON.parse` reviver; see `cache.ts` for why it is
  *   opt-in rather than the default.
  *
- * No in-memory `ICacheStorage` ships from this package: the source this was ported from kept its
- * fake local to its test file, and the real, published implementation is `server/kv`'s.
- *
- * A JSON cache in front of a pluggable `ICacheStorage`, ported from `template/libs/platform/cache`
- * (cross-checked against `financy/libs/shared/cache`, which differs from the template only in using a
- * hardcoded `number` id instead of `string | number`, and lacking the date-reviving `JSON.parse`
- * reviver — template's is kept, made opt-in). `ICacheStorage`'s method names and meaning are unchanged
- * from the source: `server/kv`, a later unit of the same wave, implements it over Redis.
- *
- * Four behaviour changes, all because this package ships to consumers it does not control, unlike an
- * app's own `libs/`:
+ * Its rules, because this package ships to consumers it does not control:
  *
  * - The date-reviving reviver (a property named `...At` holding an ISO string becomes a `Date`) is
  *   opt-in (`reviveIsoDatesEndingInAt`, passed via `CacheServiceOptions.reviver`), not applied to
  *   every cached value unconditionally. The unconditional version also fires on any field that merely
  *   ends in "At" without meaning a date.
- * - `set`/`wrap`'s TTL is named and typed as seconds throughout. The source's `ICacheService`
- *   interface named the parameter `ttlMs` while every implementation and caller treated it as seconds
- *   with no conversion — a caller trusting the interface's name and passing milliseconds would get a
- *   cache entry roughly 1000x longer-lived than intended.
+ * - `set`/`wrap`'s TTL is named and typed as seconds throughout, the unit `ICacheStorage.set`
+ *   expects.
  * - A TTL is validated and rounded up to a whole second before it reaches storage. Redis refuses a
  *   fractional or zero expiry — `SET … EX 0.2` and `SET … EX 0` are both errors, and `EXPIRE key 0`
  *   deletes the key immediately — so this is done here, once, rather than in every `ICacheStorage`.
@@ -43,8 +31,8 @@
  * returns only after `reset()` of the real storage succeeds, tried at most once per `retryMs` (5 s),
  * on the next operation, with no timer. `CacheService.wrap` has no such mode.
  *
- * No in-memory `ICacheStorage` ships from this package, matching the source: its own fake
- * (`MemoryCacheStorage`) lived in its test file, not as a library export, and stays that way here too.
+ * No in-memory `ICacheStorage` ships from this package: a test keeps its own fake, and the
+ * published implementation is `server/kv`'s.
  *
  * @module
  */

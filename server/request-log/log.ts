@@ -17,20 +17,15 @@
  *
  * `requestLog`, `RequestLogOptions`, `RequestLogWriter`.
  *
- * Ported from `template/apps/api/middlewares/log.ts` (byte-identical in `financy`). The original
- * imported the app's own `APIContext` type and its `log` service directly — a library cannot import
- * either — so both become constructor arguments here: `write` (defaults to `console.log`) replaces
- * the app's `log` service, and the original's hardcoded `/api/health` skip becomes the `skipPaths`
- * option, because which path is a health check is the app's decision, not this middleware's.
+ * `write` defaults to `console.log`, and `skipPaths` lists paths not to log, because which path is
+ * a health check is the app's decision, not this middleware's.
  *
  * **What is logged, checked.** Every line carries only the HTTP method, the request pathname, and —
  * on the outgoing line — the response status and elapsed time. The pathname comes from Hono's own
  * `c.req.path`, which stops at the first `?`, so a token or password passed as a query parameter
  * never reaches a log line through this middleware; no header and no request or response body is
- * read at all. The original had the same property already (it built its path with
- * `getPath(c.req.raw)`, which has the same behaviour) — nothing was leaking, and
- * `log.test.ts` now asserts it directly (`never logs the query string`, `does not read or log any
- * request header`) instead of leaving it incidental.
+ * read at all. `log.test.ts` asserts it (`never logs the query string`, `does not read or log any
+ * request header`).
  *
  * **One request, one line each way.** Hono decodes the pathname, so `%0A` arrives as a real line
  * break. A line break or any other control character in the method or the path is written escaped
@@ -38,9 +33,8 @@
  * terminal an escape sequence. The `error: unhandled exception on …` line of `applyBaseMiddleware`
  * is escaped the same way. A backslash is kept as it is.
  *
- * **Arrows: `<--` on the way in, `-->` on the way out**, matching both the source and Hono's own
- * built-in `hono/logger`. `log.test.ts` pins the direction by name (`logs incoming then outgoing, in
- * the source's own arrow direction`) instead of only checking each line's other fields.
+ * **Arrows: `<--` on the way in, `-->` on the way out**, matching Hono's own built-in `hono/logger`.
+ * `log.test.ts` pins the direction instead of only checking each line's other fields.
  *
  * **The color table's reach: checked, not assumed.** `c.res.status` is read as a plain property,
  * never checked against `instanceof Response`, so two paths reach the color table's edges without
@@ -56,10 +50,9 @@
  * **Decisions.** `hono/utils/color` is not the internal it looks like: `./utils/*` is part of the
  * published `hono` package's own `exports` map (checked against the pinned `hono@4.13.8`'s
  * `package.json`), so this middleware is layered on hono's public surface, not reaching past it —
- * consistent with hono staying a kept dependency. This port reads Hono's own public `c.req.path`, not
+ * consistent with hono staying a kept dependency. It reads Hono's own public `c.req.path`, not
  * `getPath(c.req.raw)`, so it imports `hono/utils/color` only — never `hono/utils/url`. Color output
- * is ported as-is (same classes, same codes) rather than dropped, since `getColorEnabled()` already
- * turns it off for a non-TTY or `NO_COLOR` environment, so nothing new needs deciding to keep it.
+ * stays: `getColorEnabled()` already turns it off for a non-TTY or `NO_COLOR` environment.
  *
  * @module
  */
@@ -74,7 +67,7 @@ export type RequestLogWriter = (line: string) => void
 export interface RequestLogOptions {
   /**
    * Called once per line: `<-- GET /users` on the way in, `--> GET /users 200 12ms` on the way
-   * out — the same direction as the source and Hono's own built-in `hono/logger`. Defaults to
+   * out — the same direction as Hono's own built-in `hono/logger`. Defaults to
    * `console.log`. This is the one thing the app wires in — a logger that tags every line with a
    * request id, ships it somewhere, or both.
    */

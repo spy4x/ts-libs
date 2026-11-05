@@ -1,9 +1,6 @@
 /**
  * RFC 4180 CSV writer and reader. Plain functions only — no DOM, no Deno, no Preact — so this module
- * runs in a browser tab as well as on the server. The writer is ported from
- * `spy4x/preact-components`'s package-private `ui/csv.ts` (spy4x/preact-components#141,
- * spy4x/ts-libs#175), which stays the reviewed source of this guard until that repo switches its
- * import to here. The reader — {@link decodeTextFile}, {@link sniffCsv}, {@link parseCsv} — lives
+ * runs in a browser tab as well as on the server. The reader — {@link decodeTextFile}, {@link sniffCsv}, {@link parseCsv} — lives
  * in `./csv-read.ts` and is re-exported here.
  *
  * @module

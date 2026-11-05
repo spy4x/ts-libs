@@ -1,20 +1,13 @@
 // Hono middleware: resolve the session cookie to `c.get("auth")`, and guard routes on it.
 //
-// Rewritten from `template/apps/api/middlewares/auth-guards.ts`, `auth.ts` and the request half of
-// `template/apps/api/services/auth/+index.ts`. What changed and why:
-//
-// - `createParseAuth` stored its result with `c.set("auth", authData!)`, asserting away a possible
-//   `null`. `auth` is now typed `AuthState | null` and is always set, to `null` when there is no
-//   session.
-// - `isRole` checked only that someone was signed in, so a user who had given a password but not
-//   yet the second factor passed a role guard unless the route also mounted `isAuthenticated2FA`.
-//   Its replacement, `isAuthorized`, refuses an incomplete second factor before it runs the check.
-//   Roles themselves are the app's: the check is a function the app passes.
-// - The 2FA guard let every session through whenever the user had no second factor configured,
-//   including one still marked as owing it and one carrying a value the guard did not know. Only
-//   `NotRequired` (for a user without a second factor) and `Completed` pass now.
-// - When a session was extended the cookie was not sent again, so the browser dropped it at the
-//   original expiry. `parseAuth` re-sends it after an extension.
+// - `auth` is typed `AuthState | null` and is always set, to `null` when there is no session.
+// - `isAuthorized` refuses an incomplete second factor before it runs the check, so a user who has
+//   given a password but not yet the second factor never passes a role guard. Roles themselves are
+//   the app's: the check is a function the app passes.
+// - The 2FA guard passes only `NotRequired` (for a user without a second factor) and `Completed`;
+//   a session still owing it, or carrying a value the guard does not know, is refused.
+// - `parseAuth` re-sends the cookie after a session is extended, so the browser does not drop it at
+//   the original expiry.
 
 import { createMiddleware } from "hono/factory"
 import type { Context, MiddlewareHandler } from "hono"

@@ -2,8 +2,7 @@
  * The sign-in account model: a minimal user, the ways that user signs in ("keys"), and the
  * guess-counted challenges a provider issues (a code sent by email, a password-reset code).
  *
- * Written from the rules in issue #57, not moved from the earlier `server/auth/types.ts`. The rules
- * this file carries:
+ * The rules this file carries:
  *
  * - A key has a proven or an unproven state (`provenAt`). Only a proven address can link sign-in
  *   methods to an existing user, and at most one user owns a proven address.

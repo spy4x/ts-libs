@@ -99,15 +99,8 @@ describe("purgeDatabase with allowed: true", () => {
 
 describe("purgeDatabase against a camelCase client", () => {
   it("reports and drops the named schema's table, not a same-named one in public", async () => {
-    // `transform: postgres.camel` is what the template's own client used
-    // (`template/libs/server/db/+index.ts:13`). The table listing was originally aliased
-    // to one lower-case word precisely so this client read the same `tablename` a plain
-    // client does; before that alias existed, the row's `table_name` came back as
-    // `tableName` under this transform, `row.table_name` was `undefined`, and the
-    // identifier splice below threw inside the driver rather than dropping anything.
-    // The listing is read by column position now, not by the alias (#137, which also
-    // fixed a `postgres.pascal` client — see `postgres-migrate.integration.test.ts`), but
-    // this test still holds and still exercises `postgres.camel`.
+    // Under `transform: postgres.camel` a `table_name` column comes back as `tableName`.
+    // The table listing is read by column position, so this client still drops the right table.
     const settings = postgresSettings()
     await requireReachable(settings.address)
 
