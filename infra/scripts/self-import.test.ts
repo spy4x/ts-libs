@@ -49,12 +49,17 @@ Deno.test("no published file imports its own package by name", async () => {
     // rewrites all three, so all three fail on JSR the same way.
     // The whole text, not line by line, so a dynamic import split across lines is seen too;
     // a backtick only after `import(`, since doc comments quote package names in backticks.
+    // Block comments are blanked first, keeping their line breaks: a usage example in a module
+    // doc imports by package name, as a caller does, and `deno publish` never rewrites comments.
     const ownName = new RegExp(
       `(?:(?:from|import)\\s*["']|import\\s*\\(\\s*["'\`])${name}["'\`/]`,
       "g",
     )
     for await (const file of publishedSources(join(root, member))) {
-      const text = await Deno.readTextFile(file)
+      const text = (await Deno.readTextFile(file)).replace(
+        /^[ \t]*\/\*[\s\S]*?\*\//gm,
+        (comment) => comment.replace(/[^\n]/g, " "),
+      )
       for (const match of text.matchAll(ownName)) {
         const line = text.slice(0, match.index).split("\n").length
         offenders.push(`${relative(root, file)}:${line}`)
