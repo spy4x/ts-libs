@@ -31,6 +31,75 @@
  * The module verifies; it does not route. It returns the parsed JSON only
  * after the signature has been accepted, because a 200 from an unverified
  * body is how a forged event reaches a handler.
+ *
+ * ```ts
+ * const raw = new Uint8Array(await request.arrayBuffer())
+ * const result = await verifyWebhookRequest(raw, request.headers, { secret })
+ * if (!result.ok) return new Response(null, { status: 401 })
+ * const payload = JSON.parse(new TextDecoder().decode(result.body))
+ * ```
+ *
+ * - HMAC-SHA256 over `<timestamp seconds>.<raw body>`, compared with `crypto.subtle.verify` —
+ *   constant-time in the platform's HMAC. No `===` touches the digest.
+ * - A timestamp participates in the signature and is checked against an injected clock, so a captured
+ *   delivery cannot be replayed after the window. A missing or unparseable timestamp is a rejection,
+ *   not "no replay protection needed".
+ * - Fail-closed on **every** unusable secret, not just the empty string. `""`, `" "`, `null`,
+ *   `undefined`, a number and a missing config object all return the typed
+ *   `{ ok: false, reason: "invalid_secret" }`. Nothing throws: a zero-length HMAC key raises
+ *   `DataError: Key length is zero`, which is a crash on an untrusted request rather than a 401, and
+ *   the values that did _not_ throw produced a usable key, so a body signed with the same falsy value
+ *   verified. Pinned by `` rejects a forgery signed with the HMAC key `null` `` and
+ *   ``does not throw `DataError: Key length is zero` for an empty or absent secret``.
+ * - The body must be the raw bytes off the wire. Parsing and re-serialising JSON changes the hash.
+ *
+ * Headers default to `X-Signature-256` and `X-Signature-Timestamp`, both overridable, and the
+ * `algorithm` prefix is configurable (`sha256=<hex>` is accepted as well as a bare hex digest).
+ *
+ * `combinedHeader` reads the timestamp and the signatures from one header instead, as Stripe sends
+ * them:
+ *
+ * ```ts
+ * const result = await verifyWebhookRequest(raw, request.headers, {
+ *   secret,
+ *   combinedHeader: {
+ *     name: "Stripe-Signature",
+ *     pairSeparator: ",",
+ *     timestampKey: "t",
+ *     signatureKey: "v1",
+ *   },
+ * })
+ * ```
+ *
+ * Every `v1` pair is a candidate and one match passes, because a sender rolling its secret signs with
+ * both. Other keys (Stripe's test-only `v0`) are ignored, so they can never stand in for `v1`. A part
+ * without `=`, a second timestamp, a signature that is not 64 hex characters, more than eight
+ * signatures or a header over 1024 characters rejects the delivery. All candidates are verified with
+ * no early exit.
+ *
+ * `signedSeparator` (default `"."`) is what joins the timestamp and the body in the signed string.
+ * Paddle sends `Paddle-Signature: ts=<ts>;h1=<hex>` and signs `<ts>:<body>`, so it is read with
+ * `{ name: "Paddle-Signature", pairSeparator: ";", timestampKey: "ts", signatureKey: "h1",
+ * signedSeparator: ":" }`.
+ *
+ * `toleranceSeconds` must be a finite number above 0. `NaN` or `Infinity` would accept a replay from
+ * any time, so such a value, 0 or a negative one makes `verifyWebhookRequest` throw a `RangeError`.
+ *
+ * **This is not a drop-in verifier for GitHub or Slack.** Neither signs `<timestamp>.<raw body>`:
+ *
+ * | provider | its actual scheme                                                                | this module                                 |
+ * | -------- | -------------------------------------------------------------------------------- | ------------------------------------------- |
+ * | GitHub   | `X-Hub-Signature-256: sha256=<hmac-of-body>`, no timestamp, no replay protection | needs an adapter: sign the body alone       |
+ * | Slack    | `X-Slack-Signature: v0=<hmac-of-"v0:<ts>:<body>">`                               | needs an adapter: the signed string differs |
+ * | Stripe   | `Stripe-Signature: t=<ts>,v1=<hmac-of-"<ts>.<body>">`                            | supported with `combinedHeader`             |
+ * | Paddle   | `Paddle-Signature: ts=<ts>;h1=<hmac-of-"<ts>:<body>">`                           | supported with `combinedHeader`             |
+ * | generic  | `<ts>.<raw body>`                                                                | supported directly                          |
+ *
+ * What is worth reusing regardless of provider is the part that is easy to get wrong: signing the raw
+ * bytes, comparing with `crypto.subtle.verify`, failing closed on an unusable secret, and refusing a
+ * stale or future-dated timestamp. A provider with a different signed-string construction needs a thin
+ * adapter that builds that string; the verification here is the reusable half.
+ *
  * @module
  */
 

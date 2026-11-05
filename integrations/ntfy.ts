@@ -23,6 +23,58 @@
  *    `rostok` used a bearer token in `Authorization` directly
  *    (`reporting.ts:193`). The token is a constructor parameter here, never
  *    read at module scope and never logged.
+ *
+ * ```ts
+ * const client = new NtfyClient({ baseUrl, topic, token })
+ * const result = await client.notifyFailure("backup failed", "3 of 5 repositories failed")
+ * ```
+ *
+ * **Failure-only by default.** `NotificationSeverity.Failure` is the gate; an `Info` push is a no-op
+ * that still returns `{ ok: true, status: "skipped", reason: "below-gate", attempts: 0 }`, so the gate
+ * is assertable. Callers that genuinely want success pushes pass `severity: Info`.
+ *
+ * **Result.** `{ ok: true, status: "pushed", httpStatus, attempts, title, tags }`,
+ * `{ ok: true, status: "skipped", … }`, or `{ ok: false, code, message, status?, attempts }`, `code`
+ * being `"http_error"`, `"network_error"`, `"timeout"` or `"redirected"`. The source returned `void`
+ * and logged failures, so a dropped push looked like a delivered one.
+ *
+ * **The base URL must be the final address.** Redirects are not followed. Following a 301, 302 or 303
+ * re-sends the push as a bodiless GET, which ntfy answers with its web app and a 200, so a lost push
+ * would read as delivered; following it with the method kept would send the token to wherever
+ * `Location` points. Any 3xx answer is `redirected`, is not retried, and its message names neither
+ * the `Location` nor the base URL.
+ *
+ * **Config.** `NTFY_URL` and `NTFY_TOPIC` are required; `NTFY_TOKEN` is optional because a
+ * self-hosted ntfy on a private network may not use auth. Read through `ntfyConfigFromEnv(read?)`,
+ * which returns `null` when incomplete.
+ *
+ * **Retry policy.** 5 attempts, 3s doubling plus +/-20% jitter (2.4-3.6s, 4.8-7.2s, 9.6-14.4s,
+ * 12-15s), honouring `Retry-After`, bounded by attempts and total elapsed time. The jitter exists so
+ * many callers hitting the same endpoint at once do not retry at the same instant; a test constructs
+ * the client with no options at all and confirms two instances get different delays.
+ *
+ * **The base URL never appears in a result.** It can carry a token in its path, and `fetch` puts the
+ * whole URL in its error text. Every transport failure is reported through `describeTransportError`,
+ * which returns the error's class name and `transport failure (url withheld)` — never the URL. The
+ * same helper covers `HealthchecksClient` (the ping URL carries the check's capability key).
+ *
+ * ## Header safety — the trap `ntfy.ts` carries a fix for
+ *
+ * `Headers.set` rejects code points the platform will not accept in a header value, and the rejection
+ * surfaces from inside `fetch` as an opaque `TypeError: Value is not a valid ByteString`. Two
+ * different needs follow, and `mig`'s source conflated them:
+ *
+ * - A **header value** must be transliterated to printable ASCII. `toAsciiHeaderValue` maps the
+ *   characters that matter for readability (`—` → `-`, `"` → `"`, `…` → `...`, non-breaking space →
+ *   space) and replaces everything else — Latin-1 accents, Cyrillic, CJK, emoji — with `?`. Each run
+ *   of HT, LF and CR becomes one space, because `Headers.set` throws on a line break inside a value.
+ * - A **message body** must be left alone. `mig` passed the body through the same sanitiser, so
+ *   `Café ☕` reached ntfy as `Caf? ?` and every accented, Cyrillic, CJK and emoji payload was
+ *   destroyed. Only headers are transliterated here.
+ *
+ * `createAsciiHeaders` applies the transliteration to every value, so the failure cannot come back
+ * through a new call site. Both halves are pinned by tests, including the body round-trip.
+ *
  * @module
  */
 

@@ -22,6 +22,51 @@
  *  - The source built its message from backup rows (`buildHealthchecksMessage`),
  *    including a padded table. That was backup-specific and was never ported
  *    here; it lived in `ops/`'s backup module, which is not part of ts-libs (#67).
+ *
+ * ```ts
+ * const client = new HealthchecksClient({ pingUrl })
+ * const result = await client.ping({ outcome: HealthchecksOutcome.Fail, body: "3 of 5 failed" })
+ * ```
+ *
+ * `Success` pings the base URL, `Fail` pings `<url>/fail`, `Start` pings `<url>/start`. `urlFor`
+ * exposes the mapping.
+ *
+ * **Config.** `HEALTHCHECKS_PING_URL` through `healthchecksConfigFromEnv(read?)`; `null` when unset.
+ * The constructor throws on an empty URL. Nothing is read at module scope.
+ *
+ * **Result.** `{ ok: true, httpStatus, attempts, body, waitedMs }` or
+ * `{ ok: false, code, message, status?, attempts, waitedMs }`, `code` being `"http_error"`,
+ * `"network_error"`, `"timeout"`, `"check_not_found"`, `"rate_limited"` or `"redirected"`. The source
+ * resolved `void` and logged its failures, so a caller could not tell a delivered ping from a dead
+ * endpoint.
+ *
+ * **A 200 is not always a delivered ping.** healthchecks.io answers `200 OK (not found)` for a check
+ * UUID it does not know and `200 OK (rate limited)` for a ping it ignored
+ * ([pinging API](https://healthchecks.io/docs/http_api/)). The client reads the first 64 bytes of a
+ * 2xx body, never more, and reports these as `check_not_found` (not retried: the URL is wrong) and
+ * `rate_limited` (retried under the policy). Any other 2xx, including `OK` and `201 Created`, is a
+ * success.
+ *
+ * **The ping URL must be the final address.** Redirects are not followed: a 301, 302 or 303 would turn
+ * the POST into a GET and drop the body. Any 3xx answer is `redirected` and is not retried.
+ *
+ * **Retry policy.** 10 attempts, 60s doubling, capped at 5 minutes per wait, plus +/-20% jitter so
+ * that many hosts pinging the same check after a shared outage do not retry in lockstep. Measured
+ * schedule, not estimated: without jitter the waits run
+ * `1 + 2 + 4 + 5 + 5 + 5 + 5 + 5 + 5 = 37.0 minutes` (2,220,000 ms across 9 retries), which fits
+ * inside healthchecks.io's 1-hour grace window; with +/-20% jitter the same 9 waits range
+ * `29.6-38.4 minutes` (1,776,000-2,304,000 ms), still comfortably inside the window and the 40-minute
+ * total budget. Both the un-jittered figure and the jittered range are asserted by the suite,
+ * including a test that constructs the client with no options at all — the settings that ship — and
+ * confirms two instances get different delays. A 10-minute per-wait cap gives
+ * `1 + 2 + 4 + 8 + 10 + 10 + 10 + 10 + 10 = 65.0 minutes` and overruns the very window the cap exists
+ * to respect. `Retry-After` is honoured: the provider rate-limits with `429` and the source ignored
+ * the header, hammering the endpoint on the failures it was retrying. A total budget bounds the whole
+ * operation, set above the sum of the waits.
+ *
+ * **No backup coupling.** Nothing here imports or references `BackupResult` or any backup type. A
+ * notifier that only works while a backup runs is a notifier nobody can reuse.
+ *
  * @module
  */
 
