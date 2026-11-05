@@ -44,10 +44,7 @@
  * ## Retry policy
  *
  * The retry mechanism is `retry.ts`, shared by `ntfy.ts`, `healthchecks.ts` and `webhooks.ts`'s
- * callers. It used to exist twice — a byte-identical copy lived in `ops/notify/retry.ts`, guarded by
- * a test that compared the two files — because the two packages were owned by different issues and
- * had to stay file-disjoint. That constraint went away with `ops/`: the ops copy and its drift
- * test are deleted, and this is now the only copy in the repo.
+ * callers, and it is the only copy in the repository.
  *
  * Transient statuses are `429` and `5xx`; every other `4xx` is permanent. `Retry-After` in the
  * delay-seconds form wins over the computed backoff, then the same per-wait ceiling applies, so a
@@ -55,13 +52,12 @@
  * wall clock, and a skewed client clock would turn a hint into a multi-hour stall. Attempts and total
  * elapsed time are both capped.
  *
- * **Every request is bounded, and the budget is real.** `totalBudgetMs` used to bound only when the
- * _next retry_ could be scheduled; a request itself had no timeout and could hang forever. Every
- * attempt now runs under `AbortSignal.timeout()`, clamped to whatever `totalBudgetMs` has left, so the
+ * **Every request is bounded, and the budget is real.** Every
+ * attempt runs under `AbortSignal.timeout()`, clamped to whatever `totalBudgetMs` has left, so the
  * budget bounds the whole operation, not just the gaps between attempts. `NtfyClient`'s and
  * `HealthchecksClient`'s shipped policies both use `jitterRatio: 0.2`, and jitter draws from a real
  * random source (`Math.random` by default) instead of a formula of `attempt` and `retryAfterMs`: two
- * processes retrying the same call, with no options overridden, no longer compute the identical
+ * processes retrying the same call, with no options overridden, do not compute the identical
  * delay — the "settings that ship" tests in `ntfy.test.ts` and `healthchecks.test.ts` construct a
  * client with no `retry` or `random` override at all and assert exactly that.
  *

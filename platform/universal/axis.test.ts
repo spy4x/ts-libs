@@ -78,8 +78,7 @@ describe("niceStep", () => {
 
   it("returns a finite step above zero for a subnormal span", () => {
     // `10 ** exponent` underflows to 0 for these spans, so the grid computation alone yields a
-    // zero step, and a zero step makes tick generation divide by zero. Ported from
-    // preact-components' `charts/scales.test.ts` before spy4x/preact-components#287.
+    // zero step, and a zero step makes tick generation divide by zero.
     for (const span of [Number.MIN_VALUE, 1e-320, 1e-310]) {
       const step = niceStep(span)
       expect({ span, positive: step > 0, finite: Number.isFinite(step) }).toEqual({
@@ -91,7 +90,6 @@ describe("niceStep", () => {
   })
 
   it("lands on five to eight ticks for every span from 1e-12 to 1e12", () => {
-    // Ported from preact-components' `charts/scales.test.ts` before spy4x/preact-components#287.
     for (let exponent = -12; exponent <= 12; exponent++) {
       for (const multiplier of [1, 2.5, 7.5]) {
         const span = multiplier * 10 ** exponent
@@ -176,7 +174,6 @@ describe("ticks", () => {
   })
 
   it("keeps a zero tick and whole steps across a span of 1e36", () => {
-    // Ported from preact-components' `charts/scales.test.ts` before spy4x/preact-components#287.
     const values = ticks(-1e18, 1e18)
     expect(values.length).toBeGreaterThanOrEqual(5)
     expect(values.length).toBeLessThanOrEqual(8)

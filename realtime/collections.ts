@@ -109,11 +109,10 @@
  * - Conflict choices (`keepMine`, `useTheirs`), `withdraw` and the entries for a "queued" badge are on
  *   `layer.get(collection).outbox`.
  *
- * **Default changed: a write answered `unauthorized` stays pending.** `classifyByCode` used to file
- * it as `rejected`, a conflict the person could only discard. The session ended, belongs to someone
- * else or owes a second factor, so the server never judged the write: it now stays queued
- * (`unreachable`) until its owner signs in. Pass `classifyByCode({ unauthorized: "rejected" })` to
- * keep the old reading.
+ * **A write answered `unauthorized` stays pending.** The session ended, belongs to someone else or
+ * owes a second factor, so the server never judged the write: `classifyByCode` keeps it queued
+ * (`unreachable`) until its owner signs in, rather than filing it as a conflict the person could only
+ * discard. Pass `classifyByCode({ unauthorized: "rejected" })` to file it as `rejected`.
  *
  * A write answered `rate_limited` or `internal` stays pending as well. The server was busy, or failed
  * in a way that says nothing about the write, so the sync runner sends it again with backoff.

@@ -372,8 +372,8 @@ export class PostgresMigrationDriver implements MigrationDriver {
    *
    * **The wait is bounded**. `pg_try_advisory_lock` in a retry loop rather than
    * `pg_advisory_lock`, which waits for ever: a second runner starting during a migration
-   * should apply nothing and carry on, but one stuck runner used to stop every other
-   * instance from starting, with nothing in the log to say why. After
+   * should apply nothing and carry on, and one stuck runner must not stop every other
+   * instance from starting with nothing in the log to say why. After
    * {@link PostgresMigrationDriverOptions.lockWaitMs} the runner gives up with
    * {@link PostgresMigrationLockError}, having applied nothing. A runner that dies holding
    * the lock releases it when its connection closes, so there is no stale lock to clear by
@@ -526,7 +526,7 @@ export class PostgresMigrationDriver implements MigrationDriver {
    * method can check.
    *
    * **A resolved value that is not a usable schema name throws**, rather than falling back
-   * to an empty string. An empty-string fallback used to turn a broken read silently into
+   * to an empty string. An empty-string fallback would turn a broken read silently into
    * `.table` instead of `public.table`: still a valid-looking key, just the wrong one, so two
    * runners that should lock each other out could take different keys instead and both apply
    * the same migration — worse than failing the run outright.
@@ -557,10 +557,10 @@ export class PostgresMigrationDriver implements MigrationDriver {
   /**
    * Create the history table when absent, leaving an existing one's rows untouched.
    *
-   * The existence probe is schema-aware. It used to ask `information_schema.tables` for
-   * the name alone, so a table of that name in any schema on the server — a second
-   * tenant's, another application's — answered yes and the driver created nothing, and
-   * the first history insert then failed on a table that was not there.
+   * The existence probe is schema-aware: asking `information_schema.tables` for the
+   * name alone would let a table of that name in any schema on the server (a second
+   * tenant's, another application's) answer yes, and the first history insert would then
+   * fail on a table that is not there.
    *
    * An existing table gains the `checksum` column, so a deployment upgrading to this
    * version gets the drift check on its next run. The one probe answers both questions —

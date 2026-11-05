@@ -61,7 +61,7 @@
  * const outbox = createOutbox<NotePayload, Note>({
  *   store: createIndexedDbOutboxStore({ name: `outbox:${userId}` }),
  *   lock: createWebLock(navigator.locks, `outbox:${userId}`),
- *   // canSend, send, fetchServer, classify, cache: as in the outbox example above
+ *   // canSend, send, fetchServer, classify, cache: as in `@spy4x/realtime/outbox`'s example
  * })
  * const cache = createDataCache<Note>({ name: `data:${userId}`, getId: (n) => n.id })
  *

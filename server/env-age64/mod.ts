@@ -136,10 +136,9 @@
  * - A file named `*.sops-backup` or `*.sops-backup.age`, matching rostok's own exclusion, so a
  *   leftover from the SOPS-to-age64 migration in a project's history is never treated as live.
  *
- * A decrypted value is never trimmed — unlike rostok, which ran every decrypted value through
- * `.trim()`, silently discarding real leading/trailing whitespace a value might have had on purpose.
- * The newline/carriage-return rejection above catches the corruption trimming used to paper over
- * (an errant line break coming out of a decrypt), without ever discarding whitespace that belongs.
+ * A decrypted value is never trimmed, since leading or trailing whitespace can be part of it on
+ * purpose. The newline and carriage-return rejection above catches the corruption trimming would
+ * hide (an errant line break coming out of a decrypt).
  *
  * The recipient this module encrypts for is always DERIVED from the identity
  * (`identityToRecipient`), never read from the key file's `# public key:` comment — that comment is

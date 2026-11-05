@@ -46,7 +46,7 @@
  * ```ts
  * import { clientIp } from "@spy4x/platform/rate-limit"
  *
- * const CLOUDFLARE = ["173.245.48.0/20", "104.16.0.0/13", "2400:cb00::/32" /* … the full list *\/]
+ * const CLOUDFLARE = ["173.245.48.0/20", "104.16.0.0/13", "2400:cb00::/32"] // … and the rest of the full list
  *
  * // Traefik writes X-Real-IP (the address that connected to it); believe CF-Connecting-IP only when
  * // that address is a Cloudflare edge.
@@ -121,8 +121,8 @@
  *
  * Without a `remoteAddr` accessor the resolver has no peer address at all and falls back to the
  * placeholder `clientIp` returns, `0.0.0.0` — and **every** header-less client then shares one bucket,
- * so one caller exhausting it denies the rest. This used to happen silently; `createRateLimitMiddleware`
- * now **requires** a `remoteAddr` resolver and throws at construction time without one, so the shared
+ * so one caller exhausting it denies the rest. So `createRateLimitMiddleware`
+ * **requires** a `remoteAddr` resolver and throws at construction time without one, so the shared
  * bucket can only happen because a caller wrote `remoteAddr: () => undefined` and meant it, not because
  * the option was left out. If you cannot obtain a peer address, pass that no-op explicitly, treat the
  * shared bucket as a backstop, and front the service with a proxy.
@@ -130,13 +130,8 @@
  * **Where the trust decision lives.** Exactly three places can consult a forwarding header, and all
  * three default to not trusting one: `clientIp`'s `trustedProxy` parameter, `userThenIp`'s
  * `trustedProxy` option, and the `keyResolver` you write — which sees a header only if you read one.
- * There is deliberately no fourth. This package used to export a `resolveIdentityKey` helper that built
- * a key from a `Request` plus a peer address passed as a plain string; its `trustedProxy` default was
- * `true`, it duplicated `userThenIp`, and it made the peer-address mitigation unreachable, because a
- * `Request` carries no peer address, so that option could only ever be fed by a side channel. A caller
- * wiring the two obvious arguments got a limiter that 200 rotating `X-Forwarded-For` values at
- * `limit: 3` walked straight through. It is removed rather than kept as a second public entry point with
- * a security-relevant default; compose `clientIp` with `rateLimitKey` yourself if you need a key
+ * There is deliberately no fourth, such as a helper that builds a key from a bare `Request`: a
+ * `Request` carries no peer address, so such a helper could only trust a forwarding header. Compose `clientIp` with `rateLimitKey` yourself if you need a key
  * outside the middleware, stating explicitly which of the two you want.
  *
  * @module

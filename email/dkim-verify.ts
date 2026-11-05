@@ -57,7 +57,7 @@
  * - Expiry (`x=`) against an injectable clock, and that `x=` is later than `t=`.
  * - **That `h=` names `From`** (§6.1.1), and that the message has a `From` field to
  *   sign. A signature that does not cover `From` says nothing about who sent the
- *   mail, and this verifier used to call one valid.
+ *   mail, so it is never called valid.
  * - **That `d=` is the `i=` domain or a parent of it** (§6.1.1), and exactly `d=`
  *   when the key record carries `t=s`.
  * - **The key record's own tags** (§3.6.1): `v=` must be `DKIM1` and come first,
@@ -82,9 +82,8 @@
  *   body line; a lone CR there is an ordinary octet, hashed as one, matching RFC
  *   6376 §3.4.3/§3.4.4 and how dkimpy and OpenDKIM canonicalize a body. A CR in the
  *   body cannot hide a header field, so the header block's stricter refusal has no
- *   reason to apply there — treating a lone CR as a line ending in the body used to
- *   disagree with every RFC-faithful signer on a body that legitimately carries one
- *   and reported it as tampered with.
+ *   reason to apply there, and treating a lone CR as a line ending would report
+ *   an honestly signed body that carries one as tampered with.
  * - **That the message did not grow an instance of a header the signature covers**
  *   (§5.4.2). A signer lists a name in `h=` as many times as the message carried it,
  *   so an instance left over after the pairing means the message gained one after
@@ -180,7 +179,7 @@
  * `verifyDkim` returns a result for every message-shaped failure — missing header,
  * bad grammar, expiry, unsigned `From`, body mismatch, unverifiable signature — and
  * for a resolver that throws, whose message becomes `result.reason`. Nothing escapes
- * it, which the docs used to deny.
+ * it.
  *
  * One consequence is worth knowing: the result says `valid: false` for a DNS lookup
  * that failed, and does not distinguish that from a signature that is wrong. RFC
@@ -360,29 +359,23 @@
  *   block's line-ending refusal above accepts it) into `From<TAB>: ...` and
  *   reads it as that same obsolete `From` form. The raw name this comparison
  *   reads still carries the CRLF and the tab; trimming them is what lets it
- *   still read that line as `From` — the same thing `String.trim()` did on
- *   `main` — so the growth guard refuses the extra instance instead of missing
+ *   still read that line as `From`, so the growth guard refuses the extra instance instead of missing
  *   it.
  *
  *   A name's two ends are not the only place a disguising byte can sit, and a
  *   name can need more than one kind of disguise at once. A byte outside
  *   0x21-0x7E placed _inside_ a name — `Fr<U+00AD>om:` (a soft hyphen),
- *   `From<NUL>x:` (a NUL) — survives the end-trim untouched and used to slip
- *   past both checks, because they bucketed a header purely by its
- *   exact trimmed name and never noticed that a name they never asked about
- *   could still read, to a lenient mail program, as one they did. A first fix
- *   for that read the trimmed name two further ways, independently over the
- *   whole name — every such byte stripped out wherever it sits, and the name
- *   cut at the first one — but a name that needs both readings _at the same
- *   time_ defeated it: `Fr<U+00AD>om<NUL>x:` strips to `Fromx` and cuts to `Fr`,
- *   and neither is `from`.
+ *   `From<NUL>x:` (a NUL) — survives the end-trim untouched, yet a lenient
+ *   mail program can still read it as `From`. Reading the name only stripped, or
+ *   only cut at the first such byte, is not enough when a name needs both at the
+ *   same time: `Fr<U+00AD>om<NUL>x:` strips to `Fromx` and cuts to `Fr`.
  *
- *   Both checks now instead walk the trimmed name once, building up the
+ *   So both checks walk the trimmed name once, building up the
  *   stripped prefix as they go, and test that prefix against `h=`'s names every
  *   time a run of padding bytes _begins_ — as if a lenient reader had silently
  *   swallowed the run and kept going — and once more after the whole name, as
  *   if it had read to the end; a match at either point counts the same as a
- *   match on the plain trimmed name. `Fr<U+00AD>om<NUL>x:` now matches at the
+ *   match on the plain trimmed name. `Fr<U+00AD>om<NUL>x:` matches at the
  *   NUL, because by then the walk has already absorbed the soft hyphen and its
  *   prefix reads `From`. Because the prefix only ever grows, the walk stops as
  *   soon as it is longer than the longest name in `h=` — no later point can
@@ -392,7 +385,7 @@
  *   lists, so a genuine, unrelated, unsigned field with a stray byte in its name
  *   is untouched — but a plain, otherwise-ordinary field whose name starts with
  *   a signed name and then a padding byte is not: `Subject Line:` (the space is
- *   one of the padding bytes) or `To Name:` now count as an extra, unsigned
+ *   one of the padding bytes) or `To Name:` count as an extra, unsigned
  *   instance of `subject` or `to` and are refused, because a lenient reader
  *   could read the same shape, `Fr om:`, as `From`.
  *
@@ -619,9 +612,9 @@ export async function verifyDkimSignatures(
         `${maxHeaderFields}-field limit`,
     }]
   }
-  // Every signature is verified, not just the first: a broken one above a good
-  // one used to condemn the whole message, and a valid one an attacker put on top
-  // used to decide it. Each field's value keeps its exact bytes, so the canonical
+  // Every signature is verified, not just the first, so a broken one above a good
+  // one cannot condemn the message, and a valid one an attacker put on top cannot
+  // decide it. Each field's value keeps its exact bytes, so the canonical
   // form reconstructed for hashing matches what that signer saw.
   // The name is compared trimmed, as `selectSignedHeaders` compares it: RFC 5322's
   // obsolete syntax allows WSP before the colon, so `DKIM-Signature :` is a field.

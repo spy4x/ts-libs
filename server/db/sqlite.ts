@@ -500,9 +500,8 @@ export class SqliteDb {
     const scoped = this.createScopedHandle()
     try {
       // The gate is claimed before `BEGIN` rather than after it, so two callers cannot
-      // both send a `BEGIN`. It is given straight back when `BEGIN` fails, which is the
-      // behaviour a flag set before the statement used to get wrong: one syntax error
-      // left the connection refusing every later transaction.
+      // both send a `BEGIN`. It is given straight back when `BEGIN` fails, so one syntax
+      // error cannot leave the connection refusing every later transaction.
       await scoped.exec(this.transactions.begin)
     } catch (error) {
       scoped.ended = true
@@ -536,8 +535,8 @@ export class SqliteDb {
    *
    * It goes through the gate like every other operation, so a `close` issued while
    * another caller's transaction is open waits for that transaction instead of pulling
-   * the connection out from under it — the transaction used to reject with "database is
-   * not open" at its next statement. A `close` called from *inside* a transaction
+   * the connection out from under it, which would fail its next statement with "database is
+   * not open". A `close` called from *inside* a transaction
    * callback is waiting for itself, so it fails after the bounded wait with
    * {@link SqliteTransactionWaitError}, as any other statement on the root handle does.
    *

@@ -92,8 +92,8 @@
  *
  * **Two runs on one `PostgresMigrationDriver` object** are refused with
  * `PostgresMigrationRunInProgressError` rather than deadlocking. The object points itself at the
- * connection a run reserved, so the second run used to send its statements on the first run's
- * connection, both held a lock, and the process hung until it was killed. Two concurrent runs are two
+ * connection a run reserved, so a second run would send its statements on the first run's
+ * connection and deadlock on the lock both hold. Two concurrent runs are two
  * driver objects, which is also what two application instances are.
  *
  * **A client built with `fetch_types: false` works, not refused**. `withLock` reserves a
@@ -153,9 +153,9 @@
  * because back-filling it from the file in front of the runner would record the current file as the one
  * that ran. The cost is that a run reads every migration from disk, not only the pending ones.
  *
- * Three neighbouring kinds of drift used to pass without a word:
+ * Three neighbouring kinds of drift are caught too:
  *
- * | Drift                                   | Now                                                                        |
+ * | Drift                                   | Result                                                                     |
  * | --------------------------------------- | -------------------------------------------------------------------------- |
  * | a new file sorts before an edited one   | nothing is applied; the plan is checked first, so the run is refused whole |
  * | an applied migration's file was deleted | reported in `MigrationReport.missing`, oldest row first                    |
@@ -215,8 +215,7 @@ export interface AppliedMigration {
  *
  * The file on disk no longer hashes to what the history table recorded when the
  * migration ran, so the database does not hold what the file says it holds. The runner
- * stops rather than choosing between the two wrong answers it used to pick from
- * silently: skipping the file, which leaves the edit unapplied for ever, or re-running
+ * stops rather than silently choosing one of two wrong answers: skipping the file, which leaves the edit unapplied for ever, or re-running
  * it, which applies it twice everywhere it had already run.
  *
  * The way out is a new migration carrying the change. Restoring the file to its applied

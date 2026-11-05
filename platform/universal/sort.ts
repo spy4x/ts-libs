@@ -116,9 +116,9 @@ function compareCells(left: unknown, right: unknown): number {
  *
  * **Empty is `null`, `undefined`, `""` and `NaN`, and it sorts last in both directions**, because
  * that is where a reader looks for the rows a column says nothing about, whichever way the column is
- * pointing. Two empty cells tie, so the next rule decides. Comparing them arithmetically is what
- * produced `NaN` from `Number(undefined)`, and a comparator that returns `NaN` leaves the array in
- * its input order: one blank cell used to stop the whole column sorting.
+ * pointing. Two empty cells tie, so the next rule decides. They are never compared arithmetically:
+ * `Number(undefined)` is `NaN`, and a comparator that returns `NaN` leaves the array in its input
+ * order, so one blank cell would stop the whole column sorting.
  *
  * Ordering by kind first is what makes the comparison independent of the pair it is looking at, and
  * a sort needs that: see {@link compareCells} for the three cells that broke the version which chose

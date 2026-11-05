@@ -11,10 +11,6 @@ import {
   pushUnsubscribeRequestSchema,
 } from "./push.ts"
 
-// Ported from `template/libs/platform/types/push-schema.test.ts`. `validate` comes from
-// `@spy4x/validation` instead of the template's own copy (out of scope for this move, see the
-// PR body), and every input keeps its original shape.
-
 describe("push schema: subscribe", () => {
   it("accepts subscribe", () => {
     const result = validate(pushSubscribeRequestSchema, {

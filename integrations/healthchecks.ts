@@ -211,9 +211,8 @@ export class HealthchecksClient {
           "an unconfigured switch as an explicit caller decision",
       )
     }
-    // A URL the platform cannot parse can never be pinged, and the failure it
-    // used to produce was `{ ok: true, httpStatus: 200 }` from a stubbed
-    // transport. Refused at construction so a typo cannot look like a healthy
+    // A URL the platform cannot parse can never be pinged, yet a stubbed
+    // transport would answer it with `{ ok: true, httpStatus: 200 }`. Refused at construction so a typo cannot look like a healthy
     // dead-man's switch. Refused at construction, matching how an empty URL is
     // refused, so no error code has to exist for a state that cannot produce a
     // result.

@@ -164,7 +164,7 @@
     "@negrel/http-ece": "jsr:@negrel/http-ece@0.7.0",
 
     // Redis client for `server/kv` (#75): a small Deno-native RESP client on
-    // `Deno.Conn`, already run by the template this is ported from. Chosen over
+    // `Deno.Conn`, already run by the template. Chosen over
     // `ioredis` (the house dependency-keep list's suggestion) because `ioredis` is
     // `npm:` and pulls in Node compatibility the house rules call "only when
     // unavoidable", and it is not unavoidable here.

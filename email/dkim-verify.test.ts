@@ -3328,7 +3328,7 @@ describe("a From hidden behind a header line-break byte other than CR", () => {
  * That is the safe direction, not a bug: nothing here
  * calls a message with a plausible extra `From` line valid, and every mbox
  * reader already strips the envelope line before treating what follows as
- * RFC 5322 mail. `email/README.md`'s field-name paragraph states the rule; a
+ * RFC 5322 mail. The `@spy4x/email/dkim-verify` module doc states the rule; a
  * caller verifying mbox records must strip the envelope line first.
  */
 describe("an mbox envelope line above a signed message", () => {

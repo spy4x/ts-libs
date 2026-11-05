@@ -195,10 +195,10 @@ const DECIMAL_INTEGER = /^[0-9]+$/
  * A `DB_PORT` that is not a decimal integer throws: `Number("")` is `0` and
  * `Number("abc")` is `NaN`, and both would be handed to the driver as a port.
  *
- * A missing `DB_USER`, `DB_PASS` or `DB_NAME` throws too, once `DB_HOST` is set. They
- * used to default to the empty string, which is a valid value to hand a driver and
- * never the value anybody meant: the client then dialled the right host and failed
- * authentication, so a missing variable in a deployment looked like wrong credentials.
+ * A missing `DB_USER`, `DB_PASS` or `DB_NAME` throws too, once `DB_HOST` is set. An empty
+ * string is a valid value to hand a driver and never the value anybody meant: the client
+ * would dial the right host and fail authentication, so a missing variable in a deployment
+ * would look like wrong credentials.
  */
 export function parsePostgresEnv(
   environment: Record<string, string | undefined>,
