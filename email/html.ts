@@ -16,6 +16,45 @@
  * `'` is escaped as well as the four characters `mig` handled — an apostrophe is
  * harmless in element text and terminates a single-quoted attribute, and an
  * escaper that is safe only in one of the two positions is a trap.
+ *
+ * `escapeHtml` escapes a **value** — `&`, `<`, `>`, `"` and `'`. `htmlWrap` takes
+ * **pre-escaped HTML** and escapes only the fields it interpolates itself (the brand
+ * label and its link). Escape at the interpolation:
+ *
+ * ```ts
+ * htmlWrap({ body: `<p>${escapeHtml(name)}</p>` }) // correct
+ * htmlWrap({ body: escapeHtml(`<p>${name}</p>`) }) // escapes the markup too
+ * ```
+ *
+ * `brandUrl` must be an absolute `http:`, `https:` or `mailto:` URL and throws a
+ * `TypeError` otherwise. Escaping leaves `javascript:alert(1)` a well-formed link —
+ * the characters that need escaping are not the ones that make a scheme dangerous —
+ * and the value comes from a caller's configuration rather than from a recipient, so
+ * a wrong one is a bug to surface rather than input to sanitise.
+ *
+ * `htmlWrap` defaults to a neutral light shell (`DEFAULT_HTML_SHELL_THEME`) —
+ * white background, dark text, a plain blue link — rather than the dark navy
+ * body with an orange link it shipped with before `theme` existed. **This is a
+ * breaking change for any caller that already copied that dark look**, though
+ * nothing in this repository does: pass `theme: DARK_HTML_SHELL_THEME` to keep
+ * it exactly. `theme` accepts a partial override (`{ background: "#000000" }`
+ * keeps the rest of the default); every colour must be a `#rgb`/`#rrggbb` hex
+ * value or `htmlWrap` throws, because a colour lands inside a double-quoted
+ * `style` attribute and an unvalidated one could close it early. `maxWidth`
+ * (default `480`) is the letter column's width in pixels, and `signaturePrefix`
+ * (default `"— Sent by"`) is the footer wording before the brand — pass `null`
+ * to drop the footer line while keeping the header brand block. `lang` (default
+ * `"en"`) and `dir` (`"ltr"` or `"rtl"`, omitted by default) go on `<html>`, so a
+ * letter in Arabic reads right to left; a value outside those throws.
+ *
+ * `preheader` is the hidden preview line an inbox shows beside the subject: escaped,
+ * placed first in `<body>` in an invisible span and padded so the client does not
+ * fill the preview with body text. Without it the output is unchanged.
+ *
+ * `emailButton({ href, label, background, color })` returns a table-based button that
+ * renders as a button in Gmail, Apple Mail and Outlook. `href` is checked like
+ * `brandUrl`, the colours like the theme's, and `label` is escaped.
+ *
  * @module
  */
 

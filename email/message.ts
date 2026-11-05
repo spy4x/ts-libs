@@ -7,6 +7,30 @@
  * application. A library that owns the transport also owns the timezone framing
  * and the ICS attachment plumbing, because those are the parts that go wrong in
  * every hand-rolled reimplementation — the templates built on top of them do not.
+ *
+ * ## Per-recipient timezone framing
+ *
+ * `frameWallClockLong(date, time, sourceTz, recipientTz?)` turns a wall clock
+ * written in `sourceTz` into a line the recipient can read:
+ * `"Friday, 28 August 2026 at 04:00 (America/New_York)"`. `frameInstantLong` does the
+ * same for an absolute instant, and the `*Short` variants drop the zone name for a
+ * subject line. An unknown recipient zone falls back to the source zone; an unknown
+ * _source_ zone throws `RangeError` rather than reaching `Intl`.
+ *
+ * The zone math is `@spy4x/time/tz` — `zonedDateTime`, `formatInstantLong`,
+ * `formatInstantShort`, `validTimeZoneOr`, `isValidTimeZone`. Nothing here
+ * reimplements it, and nothing reads the host `TZ`, so the same input produces the
+ * same output on every machine.
+ *
+ * ## ICS attachments
+ *
+ * `icalAttachment(event, { ics, filename? })` builds a `text/calendar` attachment
+ * from `@spy4x/time/ics` (`generateIcs`) — there is no second ICS writer here. The
+ * MIME type's `method` parameter is read back out of the generated document, so a
+ * `Content-Type` announcing `REQUEST` for a body that says `CANCEL` is not
+ * expressible. Non-ASCII filenames are emitted per RFC 2231 (`filename*0*=utf-8''…`)
+ * by the transport.
+ *
  * @module
  */
 

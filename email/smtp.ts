@@ -27,6 +27,71 @@
  *    AUTH exchange included, to the logger — and every string that leaves this
  *    module through `error` is scrubbed of the password, the `user:pass` pair,
  *    and their base64 AUTH-LOGIN encodings.
+ *
+ * The repo dependency policy is _own the small, keep the huge_ — and it names an
+ * SMTP lib among the things to keep rather than write, because SMTP is a tarpit:
+ * EHLO capability parsing, SASL mechanism selection, STARTTLS with a
+ * downgrade-resistant upgrade, per-recipient `MAIL FROM`/`RCPT TO` status, MIME
+ * assembly, RFC 2047 header encoding, RFC 2231 parameter encoding. Generic email is
+ * a huge, well-solved problem.
+ *
+ * The port is what keeps that choice reversible. `EmailSender` mentions nothing from
+ * nodemailer, so a Deno-native client, an SES adapter or a fan-out decorator can
+ * replace the transport without touching a caller. Every vendor-specific type lives
+ * in `smtp.ts` — the injected `SmtpTransportFactory` is deliberately the only place
+ * nodemailer's typings appear.
+ *
+ * ## Configuration
+ *
+ * | Option                | Default                | Notes                                                           |
+ * | --------------------- | ---------------------- | --------------------------------------------------------------- |
+ * | `host`                | —                      | Relay hostname.                                                 |
+ * | `port`                | —                      | `465` selects implicit TLS; any other port starts in the clear. |
+ * | `user` / `pass`       | —                      | SMTP AUTH credentials.                                          |
+ * | `from`                | —                      | `addr@example.com` or `Name <addr@example.com>`.                |
+ * | `secure`              | `port === 465`         | Implicit TLS before EHLO.                                       |
+ * | `requireTls`          | `true` when not secure | Force STARTTLS; `false` allows sending in the clear.            |
+ * | `name`                | nodemailer's           | EHLO name.                                                      |
+ * | `connectionTimeoutMs` | nodemailer's           | TCP connect timeout.                                            |
+ * | `greetingTimeoutMs`   | nodemailer's           | Server greeting timeout.                                        |
+ * | `socketTimeoutMs`     | nodemailer's           | Socket inactivity timeout.                                      |
+ *
+ * **The library never reads the environment** — no `Deno.env`, at module scope or
+ * anywhere else. Read your configuration in the application and pass it in.
+ *
+ * `requireTls` defaults to `true` on a non-implicit-TLS port. That is a deliberate
+ * departure from the source, which used opportunistic STARTTLS: an opportunistic
+ * upgrade is stripped by any on-path attacker, who then reads the AUTH exchange. A
+ * relay that genuinely cannot do STARTTLS needs `requireTls: false`.
+ *
+ * If your process runs the default transport factory, it needs `--allow-env`:
+ * nodemailer's module body reads `process.env.ETHEREAL_API` while loading. This
+ * package imports it lazily, on the first send through the default factory, so a
+ * process that injects its own factory never loads nodemailer _through this package_
+ * and needs no permission beyond the ones it already has. (This package's own test
+ * suite does import nodemailer statically, to compile real MIME offline through its
+ * `streamTransport`; that is a test-only path.)
+ *
+ * ## Transport is injectable
+ *
+ * `createSmtpSender(options, factory?)` takes an optional `SmtpTransportFactory`. It
+ * exists so the adapter's argument assembly can be asserted on the exact connection
+ * configuration and the exact message object that would have reached the network,
+ * with no socket and no `--allow-net`:
+ *
+ * ```ts
+ * const sender = createSmtpSender(options, (config) => ({
+ *   sendMail: (message) => {
+ *     // assert on `config` and `message`, or forward to a real transport
+ *     return Promise.resolve({ accepted: [] })
+ *   },
+ * }))
+ * ```
+ *
+ * `createConsoleSender()` implements the port by logging instead: envelope, subject,
+ * body preview, attachment count. Local and test flows need no mail server. Pass
+ * `log` to capture the output somewhere else.
+ *
  * @module
  */
 
