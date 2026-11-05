@@ -1,6 +1,6 @@
 # AGENTS.md — ts-libs
 
-Framework-agnostic TypeScript primitives and adapters for Deno, published to JSR. Read `README.md`
+Framework-agnostic TypeScript primitives and adapters for Deno, Node and Bun, published to JSR. Read `README.md`
 for scope, `CONTRIBUTING.md` for the repository rules and maintenance, and `LICENSE` for terms
 (MIT, © 2026 Anton Shubin). The global agent instructions own Git Flow, worktrees, review and
 cleanup; this file adds constraints and overrides them where they conflict.
@@ -329,8 +329,11 @@ dependency in the PR body. No speculative entries.
 
 ## Hard rules
 
-- **Deno is the only runtime.** No Node.js, npm, pnpm, Yarn or Bun commands anywhere — not in tasks,
-  not in CI, not in docs. `npm:` specifiers run through Deno where unavoidable.
+- **Deno, Node and Bun are all supported runtimes; Deno is the toolchain.** Published code runs
+  unchanged on all three. Tasks, tests, formatting, linting and publishing run through Deno, and the
+  repo has no `package.json` and no npm, pnpm or Yarn install. Node and Bun commands are allowed
+  where they check that the code runs on those runtimes, locally or in CI. `npm:` specifiers run
+  through Deno where unavoidable.
 - Never commit a secret, token, credential, `.env` value or raw production URL.
 - One logical change per commit. Keep commits small.
 - Do not reformat or edit a directory another agent owns.
