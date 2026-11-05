@@ -9,6 +9,25 @@
  *
  * The folding algorithm originates in `mig/lib/ics.ts` (fold) and this port
  * keeps its UTF-8 boundary handling unchanged.
+ *
+ * `time/ics-core.ts` holds the byte-level RFC 5545 primitives: 75-octet folding, unfolding, TEXT
+ * escaping, RFC 6868 parameter escaping, control-character stripping and the UTC DATE-TIME format.
+ * `time/ics.ts` builds VCALENDAR/VEVENT on top of it, and the `caldav/` package imports the same
+ * module instead of carrying a copy of its own. `caldav-mcp`'s `ical.ts` — a separate repo, not part
+ * of this library — slices folded lines by character (`ical.ts:10-19`), which splits
+ * multi-byte UTF-8; `ics-core.ts` does not.
+ *
+ * ## Folding
+ *
+ * `foldLine` folds at 75 **octets** _excluding_ the CRLF line break, counting the one-octet
+ * continuation space toward the limit (so continuation lines carry at most 74 octets of content). It
+ * iterates by code point and measures each with `TextEncoder`, so a multi-byte sequence is never split.
+ * `String.prototype.length` is never consulted: 25 CJK code points are 25 characters but 75 octets.
+ *
+ * Control characters are stripped before escaping; `HTAB` is the one C0 character kept in a TEXT
+ * value, and a mail address is stripped harder (no C0 at all) because it sits in the property _value_
+ * position where no escaping helper applies.
+ *
  * @module
  */
 

@@ -11,6 +11,56 @@
  *
  * Runs in the browser and on the server: web-platform APIs only, no `Deno.*`, no dependencies.
  * Built on the wire primitives of `./ics-core.ts` and the zone math of `./tz.ts`.
+ *
+ * `time/ical` reads an iCalendar object written by any client, lets you change a few properties, and
+ * writes it back without losing what you did not touch: reminders, subtask links, repeat rules,
+ * Tasks.org's sort order, vendor `X-` properties, time zone definitions and recurrence overrides.
+ *
+ * ```ts
+ * import {
+ *   getProperty,
+ *   parseIcal,
+ *   readDate,
+ *   serializeIcal,
+ *   writeDate,
+ *   writeText,
+ * } from "@spy4x/time/ical"
+ *
+ * const parsed = parseIcal(icsFromServer)
+ * if (!parsed.success) throw new Error(parsed.error.message)
+ * const root = parsed.output
+ * const todo = root.components.find((component) => component.name === "VTODO")!
+ * writeText(todo, "SUMMARY", "Renew the passport")
+ * const due = readDate(getProperty(todo, "DUE")!)! // { kind: IcalDateKind.Date, date: "2026-10-09" }
+ * writeDate(todo, "DUE", { ...due, date: "2026-10-12" }, { root }) // stays DUE;VALUE=DATE
+ * const ics = serializeIcal(root) // every other line byte-identical to icsFromServer
+ * ```
+ *
+ * - **Lossless.** Each property keeps the physical lines it was parsed from. `serializeIcal` writes
+ *   them back unchanged while the property's name, parameters and value still match, and writes a
+ *   fresh line, folded to 75 octets, only for a property that changed. Parse then serialise of
+ *   untouched CRLF input is byte-identical, including a property a server wrote after a
+ *   subcomponent (Radicale writes `X-APPLE-SORT-ORDER` after `VALARM`).
+ * - **Wire format.** Output uses CRLF; bare LF input is accepted. Continuation lines may start with
+ *   SPACE or HTAB. Parameters are decoded per RFC 6868 and quoted when they contain `:`, `;` or `,`.
+ *   `readList` merges every line of a property (several `CATEGORIES` lines) and splits only on
+ *   unescaped commas. `parseIcal` refuses input over `maxBytes` (4 MiB) or nested deeper than
+ *   `maxDepth` (16) and returns `{ success, output, error }` instead of throwing.
+ * - **Dates keep their kind.** `readDate` returns a date, a floating time, a UTC time or a time with
+ *   a `TZID`, and `writeDate` writes the same kind back. It refuses a DUE or DTEND whose value type
+ *   would differ from DTSTART's, a non-UTC COMPLETED, DTSTAMP, CREATED or LAST-MODIFIED, a second
+ *   CREATED, and a `TZID` with no VTIMEZONE in the document: it never invents a VTIMEZONE. A date
+ *   that keeps the `TZID` its property already carries is written even without one.
+ * - **Instants.** `resolveInstant` resolves UTC values and IANA `TZID`s through `time/tz`. Any other
+ *   `TZID` resolves through the VTIMEZONE of that name in the document passed as `root` (its
+ *   STANDARD and DAYLIGHT parts with yearly rules or `RDATE`s), and failing that as a Windows zone
+ *   name such as Outlook's `W. Europe Standard Time`, through the Unicode CLDR table. A `TZID` that
+ *   is none of these stays unresolved (`undefined`), never guessed.
+ * - **Not here.** No recurrence expansion (see `time/rrule`), no VTIMEZONE generation, no
+ *   networking. Task and event semantics (status, `RELATED-TO`, `SEQUENCE` bumps) live in
+ *   `time/ical-tasks`. Runs in a browser: the module and its imports use no `Deno.*` API, and a test
+ *   enforces it.
+ *
  * @module
  */
 
