@@ -615,13 +615,14 @@ export function minToHHMM(minutes: number): string {
 }
 
 /**
- * `tz` with its spelling normalised where that is safe, never renamed to another zone name.
+ * `tz` with its spelling normalised where that is safe: only a name with no `/` becomes another zone
+ * name.
  *
  * Fixes only what is safe to fix, in this order:
  *
  * 1. A name the runtime lists (`Intl.supportedValuesOf("timeZone")`) is returned as given.
  * 2. A name with no `/` (`Japan`, `EST5EDT`, `GMT`) is an alias with no spelling worth
- *    preserving, so `Intl` resolves it (`Japan` becomes `Asia/Tokyo`).
+ *    preserving, so `Intl` resolves it (`Japan` becomes `Asia/Tokyo`, `GMT` becomes `UTC`).
  * 3. Any other name (`america/new_york`, `Etc/GMT+5`, `US/Eastern`, `Asia/Ho_Chi_Minh`) is asked
  *    of `Intl`, and the answer is used only when it is the same name in other casing. That fixes
  *    letter case (`america/new_york` becomes `America/New_York`). A genuinely different answer is

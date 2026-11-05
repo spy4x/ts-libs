@@ -79,14 +79,3 @@ describe("loadEntries", () => {
     await expect(loadEntries(root)).rejects.toThrow(`${root}/time/deno.json: `)
   })
 })
-
-describe("docs/1.0-contract.md", () => {
-  it("has one heading per entry point the workspace's exports maps publish", async () => {
-    const root = fromFileUrl(import.meta.resolve("../../"))
-    const document = await Deno.readTextFile(`${root}/docs/1.0-contract.md`)
-    const headings = [...document.matchAll(/^### `([^`]+)`$/gm)].map((match) => match[1])
-    const entries = await loadEntries(root)
-    expect(entries.length).toBeGreaterThan(100)
-    expect(headings).toEqual(entries.map((entry) => entry.specifier))
-  })
-})

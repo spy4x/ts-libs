@@ -9,7 +9,7 @@
  */
 
 import type { FileSystemPort } from "./ports.ts"
-import type { EnvReader, StandardInput } from "./process.ts"
+import type { EnvReader, OsSignal, StandardInput } from "./process.ts"
 
 /** Node's standard input stream: the members {@link standardInputOver} reads. */
 export interface NodeStdin {
@@ -44,8 +44,8 @@ export interface RuntimeHost {
       read(buffer: Uint8Array): Promise<number | null>
       readonly readable: ReadableStream<Uint8Array>
     }
-    addSignalListener?(signal: Deno.Signal, handler: () => void): void
-    removeSignalListener?(signal: Deno.Signal, handler: () => void): void
+    addSignalListener?(signal: OsSignal, handler: () => void): void
+    removeSignalListener?(signal: OsSignal, handler: () => void): void
     cwd?(): string
     errors?: Partial<Record<FsErrorKind, new (message: string) => Error>>
   }
@@ -107,13 +107,20 @@ export function workingDirectoryOf(host: RuntimeHost): string {
 }
 
 /** A file-system failure that `fsError` makes and `isFsError` recognises on every runtime. */
-export type FsErrorKind = "NotFound" | "AlreadyExists" | "WriteZero"
+export type FsErrorKind =
+  | "NotFound"
+  | "AlreadyExists"
+  | "WriteZero"
+  | "IsADirectory"
+  | "NotADirectory"
 
 /** Node's `code` for each kind that has one. Node has no code for a write that made no progress. */
 export const FS_ERROR_CODES: Record<FsErrorKind, string | undefined> = {
   NotFound: "ENOENT",
   AlreadyExists: "EEXIST",
   WriteZero: undefined,
+  IsADirectory: "EISDIR",
+  NotADirectory: "ENOTDIR",
 }
 
 /**
@@ -326,8 +333,8 @@ export function fileSystemOver(
 
 /** Registers and removes operating-system signal listeners. */
 export interface SignalListeners {
-  add(signal: Deno.Signal, handler: () => void): void
-  remove(signal: Deno.Signal, handler: () => void): void
+  add(signal: OsSignal, handler: () => void): void
+  remove(signal: OsSignal, handler: () => void): void
 }
 
 /**

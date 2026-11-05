@@ -32,6 +32,48 @@ import {
 } from "./_runtime-host.ts"
 
 /**
+ * An operating-system signal name. The same list as `Deno.Signal`, spelled out so the type checks
+ * without Deno's types, as on Node and Bun.
+ */
+export type OsSignal =
+  | "SIGABRT"
+  | "SIGALRM"
+  | "SIGBREAK"
+  | "SIGBUS"
+  | "SIGCHLD"
+  | "SIGCONT"
+  | "SIGEMT"
+  | "SIGFPE"
+  | "SIGHUP"
+  | "SIGILL"
+  | "SIGINFO"
+  | "SIGINT"
+  | "SIGIO"
+  | "SIGPOLL"
+  | "SIGUNUSED"
+  | "SIGKILL"
+  | "SIGPIPE"
+  | "SIGPROF"
+  | "SIGPWR"
+  | "SIGQUIT"
+  | "SIGSEGV"
+  | "SIGSTKFLT"
+  | "SIGSTOP"
+  | "SIGSYS"
+  | "SIGTERM"
+  | "SIGTRAP"
+  | "SIGTSTP"
+  | "SIGTTIN"
+  | "SIGTTOU"
+  | "SIGURG"
+  | "SIGUSR1"
+  | "SIGUSR2"
+  | "SIGVTALRM"
+  | "SIGWINCH"
+  | "SIGXCPU"
+  | "SIGXFSZ"
+
+/**
  * Reads environment values. The same shape as `EnvReader` in `@spy4x/server/config`, so a reader
  * from either package fits wherever the other is expected.
  */

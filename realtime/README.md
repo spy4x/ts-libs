@@ -1154,7 +1154,7 @@ two and nothing else in the suite, which is what makes them non-redundant.
 ## Testing
 
 ```bash
-deno task test               # unit tier, the whole workspace (root task; see repo AGENTS.md)
+deno task test realtime/      # unit tier, this package (docs/testing.md has the tiers)
 deno task test:integration   # integration tier, the whole workspace
 ```
 

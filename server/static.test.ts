@@ -4,7 +4,10 @@ import {
   denoStaticFs,
   isPathInsideRoot,
   KNOWN_EXTENSIONS,
+  nodeStaticFs,
   resolveStaticPath,
+  runtimeStaticFs,
+  serveFile,
   serveStatic,
   type StaticFileHandle,
   type StaticFs,
@@ -646,3 +649,262 @@ Deno.test("static: denoStaticFs refuses to open a directory as a file", async ()
   const handle = await denoStaticFs.open(FIXTURE_ROOT)
   assertEquals(handle, null)
 })
+
+Deno.test("static: nodeStaticFs streams a file over several chunks, byte for byte", async () => {
+  // llms-full.txt is far larger than one 64 KiB chunk.
+  const path = new URL("../llms-full.txt", import.meta.url).pathname
+  const handle = await nodeStaticFs.open(path)
+  assertStrictEquals(handle !== null, true)
+  const expected = await Deno.readFile(path)
+  assertEquals(handle!.size, expected.byteLength)
+  assertEquals(new Uint8Array(await new Response(handle!.body).arrayBuffer()), expected)
+})
+
+Deno.test("static: nodeStaticFs serves a real file through serveStatic", async () => {
+  const response = await serveStatic("/index.html", { root: FIXTURE_ROOT, fs: nodeStaticFs })
+  assertStrictEquals(response !== undefined, true)
+  const body = await response!.text()
+  assertEquals(body, await Deno.readTextFile(`${FIXTURE_ROOT}/index.html`))
+  assertEquals(
+    response!.headers.get("content-length"),
+    String(new TextEncoder().encode(body).length),
+  )
+})
+
+Deno.test("static: nodeStaticFs answers null for a directory or a missing path", async () => {
+  assertEquals(await nodeStaticFs.open(FIXTURE_ROOT), null)
+  assertEquals(await nodeStaticFs.open(`${FIXTURE_ROOT}/missing.txt`), null)
+  assertEquals(await nodeStaticFs.stat(`${FIXTURE_ROOT}/missing.txt`), null)
+  assertEquals(await nodeStaticFs.stat(FIXTURE_ROOT), { isFile: false })
+  assertEquals(await nodeStaticFs.stat(`${FIXTURE_ROOT}/index.html`), { isFile: true })
+  assertEquals(await nodeStaticFs.realPath(FIXTURE_ROOT), await Deno.realPath(FIXTURE_ROOT))
+})
+
+Deno.test("static: runtimeStaticFs reads through denoStaticFs on Deno", async () => {
+  // Count calls to Deno.open, which only denoStaticFs makes.
+  const realOpen = Deno.open
+  let denoOpens = 0
+  Deno.open = (...args: Parameters<typeof Deno.open>) => {
+    denoOpens++
+    return realOpen(...args)
+  }
+  try {
+    const handle = await runtimeStaticFs.open(`${FIXTURE_ROOT}/index.html`)
+    assertStrictEquals(handle !== null, true)
+    handle!.close()
+  } finally {
+    Deno.open = realOpen
+  }
+  assertEquals(denoOpens, 1)
+  assertEquals(await runtimeStaticFs.open(FIXTURE_ROOT), null)
+  assertEquals(await runtimeStaticFs.realPath(FIXTURE_ROOT), await Deno.realPath(FIXTURE_ROOT))
+})
+
+Deno.test("static: nodeStaticFs closes the file once the body is read or cancelled", async () => {
+  // Count closes on Node's FileHandle class, the one nodeStaticFs opens through.
+  const fs = await import(["node", "fs/promises"].join(":")) as {
+    open(path: string): Promise<{ close(): Promise<void> }>
+  }
+  const probe = await fs.open(`${FIXTURE_ROOT}/index.html`)
+  const prototype = Object.getPrototypeOf(probe) as { close(): Promise<void> }
+  await probe.close()
+  const realClose = prototype.close
+  let closes = 0
+  prototype.close = function (this: unknown) {
+    closes++
+    return realClose.call(this)
+  }
+  try {
+    const read = await nodeStaticFs.open(`${FIXTURE_ROOT}/index.html`)
+    await new Response(read!.body).arrayBuffer()
+    assertEquals(closes, 1)
+    const cancelled = await nodeStaticFs.open(`${FIXTURE_ROOT}/index.html`)
+    await cancelled!.body.cancel()
+    assertEquals(closes, 2)
+    cancelled!.close()
+    assertEquals(closes, 2)
+  } finally {
+    prototype.close = realClose
+  }
+})
+
+/** Ten known bytes, modified at a fixed time, with a count of open and closed handles. */
+function memoryFile(withOpenAt: boolean) {
+  const bytes = new TextEncoder().encode("0123456789")
+  const mtime = new Date("2026-11-05T10:00:00.500Z")
+  const state = { opened: 0, closed: 0, openedAt: [] as number[] }
+  const handle = (start: number): StaticFileHandle => {
+    state.opened++
+    return {
+      size: bytes.byteLength,
+      mtime,
+      // Two chunks, so a range has to cross a chunk boundary.
+      body: ReadableStream.from([bytes.slice(start, 6), bytes.slice(Math.max(start, 6))]),
+      close: () => state.closed++,
+    }
+  }
+  const fs: StaticFs = {
+    open: (path) => Promise.resolve(path === "/v.mp4" ? handle(0) : null),
+    stat: () => Promise.resolve({ isFile: true }),
+    realPath: (path) => Promise.resolve(path),
+    ...(withOpenAt
+      ? {
+        openAt: (_path: string, start: number) => {
+          state.openedAt.push(start)
+          return Promise.resolve(handle(start))
+        },
+      }
+      : {}),
+  }
+  return { fs, state, mtime }
+}
+
+const get = (headers: Record<string, string> = {}, method = "GET") =>
+  new Request("http://localhost/v.mp4", { method, headers })
+
+for (const withOpenAt of [true, false]) {
+  const label = withOpenAt ? "with openAt" : "without openAt"
+
+  Deno.test(`serveFile: answers one range with 206, ${label}`, async () => {
+    const { fs, state } = memoryFile(withOpenAt)
+    const response = await serveFile(get({ Range: "bytes=4-7" }), "/v.mp4", { fs })
+    assertEquals(response!.status, 206)
+    assertEquals(await response!.text(), "4567")
+    assertEquals(response!.headers.get("content-range"), "bytes 4-7/10")
+    assertEquals(response!.headers.get("content-length"), "4")
+    assertEquals(state.opened, state.closed)
+    assertEquals(state.openedAt, withOpenAt ? [4] : [])
+  })
+
+  Deno.test(`serveFile: a range past the first chunk, ${label}`, async () => {
+    const { fs } = memoryFile(withOpenAt)
+    const response = await serveFile(get({ Range: "bytes=7-8" }), "/v.mp4", { fs })
+    assertEquals([response!.status, await response!.text()], [206, "78"])
+  })
+}
+
+Deno.test("serveFile: reads open-ended and suffix ranges, and clamps the end", async () => {
+  const { fs } = memoryFile(true)
+  const read = async (range: string) => {
+    const response = await serveFile(get({ Range: range }), "/v.mp4", { fs })
+    return [response!.status, await response!.text(), response!.headers.get("content-range")]
+  }
+  assertEquals(await read("bytes=7-"), [206, "789", "bytes 7-9/10"])
+  assertEquals(await read("bytes=-3"), [206, "789", "bytes 7-9/10"])
+  assertEquals(await read("bytes=-30"), [206, "0123456789", "bytes 0-9/10"])
+  assertEquals(await read("bytes=8-99"), [206, "89", "bytes 8-9/10"])
+  assertEquals(await read("bytes=0-1"), [206, "01", "bytes 0-1/10"])
+})
+
+Deno.test("serveFile: a range past the end is 416, and a bad or multiple range gets it all", async () => {
+  const { fs, state } = memoryFile(true)
+  const past = await serveFile(get({ Range: "bytes=10-" }), "/v.mp4", { fs })
+  assertEquals([past!.status, past!.headers.get("content-range")], [416, "bytes */10"])
+  assertEquals(past!.body, null)
+  for (const range of ["bytes=5-2", "bytes=0-1,4-5", "items=0-1", "bytes=-"]) {
+    const whole = await serveFile(get({ Range: range }), "/v.mp4", { fs })
+    assertEquals([whole!.status, await whole!.text()], [200, "0123456789"])
+  }
+  assertEquals(state.opened, state.closed)
+})
+
+Deno.test("serveFile: sends validators and answers a matching If-None-Match with 304", async () => {
+  const { fs, state, mtime } = memoryFile(true)
+  const first = await serveFile(get(), "/v.mp4", { fs, cacheControl: "public, max-age=60" })
+  const etag = first!.headers.get("etag")!
+  assertEquals(etag.startsWith('W/"'), true)
+  assertEquals(first!.headers.get("last-modified"), mtime.toUTCString())
+  assertEquals(first!.headers.get("content-type"), "video/mp4")
+  assertEquals(first!.headers.get("accept-ranges"), "bytes")
+  assertEquals(first!.headers.get("cache-control"), "public, max-age=60")
+  assertEquals(await first!.text(), "0123456789")
+  const again = await serveFile(get({ "If-None-Match": `"other", ${etag.slice(2)}` }), "/v.mp4", {
+    fs,
+  })
+  assertEquals([again!.status, again!.body, again!.headers.get("etag")], [304, null, etag])
+  const changed = await serveFile(get({ "If-None-Match": '"other"' }), "/v.mp4", { fs })
+  assertEquals(changed!.status, 200)
+  await changed!.body!.cancel()
+  assertEquals(state.opened, state.closed)
+})
+
+Deno.test("serveFile: If-Modified-Since works to the second, and If-None-Match wins", async () => {
+  const { fs, mtime } = memoryFile(true)
+  const status = async (headers: Record<string, string>) => {
+    const response = await serveFile(get(headers), "/v.mp4", { fs })
+    await response!.body?.cancel()
+    return response!.status
+  }
+  assertEquals(await status({ "If-Modified-Since": mtime.toUTCString() }), 304)
+  assertEquals(
+    await status({ "If-Modified-Since": new Date(mtime.getTime() - 1000).toUTCString() }),
+    200,
+  )
+  assertEquals(await status({ "If-Modified-Since": "not a date" }), 200)
+  assertEquals(
+    await status({ "If-Modified-Since": mtime.toUTCString(), "If-None-Match": '"other"' }),
+    200,
+  )
+})
+
+Deno.test("serveFile: If-Range other than Last-Modified ignores the range", async () => {
+  const { fs, mtime } = memoryFile(true)
+  const etag = (await serveFile(get({ Range: "bytes=0-0" }), "/v.mp4", { fs }))!.headers.get(
+    "etag",
+  )!
+  const read = async (ifRange: string) => {
+    const response = await serveFile(get({ Range: "bytes=2-3", "If-Range": ifRange }), "/v.mp4", {
+      fs,
+    })
+    return [response!.status, await response!.text()]
+  }
+  assertEquals(await read(etag), [200, "0123456789"])
+  assertEquals(await read(mtime.toUTCString()), [206, "23"])
+  assertEquals(await read('W/"stale"'), [200, "0123456789"])
+})
+
+Deno.test("serveFile: HEAD sends headers only and closes the file", async () => {
+  const { fs, state } = memoryFile(true)
+  const whole = await serveFile(get({}, "HEAD"), "/v.mp4", { fs })
+  assertEquals([whole!.status, whole!.body, whole!.headers.get("content-length")], [
+    200,
+    null,
+    "10",
+  ])
+  const part = await serveFile(get({ Range: "bytes=1-2" }, "HEAD"), "/v.mp4", { fs })
+  assertEquals([part!.status, part!.body, part!.headers.get("content-length")], [206, null, "2"])
+  assertEquals(state.opened, state.closed)
+})
+
+Deno.test("serveFile: a missing file is undefined, for the caller's 404", async () => {
+  const { fs } = memoryFile(true)
+  assertEquals(await serveFile(get(), "/missing.mp4", { fs }), undefined)
+})
+
+for (
+  const [name, fs] of [["denoStaticFs", denoStaticFs], ["nodeStaticFs", nodeStaticFs]] as const
+) {
+  Deno.test(`static: ${name}.openAt starts the body at the given byte, with mtime`, async () => {
+    const path = new URL("../llms-full.txt", import.meta.url).pathname
+    const expected = await Deno.readFile(path)
+    const handle = await fs.openAt!(path, 100_000)
+    assertEquals(handle!.size, expected.byteLength)
+    assertEquals(handle!.mtime instanceof Date, true)
+    assertEquals(
+      new Uint8Array(await new Response(handle!.body).arrayBuffer()),
+      expected.subarray(100_000),
+    )
+    assertEquals(await fs.openAt!(FIXTURE_ROOT, 0), null)
+  })
+
+  Deno.test(`serveFile: a range deep in a real file through ${name}`, async () => {
+    const path = new URL("../llms-full.txt", import.meta.url).pathname
+    const expected = await Deno.readFile(path)
+    const response = await serveFile(get({ Range: "bytes=70000-200000" }), path, { fs })
+    assertEquals(response!.status, 206)
+    assertEquals(
+      new Uint8Array(await response!.arrayBuffer()),
+      expected.subarray(70_000, 200_001),
+    )
+  })
+}

@@ -1,3 +1,4 @@
+import { fsError } from "@spy4x/platform/server/runtime-fs"
 import type { ObjectFs } from "./ports.ts"
 
 /**
@@ -28,7 +29,7 @@ export function createMemoryObjectFs(entries: Iterable<[string, Uint8Array]> = [
   const checkParents = (path: string) => {
     for (let cut = path.indexOf("/", 1); cut > 0; cut = path.indexOf("/", cut + 1)) {
       if (store.has(path.slice(0, cut))) {
-        throw new Deno.errors.NotADirectory(`Not a directory: ${path}`)
+        throw fsError("NotADirectory", `Not a directory: ${path}`)
       }
     }
   }
@@ -44,9 +45,9 @@ export function createMemoryObjectFs(entries: Iterable<[string, Uint8Array]> = [
       const value = store.get(path)
       if (value !== undefined) return Promise.resolve(Uint8Array.from(value))
       if (isFolder(path)) {
-        return Promise.reject(new Deno.errors.IsADirectory(`Is a folder: ${path}`))
+        return Promise.reject(fsError("IsADirectory", `Is a folder: ${path}`))
       }
-      return Promise.reject(new Deno.errors.NotFound(`No such object: ${path}`))
+      return Promise.reject(fsError("NotFound", `No such object: ${path}`))
     },
     existsObject: (raw) => {
       const path = normalize(raw)
@@ -60,7 +61,7 @@ export function createMemoryObjectFs(entries: Iterable<[string, Uint8Array]> = [
     writeObject: async (raw, data) => {
       const path = normalize(raw)
       checkParents(path)
-      if (isFolder(path)) throw new Deno.errors.IsADirectory(`Is a folder: ${path}`)
+      if (isFolder(path)) throw fsError("IsADirectory", `Is a folder: ${path}`)
       if (data instanceof Uint8Array) {
         store.set(path, Uint8Array.from(data))
         return data.byteLength

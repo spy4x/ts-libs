@@ -80,7 +80,7 @@ at a file that does not exist, so every branch that touches `server/deno.json` m
 
 ```bash
 deno task publish:dry            # warm, exit 0
-deno task check:cold publish:dry # cold, per AGENTS.md — CI does not run this; run it yourself
+deno task check:cold publish:dry # cold, as CI runs it
 ```
 
 That is the check that catches a dangling target (`TS2307`, exit 1) — the failure mode that blocked

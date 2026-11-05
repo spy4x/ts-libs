@@ -33,7 +33,7 @@ import { type NowFn, systemNow } from "../universal/time.ts"
  * @deprecated The same type as `NowFn` from `@spy4x/platform/universal/time` (`#71`), which is
  * now the home for this shape. Use that instead in new code. Kept as its own
  * `type Clock = () => number` declaration, not a `= NowFn` reference, because `deno doc`'s text
- * rendering — which `docs/1.0-contract.md` pins verbatim — renders a reference to another named
+ * rendering renders a reference to another named
  * type differently from an inline function type; the two are already structurally
  * interchangeable, so nothing is lost by keeping this declaration's own text.
  */

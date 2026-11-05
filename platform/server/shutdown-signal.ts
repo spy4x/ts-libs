@@ -9,14 +9,15 @@
  */
 
 import { currentHost, signalListenersOver } from "./_runtime-host.ts"
+import type { OsSignal } from "./process.ts"
 
 /** The reason a {@link shutdownSignal} carries when an operating-system signal aborted it. */
 export class ShutdownSignalError extends Error {
   /** The signal that fired first. */
-  readonly signal: Deno.Signal
+  readonly signal: OsSignal
 
   /** @param signal The signal that fired first. */
-  constructor(signal: Deno.Signal) {
+  constructor(signal: OsSignal) {
     super(`Received ${signal}`)
     this.name = "ShutdownSignalError"
     this.signal = signal
@@ -26,7 +27,7 @@ export class ShutdownSignalError extends Error {
 /** Options for {@link shutdownSignal}. */
 export interface ShutdownSignalOptions {
   /** The signals to listen for. Defaults to `["SIGINT", "SIGTERM"]`. */
-  signals?: readonly Deno.Signal[]
+  signals?: readonly OsSignal[]
   /**
    * A parent signal. When it aborts first, every listener is removed and the returned signal
    * aborts with the parent's reason, so a caller that stops for another reason leaks nothing.
@@ -36,12 +37,12 @@ export interface ShutdownSignalOptions {
    * Registers a listener. Defaults to `Deno.addSignalListener` on Deno and `process.on` on Node and
    * Bun; injected by tests.
    */
-  addSignalListener?: (signal: Deno.Signal, handler: () => void) => void
+  addSignalListener?: (signal: OsSignal, handler: () => void) => void
   /**
    * Removes a listener. Defaults to `Deno.removeSignalListener` on Deno and `process.off` on Node
    * and Bun; injected by tests.
    */
-  removeSignalListener?: (signal: Deno.Signal, handler: () => void) => void
+  removeSignalListener?: (signal: OsSignal, handler: () => void) => void
   /**
    * Receives an error thrown while removing a listener. Removal runs inside a signal or abort
    * callback, where a thrown error would end the process before the caller's cleanup finishes,
@@ -84,7 +85,7 @@ export function shutdownSignal(options: ShutdownSignalOptions = {}): AbortSignal
     return controller.signal
   }
 
-  const handlers = new Map<Deno.Signal, () => void>()
+  const handlers = new Map<OsSignal, () => void>()
 
   /** Remove every listener, trying each one and reporting every removal error to `onError`. */
   const detach = () => {

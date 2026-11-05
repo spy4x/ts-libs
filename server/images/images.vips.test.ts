@@ -3,7 +3,7 @@
  * 300 by 200 pixels, white on the left and black on the right, carrying an EXIF orientation that
  * turns them a quarter clockwise, a GPS position and an XMP creator.
  *
- * Needs `vips`, `vipsheader` and `exiftool`: `deno task test:vips` (AGENTS.md, "Test tiers").
+ * Needs `vips`, `vipsheader` and `exiftool`: `deno task test:vips` (`docs/testing.md`, "The vips tier").
  * Without them it fails; it never skips.
  */
 
@@ -17,7 +17,7 @@ async function run(...command: string[]): Promise<string> {
   const result = await runCommand(command)
   if (!result.success) {
     throw new Error(`${command.join(" ")} failed (${result.code}): ${result.stderr}
-vips, vipsheader and exiftool must be installed: run \`deno task test:vips\` as AGENTS.md says.`)
+vips, vipsheader and exiftool must be installed: run \`deno task test:vips\` as docs/testing.md says.`)
   }
   return result.stdout
 }
