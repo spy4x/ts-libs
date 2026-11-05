@@ -22,6 +22,21 @@
  *    passes as `devHosts` (none by default): the source accepted them in every
  *    deployment, so any page served from a port on the visitor's machine could.
  *
+ * `resolveAllowedOrigin`, `createCorsOriginResolver`, `CORS_ALLOW_METHODS`, `CORS_ALLOW_HEADERS`,
+ * `DEV_ORIGIN_HOSTS`.
+ *
+ * The allowlist is configuration (`{ allowedOrigins, devHosts? }`), not a constant baked to one
+ * product. Matching is exact on the serialised origin, and the value must round-trip through the WHATWG
+ * `URL` parser unchanged, which refuses a path, query, fragment, userinfo or trailing slash in one
+ * check. `createCorsOriginResolver` throws on an empty allowlist rather than returning a resolver that
+ * accepts everything.
+ *
+ * Nothing outside the allowlist passes by default. A Chrome extension is allowed only by listing its
+ * exact `chrome-extension://<id>` origin. Plain-http loopback origins pass only for the hosts given as
+ * `devHosts`, which defaults to none: pass `DEV_ORIGIN_HOSTS` in a development build, never in
+ * production, where any page served from a port on the visitor's machine would pass. `CORS_ALLOW_HEADERS`
+ * is `Content-Type` and `Authorization`; an app that reads another request header adds it itself.
+ *
  * @module
  */
 

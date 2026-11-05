@@ -37,6 +37,45 @@
  * `gcr.io/distroless/cc-debian12` + `deno compile`). Deploy tooling is not part of
  * ts-libs; a project built from the template has its own `infra/scripts/`.
  *
+ * `probeLoopback`, `healthcheckExitCode`, `runHealthcheck`, `resolveHealthcheckPort`, `denoConnector`,
+ * `LOOPBACK_HOSTS`, `DEFAULT_TIMEOUT_MS`, `DEFAULT_PORT`.
+ *
+ * The probe connects to the loopback port and closes the socket again: `{ healthy: true }` when the
+ * connect succeeds, `{ healthy: false, reason: "connect_failed" }` when it is refused or misses its
+ * deadline. An earlier version also wrote one byte after connecting and waited for it to be echoed
+ * back, and reported a real, running web server as down — a web server answers HTTP or nothing, it
+ * never echoes a raw TCP byte, so the echo step timed out against every live server it was pointed at.
+ * That step, `ProbeConnection.write`/`.read` and the three failure reasons `write_failed`, `no_echo`
+ * and `read_timeout` are removed here as a breaking change: this package is `0.1.0` and has never been
+ * published, so there is no consumer to carry the old shape forward. A real HTTP request against the
+ * server would tell more — a server that accepts connections but never answers one still reads healthy
+ * under connect-and-close.
+ *
+ * Given a `path`, the probe sends a real HTTP `GET` to that loopback path instead and is healthy only
+ * when the answer has `expectedStatus` (default `200`). Point it at a health route that checks the
+ * database, and a container whose service still listens but lost its database turns unhealthy. The
+ * failure reasons are `request_failed` (no answer before the deadline, or the connection refused) and
+ * `unexpected_status`. The path is appended to the loopback origin, never resolved against it, so it
+ * cannot name another host; redirects are not followed; the body is cancelled unread; and the
+ * deadline aborts the request. `ProbeFetcher` is injected the way `ProbeConnector` is, so the unit
+ * tier needs no socket.
+ *
+ * The default fetcher is the platform `fetch`, which honours `HTTP_PROXY` and `NO_PROXY`. With a proxy
+ * set in the container's environment, the probe's request goes to the proxy rather than to loopback,
+ * and its answer decides the result. An operator who sets a proxy must list `127.0.0.1`, `localhost`
+ * and `::1` in `NO_PROXY`. The TCP probe opens its socket directly and is not affected.
+ *
+ * `hostname` must be a `LOOPBACK_HOSTS` entry, so a probe cannot be aimed at a public bind; `timeoutMs`
+ * must be a non-negative integer; `path` must start with `/`; `expectedStatus` must be an integer in
+ * 100-599; and `HEALTHCHECK_PORT`/`PORT` must be bare decimal digits
+ * (`0x1f90`, `1e3`, `+8080` are refused rather than parsed), the same rule this package applies to
+ * `content-length`.
+ *
+ * Lives here rather than in a deploy-tooling package: `ops/` used to be that package and would have
+ * needed its own `deno.json` for 60 LOC, and `ops/` was later removed from ts-libs entirely (#67). The
+ * probe is separated from the exit so the decision is a return value a test can assert with
+ * `--allow-read --allow-env` and no socket.
+ *
  * @module
  */
 

@@ -59,6 +59,159 @@
  * `requestCode` limiters by the user id and by the normalised target address, so a signed-in user
  * can neither flood one mailbox nor walk through many.
  *
+ * `createEmailCodeSignIn`, `EmailCodeError`, `EmailCodeErrorReason`, `EMAIL_CODE_METHOD`,
+ * `EMAIL_CODE_PURPOSE`, `EMAIL_CODE_BYTES`, `DEFAULT_CODE_TTL_MINUTES`, `DEFAULT_CODE_MAX_ATTEMPTS`,
+ * `EmailCodeSignIn`, `EmailCodeSignInDeps`, `VerifyCodeOptions`.
+ *
+ * Sign-in with a one-time code sent by email (#57). `requestCode(email)` issues a guess-counted
+ * challenge and hands the raw code to the app's `sendCode`; `requestBoundCode(email)` does the same
+ * for a code only the browser that asked can spend, and is the one a sign-in page should call (see
+ * "Bind the code to the browser that asked for it" below); `verifyCode(email, code)` checks one guess
+ * and, on a match, signs the person in and creates a session; `proveAddress(userId, email, code)`
+ * checks one guess and proves the address for a user who is already signed in. Refusals are `EmailCodeError`s with a
+ * fixed message per `reason`, which never echoes the input.
+ *
+ * ```ts
+ * import { createEmailCodeSignIn } from "@spy4x/server/auth/email-code"
+ *
+ * const codes = createEmailCodeSignIn({
+ *   store,
+ *   sessions,
+ *   sendCode: (email, code) => mailer.send(email, `Your sign-in code: ${code}`),
+ * })
+ *
+ * await codes.requestCode(email)
+ * const { session } = await codes.verifyCode(email, typedCode)
+ *
+ * // A signed-in user proves their own address; userId comes from the validated session.
+ * await codes.proveAddress(userId, email, typedCode)
+ * ```
+ *
+ * ## What it does
+ *
+ * **A code login never deletes the login method.** A matched code signs in, in this order:
+ *
+ * 1. The email-code key for the address, proven again with `proveKey`, when its user owns the address.
+ *    Every repeat login takes this path, so the same person keeps one key and one account.
+ * 2. Otherwise the user who owns the proven address, through a new proven email-code key.
+ * 3. Otherwise a new user with a proven email-code key.
+ *
+ * An email-code key whose user does not own the address is an unproven claim made without receiving
+ * mail there. It is never proven for its user, because that would sign the mailbox owner in to the
+ * account of whoever registered it; the proven write of path 2 or 3 deletes it instead.
+ *
+ * **A signed-in user proves an address without changing accounts.** `proveAddress(userId, email,
+ * code)` checks the code exactly as `verifyCode` does, then proves every key of that user that carries
+ * the address with `proveKey`, or adds a proven email-code key when none does. It creates no user and
+ * no session. This is the step a password sign-up needs: the unproven password key becomes proven, the
+ * user owns the address, and a later password sign-in, code sign-in or reset lands in the same user.
+ * Without it, `verifyCode` for that address creates a new user and evicts the unproven key.
+ *
+ * - The code is the same one `requestCode` sends, under the same challenge: it is bound to the
+ *   address, not to a user. The session proves who asks and the code proves the mailbox, and a code
+ *   works once, so it only ever serves the person who received it. Binding it to a user as well would
+ *   add nothing: a person who hands their code to someone else has already handed over a sign-in by
+ *   `verifyCode`.
+ * - Another user owning the address is refused with the store's `AuthConflictError("email-owned")`,
+ *   checked only after the code matched, so the answer never tells someone without the code that the
+ *   address is taken. Every other user's unproven claim to the address is deleted.
+ * - An address the user already owns is a success that writes nothing.
+ * - A soft-deleted user answers `account-deleted` and an unknown id throws a `RangeError`, both before
+ *   a guess is spent.
+ * - The returned keys carry `secret`, a password hash for a password key. Keep them on the server and
+ *   never put them in a response body. Several keys are proven with one `proveKey` each, not in one
+ *   transaction; a retry with a new code finishes a run that failed part-way.
+ *
+ * The route that calls `proveAddress` must:
+ *
+ * 1. **Take `userId` from the validated session, never from the request.** A user id from the body
+ *    would let anyone prove an address onto any account.
+ * 2. **Be a state-changing `POST` protected against cross-site submission.** The session cookie of
+ *    `@spy4x/server/sign-in` is `SameSite=Lax`, which keeps it off a cross-site `POST`, so a
+ *    POST-only route is covered. An app that authenticates with a bearer token instead needs its own
+ *    check.
+ * 3. **Show which account is signed in before asking for the code.** Someone can sign a victim in to
+ *    the attacker's own account (login CSRF); a victim who then types a code would prove their
+ *    address onto the attacker's account.
+ * 4. **Pass the address it means to verify.** An `email` taken from the form lets a signed-in user
+ *    attach any address they receive mail at as a new sign-in method. An app that means "verify the
+ *    address on file" passes the address of the user's key instead.
+ *
+ * **Bind the code to the browser that asked for it.** A code from `requestCode` is bound to the
+ * address alone. Anyone who knows the address can send five wrong codes, lock its challenge, and keep
+ * it locked by asking for a new code before it expires, so the owner cannot sign in with a code for as
+ * long as that goes on (#601). `requestBoundCode` closes this. The app does three things:
+ *
+ * 1. Its route that sends a code calls `requestBoundCode`, and never `requestCode`.
+ * 2. It keeps the returned binding in the browser that asked, in a cookie that is `HttpOnly`, `Secure`
+ *    and `SameSite=Lax` and lives as long as the code. The binding never goes into the mail. The
+ *    library sets no cookie: the name, the path and the framework are the app's.
+ * 3. Its route that checks a code reads the cookie and always passes it as `binding`: an empty string
+ *    when the cookie is missing, never `undefined`.
+ *
+ * ```ts
+ * const binding = await codes.requestBoundCode(email)
+ * setCookie(c, "code_binding", binding, {
+ *   httpOnly: true,
+ *   secure: true,
+ *   sameSite: "Lax",
+ *   maxAge: 10 * 60,
+ * })
+ *
+ * // Later, in the route that checks the code:
+ * const { session } = await codes.verifyCode(email, typedCode, {
+ *   binding: getCookie(c, "code_binding") ?? "",
+ * })
+ * ```
+ *
+ * - Each `requestBoundCode` opens a challenge of its own, with its own code and guess counter, next to
+ *   any other live code for the address. A stranger's request never replaces the person's code, and a
+ *   stranger's wrong codes count against the challenge the stranger opened, or against none. The
+ *   person's own five wrong codes still lock the person's challenge; a new request from their browser
+ *   then gives them a new code.
+ * - The binding is 32 random bytes as base64url. The store keeps only a digest of the address and the
+ *   binding, as the challenge's subject, so neither the binding nor the address is in the row.
+ * - `verifyCode` with a `binding` that is not one (the empty string, a wrong length) answers `no-code`
+ *   and counts nothing. `verifyCode` without `binding` only ever reaches a code from `requestCode`.
+ * - The person must open the code in the browser they asked from. A code typed into another browser
+ *   or device answers `no-code`.
+ * - `proveAddress` on this provider does not take a bound code; a signed-in user proves an address
+ *   with `createEmailProof`.
+ * - An app that still calls `requestCode` anywhere keeps the lock-out for the codes sent there.
+ *
+ * **Asking again never buys more guesses of one challenge.** A new code from `requestCode` replaces a
+ * live one and keeps its guess counter. A new code from `requestBoundCode` is a new challenge with a
+ * full set of guesses, so the limiter on that route is what bounds the guesses at an address's codes.
+ * A code is 6 random bytes (8 base64url characters, case-sensitive), valid 10 minutes and for 5
+ * guesses by default; surrounding whitespace in the typed code is ignored. The stored hash binds the
+ * address, so one digest never stands for the same code at two addresses.
+ *
+ * **A deleted owner is refused before any key is written.** When the address's owner is
+ * soft-deleted, `verifyCode` answers `account-deleted` and adds or proves no key, whichever method the
+ * owner signed in with.
+ *
+ * **The same answer with or without an account.** `requestCode` issues a code for every address
+ * `normalizeEmail` accepts and refuses nothing else. `sendCode` receives the normalised address; if it
+ * rejects, the rejection reaches the caller and the code is already issued.
+ *
+ * ## What it does not do
+ *
+ * - **It does not rate-limit, and that is the caller's job.** It limits guesses per challenge, not how
+ *   often a code is asked for. Every new code from `requestCode` moves the expiry of a locked
+ *   challenge, and every `requestBoundCode` opens a new challenge with a full set of guesses and adds
+ *   one row to `auth_challenges` until it expires. Put
+ *   `createRateLimitMiddleware` from `@spy4x/platform/rate-limit` in front of the `requestCode` route
+ *   with two limiters, one keyed by the normalised address and one by `clientIp`, and in front of the
+ *   `verifyCode` and `proveAddress` routes keyed by `clientIp`. The guess counter of a code from
+ *   `requestCode` is per address and shared by `verifyCode` and `proveAddress`. No limiter is built in: the client address exists only in
+ *   the HTTP layer, and a built-in one would force a choice of store into the provider.
+ * - **It does not retry a race.** When another sign-in for the same address writes between the lookup
+ *   and the write, `verifyCode` throws the store's `AuthConflictError`; the code is used by then, and a
+ *   new code succeeds. The same error is thrown on every verification when an email-code key for the
+ *   address that the owner does not hold carries no `email`, because the proven write cannot evict
+ *   it. This provider never writes such a key.
+ * - **It does not write the mail.** Sender, text and transport are the app's, inside `sendCode`.
+ *
  * @module
  */
 

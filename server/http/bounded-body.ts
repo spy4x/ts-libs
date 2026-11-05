@@ -40,6 +40,68 @@
  * not declared as JSON (415), and throws the caller's own error class in place of `HTTPException`.
  * `readFormBody` does the same for a form post, from a plain `Request`.
  *
+ * `readBoundedBody`, `readBoundedText`, `parseBoundedFormData`, `readContentLength`,
+ * `PayloadTooLargeError`, `readJsonBody` with its options `ReadJsonBodyOptions` and its messages `JSON_BODY_TOO_LARGE`,
+ * `JSON_BODY_TIMEOUT`, `JSON_BODY_INVALID` and `JSON_BODY_WRONG_TYPE`, `readFormBody` with its messages `FORM_BODY_TOO_LARGE`, `FORM_BODY_TIMEOUT`
+ * and `FORM_BODY_INVALID`, and the types `ReadBoundedBodyOptions` and `BodySource`.
+ *
+ * **Canonical home: `net/bounded-body.ts`** (`@spy4x/net/bounded-body`). This module is a named
+ * re-export of it: `PayloadTooLargeError`, `readBoundedBody`, `readBoundedText` and
+ * `readContentLength` are the canonical symbols, so `PayloadTooLargeError` is one class object behind
+ * both specifiers and a single `catch` covers either import. The re-export is named rather than
+ * `export *`, so `BodyReadErrorCode`, `BodyReadTimeoutError`, `readBoundedJson` and the default
+ * constants are not republished as if this package had promised them. `parseBoundedFormData` lived
+ * here until #222 moved it to `@spy4x/net/bounded-body`; this module re-exports that same function, so
+ * a caller that only caps a form body can depend on `@spy4x/net` alone. The
+ * cap is enforced on the stream, a declared `content-length` over the cap is rejected without
+ * reading the body, and the reader is cancelled on any failure. `maxBytes` is optional and defaults
+ * to 5 MiB; `timeoutMs` is a **per-chunk stall budget, not a single overall deadline** — a
+ * slow-but-live upload is never cut off by its own total duration, only by a gap between chunks. A
+ * stall rejects with the canonical `BodyReadTimeoutError`, importable from
+ * `@spy4x/net/bounded-body`, rather than the bare `Error` this module threw before the collapse.
+ *
+ * `readJsonBody(c, options?)` is this module's own addition for Hono routes, in place of
+ * `c.req.json()`, which buffers a body of any size and answers malformed JSON with 500. It reads
+ * `c.req.raw` through the canonical `readBoundedJson` and throws Hono's `HTTPException`: 413 for a
+ * body over the cap, 408 for a stalled body and 400 for a body that is not JSON, the empty body
+ * included. A route without `onError` answers with that status on its own; a route with its own error
+ * shape catches the exception and reads `status`, and the reader's error is kept as `cause`. The 413's
+ * response carries `connection: close`, because once the unread body is cancelled `Deno.serve` no longer
+ * closes the connection by itself. Any other error is rethrown unchanged, including the `RangeError`
+ * for a `maxBytes` that is not a positive finite number (`0` among them), which a route answers with
+ * 500, not 413.
+ *
+ * Two options go beyond the reader's `maxBytes` and `timeoutMs`. `requireJsonContentType: true`
+ * refuses, before the body is read, a request that is not declared as `application/json`: 415 with
+ * `JSON_BODY_WRONG_TYPE`. `toError` builds the error to throw for a refused body in place of
+ * `HTTPException`, from a `JsonBodyFailure` (`status`, `message`, `cause`), so a route answers in its
+ * own error shape without a `try`/`catch` of its own:
+ *
+ * ```ts
+ * const body = await readJsonBody(c, {
+ *   maxBytes: 64 * 1024,
+ *   requireJsonContentType: true,
+ *   toError: ({ message }) => new NoteError("INVALID_REQUEST", message),
+ * })
+ * ```
+ *
+ * `readFormBody(request, options?)` is the same for a form post (`application/x-www-form-urlencoded`
+ * or `multipart/form-data`). It takes a plain `Request`, so a server that is not Hono can use it; a
+ * Hono route passes `c.req.raw`. It throws the same `HTTPException`: 413 for a body over the cap, 408
+ * for a stalled body, and 400 for a request with no `content-type`, a type that is not a form, or a
+ * body that does not parse as that form. A body that was already read is a mistake in the server, not
+ * in the request, so it stays a plain `TypeError`. Every value in the returned `FormData` is what the
+ * client sent: validate it before use.
+ *
+ * ```ts
+ * try {
+ *   const form = await readFormBody(request, { maxBytes: 256 * 1024 })
+ * } catch (error) {
+ *   if (error instanceof HTTPException) return new Response(error.message, { status: error.status })
+ *   throw error
+ * }
+ * ```
+ *
  * @module
  */
 

@@ -9,6 +9,55 @@
  * allows one render's nonce, and as nginx configuration
  * ({@link nginxAddHeaders}) for a page nginx serves.
  *
+ * `securityHeaders`, `securityHeaderList`, `withSecurityHeaders`, `withScriptNonce`,
+ * `nginxAddHeaders`, `inlineBlockHashes` and the types
+ * `SecurityHeadersOptions`, `ExtraSources` and `NginxAddHeadersOptions`.
+ *
+ * `await securityHeaders({ shellHtml, extraSources })` returns Hono middleware over `secureHeaders`:
+ * a Content-Security-Policy that allows only the app's own origin (`'self'`; images also `data:`;
+ * no objects; `frame-ancestors 'none'`), `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer` and
+ * `X-Content-Type-Options: nosniff`. `shellHtml` is the built `index.html`: the hash of each inline
+ * `<script>` and `<style>` block in it is allowed, so the policy needs no `unsafe-inline`. A service
+ * worker from the app's own origin needs nothing extra. `extraSources` appends sources per directive
+ * (`scriptSrc`, `styleSrc`, `imgSrc`, `connectSrc`, `fontSrc`, `mediaSrc`, `workerSrc`,
+ * `manifestSrc`, `formAction`) and never replaces the defaults. `formAction` also limits where a
+ * form's post may be redirected, so a page whose form ends on another origin names that origin there.
+ * `styleSrcAttr` writes a `style-src-attr` directive, only when it lists a source:
+ * `["'unsafe-inline'"]` allows `style` attributes (colours a component sets from data) while
+ * `<style>` blocks and stylesheets stay on `style-src`. Each value is one source: an empty value, or one with whitespace, `;`, `,` or a character outside
+ * printable ASCII, throws, because it would add a source or a whole directive. The error names the
+ * key and the position, never the value.
+ *
+ * `await securityHeaderList(options)` returns the same headers as `[name, value]` pairs with
+ * lower-case names, for a server that is not Hono. The middleware sets exactly this list.
+ *
+ * `withSecurityHeaders(response, headers)` puts that list on a `Response` by the middleware's rules:
+ * a header of the list replaces the response's own, every other header is kept, and `X-Powered-By`
+ * is removed. It returns a copy, because a response from `fetch` or `Response.redirect` throws when a
+ * header is set on it; the copy takes over the body, status and status text. A WebSocket upgrade
+ * (status 101), or any other status outside 200 to 599, cannot be rebuilt and is returned unchanged,
+ * without the headers.
+ *
+ * `withScriptNonce(headers, nonce)` returns a copy of the list whose `script-src` also allows
+ * `'nonce-<nonce>'`, for a page rendered with a nonce of its own, such as the one Fresh gives each
+ * inline script it writes. Only a nonce of base64 or hex characters is used; any other value,
+ * a non-string included, returns the list unchanged.
+ *
+ * ```ts
+ * const headers = await securityHeaderList({
+ *   extraSources: { formAction: ["https://app.example.com"] },
+ * })
+ * Deno.serve(async (request) => withSecurityHeaders(await handle(request), headers))
+ * ```
+ *
+ * `nginxAddHeaders(headers, { allowedVariables })` renders a header list as text for an nginx
+ * `include` file, one `add_header <name> "<value>" always;` line each, for a page nginx serves. It
+ * writes no file. The value sits in a quoted string where nginx expands `$name`, so the function
+ * throws, naming the header and never the value, on a double quote, a backslash, a newline or any
+ * other control character, and on a `$` that does not start exactly one of `allowedVariables` (such
+ * as `["$csp_error_tracker"]`, a variable the container sets when it starts). A header name that is
+ * not letters, digits, `-` and `_` throws too.
+ *
  * @module
  */
 

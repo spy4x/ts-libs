@@ -1,7 +1,34 @@
-// ── Bearer token verification ──
-// The token is caller-supplied (a port). It is never read from the environment at
-// module scope, never read from a query parameter, and the comparison is constant
-// time: a byte-by-byte `===` on a bearer token is a timing oracle.
+/**
+ * Bearer token verification.
+ *
+ * The token is caller-supplied (a port). It is never read from the environment at module scope,
+ * never read from a query parameter, and the comparison is constant time: a byte-by-byte `===` on a
+ * bearer token is a timing oracle.
+ *
+ * `bearerTokenFromHeaders`, `bearerTokenFromEnv`, `constantTimeEquals`, `createTokenVerifier`,
+ * `redactor`, `formatLogLine`, `AUTHORIZATION_HEADER`, `REDACTED_TOKEN`, and the `TokenVerifier`
+ * interface.
+ *
+ * Moved here from `mcp/auth.ts` when `mcp/` was removed (`#64`): a generic "extract and verify a
+ * bearer token, never in the environment at module scope, never compared with `===`" helper, with
+ * nothing MCP-specific about it. Both sides of the comparison are SHA-256 digested before
+ * `timingSafeEqual`, so neither the presented token's length nor a shared prefix is observable by
+ * timing. `redactor`/`formatLogLine` strip every configured secret from a log line, so a raw
+ * `Authorization` header cannot reach a log by accident.
+ *
+ * `createTokenVerifier(token)` returns `verify` (async) and `verifySync`. Both refuse an empty
+ * token and compare two SHA-256 digests with `timingSafeEqual`; `verifySync` digests the configured
+ * token once at construction and the presented one with `@std/crypto`'s synchronous digest. Use
+ * `verifySync` when the caller must not yield between a limiter check and the verify — a transport
+ * that reserves a rate-limit slot, verifies, and refunds the slot on a correct token. With an `await`
+ * in between, parallel requests with the correct token see each other's reservations and get 429.
+ *
+ * `constantTimeEquals` is `@deprecated` (`#71`): it is now a thin alias of
+ * `constantTimeEqualsText` from `@spy4x/platform/tokens`, the one home for an arbitrary-text
+ * constant-time compare. Same signature, same behaviour; new code should import the home directly.
+ *
+ * @module
+ */
 
 import { crypto as stdCrypto } from "@std/crypto/crypto"
 import { timingSafeEqual } from "@std/crypto/timing-safe-equal"

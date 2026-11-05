@@ -13,6 +13,94 @@
  * driver's option names, so a reader can diff this file against `postgres`'s
  * documentation without a translation step.
  *
+ * ## A deferred constraint's failure at implicit commit is not reported on a single statement
+ *
+ * **Do not declare a `DEFERRABLE INITIALLY DEFERRED` constraint and write to it through anything but
+ * `sql.begin`** (#134). The pinned driver, `postgres@3.4.7`, resolves a single statement's promise
+ * from the server's `CommandComplete` message, which arrives _before_ the implicit commit that
+ * actually checks a deferred constraint. When that commit then fails, the `ErrorResponse` it carries
+ * arrives on a query the driver has already resolved and cleared, so it has nothing left to reject —
+ * the promise reports success (`count: 1`, any `RETURNING` row returned) and the write is not there.
+ * No exception is thrown and no `unhandledrejection` fires: this is not a caught-and-swallowed error,
+ * the failure never reaches a handler at all.
+ *
+ * This is not only the tagged-template path. `sql.unsafe(text, params)` — any call that passes a
+ * non-empty parameter list — takes the same extended-protocol route and loses the failure the same
+ * way; only a _parameterless_ `sql.unsafe(text)` (no second argument, or `sql.unsafe(text, [])`) is
+ * safe, because the driver takes the simple-protocol path (which resolves after the server's own
+ * commit) only when it is not asked to bind parameters (`postgres@3.4.7/src/index.js`, `unsafe`:
+ * `simple: 'simple' in options ? options.simple : args.length === 0`). `sql.begin` is the one path
+ * that is always safe, parameters or not — not because a statement _inside_ it resolves any
+ * differently (it still resolves early, the same way a bare tagged-template statement does), but
+ * because `sql.begin` sends an explicit `COMMIT` as its own statement and rejects its own returned
+ * promise when that commit fails; a caller awaits `sql.begin`'s promise, not the inner statement's,
+ * so the inner statement resolving on its own does not matter — use it for a write against a
+ * deferred constraint instead of a bare statement, parameterised or not.
+ *
+ * Nothing shipped in this repository declares a deferred constraint today, so no module here is
+ * affected; it is documented and pinned because a caller of `@spy4x/server/db` might add one.
+ * Reproduced and pinned to `postgres@3.4.7` by
+ * `server/db/postgres.integration.test.ts`, which fails loudly — not silently skips — the day an
+ * upstream fix changes this. Reported upstream:
+ * [porsager/postgres#1117](https://github.com/porsager/postgres/issues/1117).
+ *
+ * ## A transaction handle stops working when its transaction ends
+ *
+ * Both adapters hand a callback a handle scoped to the transaction — a `SqliteDb` on one side, a
+ * `DbServiceBase` clone on the other — and both retire it when the transaction returns, on the
+ * rollback path as well as the commit path. A service that stores it (`this.db = tx`) and writes
+ * through it later gets `SqliteScopeEndedError` or `PostgresScopeEndedError` instead of a write that
+ * lands in whatever transaction that connection is running next and disappears with that
+ * transaction's rollback. The Postgres refusal is thrown rather than rejected, because the check sits
+ * on the executor, which the driver also calls synchronously (`sql(table)`); a method declared `async`
+ * turns it into the rejection its caller expects.
+ *
+ * **What the Postgres guard promises.** A clone kept past `begin()` or past a nested `begin()` refuses,
+ * with `PostgresScopeEndedError`, every call form a person would write through it: the tagged template,
+ * the `sql(...)` helper forms, `unsafe`, `file`, `json`, `array`, `types` and `typed`, `savepoint`,
+ * `notify`, `prepare`, `new`, the service's own nested `begin()`, and anything read off the handle at
+ * any depth. A transaction handle has no `begin`, `reserve` or `listen` of its own; those throw a
+ * `TypeError`, live and retired alike. The executor is a
+ * `Proxy` and everything it hands out on a _read_ is itself a wrapper — functions and objects alike,
+ * recursively — which is why the refusal covers helpers nobody listed. `prototype.constructor` was the
+ * spelling that showed why a list is not enough, since every ordinary function carries a `prototype`
+ * object whose `constructor` is that function. What a _call_ returns is handed back untouched, because
+ * the driver recognises a fragment, a `json` or `array` value or a query object by its class, and a
+ * wrapper would not be one.
+ *
+ * **Two moments other than a call through the clone are checked too** (#108), because a call through
+ * the clone is not the only way a statement reaches the transaction's connection.
+ *
+ * A `postgres` query is lazy: nothing is sent when it is built, and `then`, `catch`, `finally`,
+ * `execute` and `forEach` all reach the query's `handle()`, which is where the statement goes on the
+ * connection. So a query built inside the callback and awaited after `begin()` has returned used to run
+ * inside whatever transaction that connection held by then and vanish with its rollback — a forgotten
+ * `await` is enough to write it. The guard now sits on the query's own `handle` as well: the first send
+ * after the scope has ended is refused. Awaiting a query that already ran inside the callback sends
+ * nothing and is not refused. `handle` is not documented driver API, which is why an integration test
+ * awaits such a query and expects the error — a driver that renamed the method turns that test red
+ * instead of reopening the route in silence.
+ *
+ * `sql.savepoint(fn)` calls `fn` with a handle the driver built and passed in, so that handle never
+ * went through the wrapper. The callback now receives a scoped handle instead, retired when the
+ * savepoint returns.
+ *
+ * **It is a guard against a mistake, not a security boundary.** The mistake is the one #96 describes: a
+ * service stores the clone (`this.db = tx`) and writes through it after the transaction has returned,
+ * or forgets an `await` on a query it built inside the callback. Code that goes looking for the
+ * driver's internals is not making that mistake and could in any case import `postgres` and open a
+ * connection of its own.
+ *
+ * One known route remains, recorded on #108. The driver's own internals ride on a value a call
+ * _returned_ — for example `new q.constructor(…, q.handler, …)`, since every query object holds the
+ * transaction's execute function. Return values are deliberately not wrapped, so this one cannot be
+ * closed by wrapping reads, and it is not the mistake the guard is for.
+ *
+ * `SqliteDb.close()` goes through the same gate: it waits for an open transaction rather than closing
+ * the connection under it, and a scoped handle cannot close a connection it never owned. Two `close()`
+ * calls issued together share one close and both return, so a shutdown handler that fires twice is
+ * still harmless.
+ *
  * @module
  */
 

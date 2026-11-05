@@ -42,6 +42,44 @@
  * module. Prefer a dedicated secret and migrate to HKDF with a distinct info
  * label when that reuse cannot be avoided.
  *
+ * `CryptoService`, `CryptoError`, `CryptoErrorCode`, `SecretCipher`, `maskKey`, `isHexKey`,
+ * `AES_ALGORITHM`, `AES_KEY_BYTES`, `KEY_BITS`, `IV_LENGTH`, `HEX_KEY_LENGTH`, `DEFAULT_MASK_VISIBLE`,
+ * `MAX_MASK_VISIBLE`, `MASK_VISIBLE_DIVISOR`, `MASK_LENGTH`.
+ *
+ * The scheme is `template/libs/server/crypto`'s, folded in unchanged: AES-256-GCM, the key derived as
+ * `SHA-256(utf8(secret))`, a 12-byte IV per call, wire format standard base64 of `[IV][ciphertext+tag]`
+ * — so a ciphertext written by that module stays readable. `CryptoService.fromHexKey` is the second
+ * entry point: 64 hex characters are decoded and imported as the 32 raw key bytes, never hashed, so the
+ * two constructors produce different keys for the same characters. AES-128 (32 hex characters) is
+ * rejected with `CryptoErrorCode.InvalidHexKey`.
+ *
+ * **Prefer `fromHexKey` with 32 random bytes** — `encodeHex(crypto.getRandomValues(new Uint8Array(32)))`
+ * — over a passphrase. The passphrase path is one SHA-256 pass, which is a derivation and not a key
+ * derivation function: it inherits whatever guessing resistance the passphrase has, and a passphrase
+ * reused as, say, a password pepper weakens both. A random 32-byte key has none of those questions.
+ *
+ * **The secret is not a property of the service.** It is read by the constructor, closed over by the
+ * key derivation, and unreachable afterwards, so `JSON.stringify`, `Deno.inspect` (with `showHidden`
+ * too), `Object.keys` and `structuredClone` of an instance show nothing. Logging a service object, or
+ * an object holding one, cannot print the key.
+ *
+ * **`encrypt(plaintext, context?)` binds a ciphertext to where it is stored.** The context is passed to
+ * AES-GCM as additional authenticated data: it is not stored, cannot be recovered from the blob, and
+ * the same string has to be supplied to `decrypt`. A wrong context fails exactly as a wrong key does,
+ * with `CryptoErrorCode.DecryptionFailed`. Passing no context produces the byte-identical format the
+ * template's module reads, so the format is unchanged for anything written before this existed.
+ *
+ * **`maskKey` is a display hint, not a shortened key.** Every non-empty hint is `MASK_LENGTH` code
+ * points wide whatever the key's length, and it shows at most `MAX_MASK_VISIBLE` trailing code points
+ * and at most one per `MASK_VISIBLE_DIVISOR` code points of the key — so an eight-character key shows
+ * two characters, and a 400-character one still shows four. The `visible` argument is a request that
+ * those two ceilings override; a caller cannot widen a hint into something usable.
+ *
+ * **Deliberately not added:** a key version byte and a stronger passphrase derivation. Both change the
+ * stored format or the key, and both would break the promise that this module and
+ * `template/libs/server/crypto` read each other's values. A deployment that wants a derivation with a
+ * work factor should use `fromHexKey` with a key its own key management produced.
+ *
  * @module
  */
 

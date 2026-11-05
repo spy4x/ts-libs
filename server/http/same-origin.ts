@@ -79,6 +79,29 @@
  * is refused, because it comes from a sandboxed frame or an opaque origin, never from the app's own
  * page. `Sec-Fetch-Site` is not checked: older browsers do not send it on a handshake.
  *
+ * `createSameOriginMutationGuard`, `createSameOriginUpgradeGuard`, `createSameOriginCheck`,
+ * `SAFE_METHODS`, `SAME_ORIGIN_REFUSED`, and the types `SameOriginCheckOptions`,
+ * `SameOriginGuardOptions` and `SameOriginRefusal`.
+ *
+ * The mutation guard lets GET, HEAD and OPTIONS through and refuses any other request unless the
+ * session cookie is present, `Origin` is an expected origin and `Sec-Fetch-Site` is `same-origin`.
+ * A WebSocket handshake is a GET, so it passes that guard. The upgrade guard takes the same options
+ * and refuses every request it sees unless the session cookie is present and `Origin` is exactly an
+ * expected origin; `Origin: null` is refused and `Sec-Fetch-Site` is not required. Mount it on the
+ * upgrade route only, before the upgrade handler.
+ *
+ * A server that is not Hono, such as a Fresh app handling form posts, uses `createSameOriginCheck`: it
+ * takes the same options except `onReject`, and returns a function from a standard `Request` to the
+ * mutation guard's verdict (`undefined` to let it through, or the refusal reason). The guard calls it,
+ * so the two cannot drift apart.
+ *
+ * `allowHeaderless: true` lets a mutation through when it carries neither `Origin` nor
+ * `Sec-Fetch-Site`, which is what a mail client's RFC 8058 one-click unsubscribe POST looks like. A
+ * cross-site POST from every current browser carries `Origin`, so it is still refused. Firefox before
+ * 70 and Internet Explorer 11 sent neither header on a form post, so the option requires
+ * `requireSessionCookie: false` and throws without it. Build a separate check for the one-click route
+ * alone, whose request proves itself with a signed token; never set it on a guard for the whole app.
+ *
  * @module
  */
 

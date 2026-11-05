@@ -89,6 +89,119 @@
  * `arktype` is the only import: no framework, no logging, no headers. `429`/`503`
  * are values a caller maps onto its own response.
  *
+ * `createQuotaMeter`, `quotaKey`, `sessionPoolKey`, `quotaStatusCode`, `resolveQuotaPrincipal`,
+ * `SESSION_POOL_PRINCIPAL`, `QuotaError`, `QuotaErrorCode`, `QuotaDecision`, `QuotaPrincipalKind`,
+ * `QuotaPolicy`, `QuotaPrincipal`, `QuotaState`, `QuotaStore`, `QuotaReservation`, `QuotaKey`,
+ * `QuotaMeter`, `QuotaMeterOptions`.
+ *
+ * A countable budget per principal, decremented by units of _business work_: `reserve` (before the
+ * work, the only gate), `release` (a refund when the work did not happen), `record` (after the work,
+ * may overshoot), `check` and `get` (read-only). `QuotaDecision` maps to 200/429/503 through
+ * `quotaStatusCode`; `Unavailable` is the service condition (the metered resource is not configured)
+ * and is deliberately not the source's `limit === 0` sentinel, because 0 is also a legitimate disabled
+ * budget. State lives in the injected `QuotaStore`, so two processes share one budget and a restart
+ * cannot reset usage. The policy and the recorded count parse through arktype; the failures map to
+ * constant messages, because an arktype summary echoes the value.
+ *
+ * **`check` is for display only.** It reads a counter and returns; between that answer and the work,
+ * any number of other requests spend the same budget. With a limit of one and ten parallel callers,
+ * all ten are told they may proceed. `reserve` is the gate, because the decision and the spend are one
+ * store operation:
+ *
+ * ```ts
+ * // The same options on both calls: a request that brought its own key reserved
+ * // nothing, and refunding it would hand out a unit that was never taken.
+ * const metering = { hasOwnKey: callerKey !== undefined }
+ *
+ * const state = await meter.reserve(principal, 1, metering)
+ * if (state.decision !== QuotaDecision.Allowed) return respond(quotaStatusCode(state.decision), state)
+ * try {
+ *   await doTheWork()
+ * } catch (error) {
+ *   // `reservedAt` keys the refund by the window the reservation was taken
+ *   // from, not whatever window the clock is in when the refund runs.
+ *   await meter.release(principal, 1, { ...metering, reservedAt: state.reservedAt })
+ *   throw error
+ * }
+ * ```
+ *
+ * **A refund is not idempotent, and a `release` that threw must not be retried for a session
+ * principal, or for any principal when `reservedAt` is given.** Releasing the same reservation twice
+ * gives the units back twice; only a counter already at zero absorbs the second one, because a store
+ * never goes below zero. For a session principal a release is two store calls — the principal's own
+ * counter first, then the shared pool — so after one of them has failed the other has already been
+ * refunded, and a retry gives that refund a second time. The caller cannot tell which of the two calls
+ * failed, so it cannot tell which counter a retry would double-refund: if the own-counter call failed
+ * nothing was refunded and a retry is exact; if the pool call failed the own counter was already
+ * refunded and a retry refunds it again, over-crediting the caller's own counter (absorbed at zero once
+ * it gets there). With `reservedAt`, `release` makes a third store call — a read of the current
+ * window's state — after both refunds have landed; if that read throws, both counters were already
+ * refunded, and a retry refunds both again, the pool included. The own counter is refunded first so
+ * that a failure part-way through the refund pair leaves the pool holding a unit that nothing holds any
+ * more: short rather than over-credited, and cleared when the window rolls — that ordering says nothing
+ * about the third call, which runs after both refunds regardless of `reservedAt`.
+ *
+ * A `release` keys by the window the clock is in when it runs, unless the caller passes `reservedAt` —
+ * the clock reading `reserve` used, carried on the `QuotaState` `reserve` returned — in which case it
+ * keys the refund by that reading instead. Without `reservedAt`, work that outlives a window boundary
+ * is refunded against the new window, and the old one keeps the unit until it rolls: the unit moves
+ * between windows and the total across the two is unchanged. Pass `reservedAt` through (the documented
+ * pattern above does), keep a unit of work shorter than the window, or use a lifetime window, to avoid
+ * this. A `reservedAt` that is not a non-negative integer throws `InvalidReservedAt`; one later than
+ * `release`'s own clock reading is clamped to that reading rather than refused, because a wall clock
+ * can step backward between the two calls (an NTP correction, a second host) and a value that only
+ * looks like it is from the future is still a real reservation.
+ *
+ * **A real store makes `reserve` one statement.** The in-memory store in the tests is atomic because
+ * nothing is awaited between its read and its write; a SQL store buys the same property with a
+ * conditional update, and anything that reads, awaits and then writes is not a correct implementation:
+ *
+ * ```sql
+ * -- reserve(key, count, limit)
+ * UPDATE quota SET used = used + $count
+ *  WHERE principal = $principal AND window = $window AND used + $count <= $limit
+ *  RETURNING used;                      -- a row means granted; no row means refused
+ * -- refused: report the counter as it stands
+ * SELECT used FROM quota WHERE principal = $principal AND window = $window;
+ * -- release(key, count) — never below zero, or a refund would hand out budget
+ * UPDATE quota SET used = GREATEST(used - $count, 0)
+ *  WHERE principal = $principal AND window = $window
+ *  RETURNING used;
+ * ```
+ *
+ * An upsert-shaped store writes the same reservation as
+ * `INSERT … ON CONFLICT (principal, window) DO UPDATE SET used = quota.used + $count WHERE quota.used + $count <= $limit`.
+ *
+ * **Anonymous callers share one pool.** A session id is chosen by the caller, so a per-session counter
+ * bounds nothing on its own — rotating the id gives a fresh budget every request.
+ * `QuotaPolicy.sessions` is the one place that allows session principals at all, and it carries the
+ * budget all of them share:
+ *
+ * ```ts
+ * createQuotaMeter({
+ *   policy: { limit: 3, sessions: { poolLimit: 200 } }, // omit `sessions` to refuse anonymous callers
+ *   store,
+ *   meteredResourceAvailable: true,
+ * })
+ * ```
+ *
+ * A session principal spends the pool first and then its own counter; the pool unit is given back both
+ * when the own counter refuses and when the store throws instead of answering. The two counters are
+ * not one atomic step, so for the length of one store round trip the pool can hold a unit no work
+ * spent, which can refuse another session that would just have fit. Nothing can over-_spend_ in either
+ * order, and the refund closes that window. What the refund cannot close is a process that dies
+ * between the two calls: the pool then keeps the unit until the window rolls, and a lifetime window
+ * never rolls. A budget that has to survive that needs reservations stored with an expiry, which this
+ * port deliberately does not have. A session id must still be issued and verified by the server — a
+ * signed cookie, a server-side session record. The pool bounds what an unverified id can cost; it does
+ * not make the id trustworthy.
+ *
+ * **This is not a rate limiter.** A quota counts business work in a long window, keyed by principal,
+ * enforced at the costly action _after_ authentication; a rate limiter counts requests per second,
+ * keyed by whatever is cheap and not attacker-controlled, and runs as middleware before routing. `429`
+ * here means "this principal has spent their budget", never "you are going too fast". Request
+ * smoothing is `platform/rate-limit` (issue #4), which does not live here.
+ *
  * @module
  */
 

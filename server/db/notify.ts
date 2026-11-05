@@ -12,6 +12,50 @@
  * that did not happen. Within one transaction Postgres also sends two identical notifications
  * (same channel, same payload) only once.
  *
+ * `announceJson`, `listenJson`, `NotifyPayloadTooLargeError`, `MAX_NOTIFY_PAYLOAD_BYTES`,
+ * `MAX_NOTIFY_CHANNEL_BYTES` and the type `JsonListenerOptions`.
+ *
+ * Postgres `LISTEN`/`NOTIFY` with JSON payloads: one process announces that something changed, and
+ * every process listening on the channel hears it. It is how a worker without sockets tells the API
+ * process that holds them.
+ *
+ * ```ts
+ * await sql.begin(async (tx) => {
+ *   await tx`UPDATE inboxes SET unread = unread + 1 WHERE user_id = ${userId}`
+ *   await announceJson(tx, "inbox_changed", { userId })
+ * })
+ *
+ * const stop = await listenJson(sql, "inbox_changed", {
+ *   schema: type({ userId: "number.integer > 0", "+": "reject" }),
+ *   onMessage: ({ userId }) => tellSocketsOf(userId),
+ *   onListen: () => resyncEveryone(),
+ * })
+ * ```
+ *
+ * - **Announce inside the transaction of the change.** Postgres holds the notification until the
+ *   transaction commits and drops it on a rollback. Two identical notifications in one transaction
+ *   arrive once.
+ * - **It is a wake-up, not a queue.** A notification sent while a listener is down or reconnecting
+ *   is lost. Send a hint, keep the truth in a table, and read the table on a hint, at start and in
+ *   `onListen`, which runs at the first subscription and after every reconnect. It may be async; a
+ *   throw or rejection there goes to `onError`, like one from `onMessage`.
+ * - **The payload is a hint, at most `MAX_NOTIFY_PAYLOAD_BYTES` (7999) bytes of JSON text.** Postgres
+ *   refuses 8000 bytes or more, and its refusal aborts the transaction, so `announceJson` throws
+ *   `NotifyPayloadTooLargeError` before it sends anything. A value with no JSON form throws a
+ *   `TypeError`.
+ * - **A channel name is 1 to 63 bytes.** Postgres cuts a longer name short in `LISTEN` and refuses it
+ *   in `pg_notify`, so both functions throw a `RangeError` for one.
+ * - **The listener trusts nothing.** Anyone who can reach the database can send on a channel. A
+ *   payload that is not JSON, or that the arktype `schema` refuses, is dropped, and `onMessage` gets
+ *   the schema's output.
+ * - **A failing handler does not end the process.** An error `onMessage` throws, or a promise it
+ *   rejects, goes to `onError` (default `console.error`): thrown further, it would surface in the
+ *   client's socket handler.
+ * - **Reconnecting is postgres.js's.** The client keeps one connection of its own for listening and
+ *   subscribes again when it drops. After such a reconnect its own `unlisten` no longer removes the
+ *   handler, so the returned stop function also switches the handler off itself. The listening
+ *   connection closes with `sql.end()`.
+ *
  * @module
  */
 
