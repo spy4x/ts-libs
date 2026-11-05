@@ -248,3 +248,82 @@ export function recentIsoDates(count: number, now: Date): string[] {
     (_, index) => formatIsoDate(time - (count - 1 - index) * MS_PER_DAY),
   )
 }
+
+/**
+ * Every date layout {@link detectDatePatterns} and {@link parseDateWithPattern} know, in the order
+ * `detectDatePatterns` lists them: day-first before month-first, so a select's first option is the
+ * reading most of the world uses.
+ */
+export const DATE_PATTERNS = [
+  "YYYY-MM-DD",
+  "YYYY/MM/DD",
+  "YYYY.MM.DD",
+  "DD.MM.YYYY",
+  "DD/MM/YYYY",
+  "DD-MM-YYYY",
+  "MM/DD/YYYY",
+  "MM-DD-YYYY",
+  "DD.MM.YY",
+  "DD/MM/YY",
+  "MM/DD/YY",
+] as const
+
+/** How a column writes its dates, such as `"DD.MM.YYYY"`: one of {@link DATE_PATTERNS}. */
+export type DatePattern = typeof DATE_PATTERNS[number]
+
+/** A time after the date (`14:05`, `T14:05:09`) that {@link parseDateWithPattern} ignores. */
+const TRAILING_TIME = String.raw`(?:[ T]\d{1,2}:\d{2}(?::\d{2})?)?`
+
+/** `pattern` as a regular expression with named `year`, `month` and `day` groups. */
+function datePatternRegExp(pattern: DatePattern): RegExp {
+  const source = pattern
+    .replace("YYYY", String.raw`(?<year>\d{4})`)
+    .replace("YY", String.raw`(?<year>\d{2})`)
+    .replace("MM", String.raw`(?<month>\d{1,2})`)
+    .replace("DD", String.raw`(?<day>\d{1,2})`)
+    .replaceAll(".", String.raw`\.`)
+  return new RegExp(`^${source}${TRAILING_TIME}$`)
+}
+
+const DATE_PATTERN_REGEXPS = new Map(
+  DATE_PATTERNS.map((pattern) => [pattern, datePatternRegExp(pattern)]),
+)
+
+/**
+ * Read `text` written in `pattern` as a `YYYY-MM-DD` date, or `null` when it does not fit the
+ * pattern or names a day the calendar lacks: `parseDateWithPattern("31.02.2026", "DD.MM.YYYY")`
+ * is `null`, never 3 March. Surrounding spaces and a time after the date (`03.04.2026 14:05`) are
+ * ignored; a day or month may have one digit. A two-digit year `00`–`69` is 2000–2069 and `70`–`99`
+ * is 1970–1999, the POSIX `strptime` rule.
+ */
+export function parseDateWithPattern(text: string, pattern: DatePattern): string | null {
+  const regExp = DATE_PATTERN_REGEXPS.get(pattern)
+  if (!regExp) throw new RangeError(`unknown date pattern: ${pattern}`)
+  const groups = regExp.exec(text.trim())?.groups
+  if (!groups) return null
+  let year = Number(groups.year)
+  if (groups.year.length === 2) year += year < 70 ? 2000 : 1900
+  const date = `${String(year).padStart(4, "0")}-${groups.month.padStart(2, "0")}-${
+    groups.day.padStart(2, "0")
+  }`
+  try {
+    parseIsoDate(date)
+  } catch {
+    return null
+  }
+  return date
+}
+
+/**
+ * Every pattern under which all `samples` read as real dates, in {@link DATE_PATTERNS} order. More
+ * than one means the column is ambiguous and a person picks: `["03/04/2026", "12/04/2026"]` fits
+ * both `DD/MM/YYYY` and `MM/DD/YYYY`, and adding `"25/04/2026"` leaves only `DD/MM/YYYY`. Blank
+ * samples are skipped; with none left the answer is empty, since nothing was seen.
+ */
+export function detectDatePatterns(samples: readonly string[]): DatePattern[] {
+  const filled = samples.filter((sample) => sample.trim() !== "")
+  if (filled.length === 0) return []
+  return DATE_PATTERNS.filter((pattern) =>
+    filled.every((sample) => parseDateWithPattern(sample, pattern) !== null)
+  )
+}

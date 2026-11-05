@@ -6,7 +6,7 @@
  * lists every passing test (over a megabyte for this workspace).
  */
 
-const TASKS = ["fmt:check", "lint", "ts:check", "test"]
+const TASKS = ["fmt:check", "lint", "ts:check", "test", "test:bundle"]
 
 /** The result of one task, as the report needs it. */
 export interface TaskRun {

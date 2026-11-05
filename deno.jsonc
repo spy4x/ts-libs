@@ -22,8 +22,8 @@
     "./validation"
   ],
   "tasks": {
-    // Runs `fmt:check`, `lint`, `ts:check` and `test` in parallel and prints only a line per task,
-    // plus the output of a task that failed. See `infra/scripts/check.ts`.
+    // Runs `fmt:check`, `lint`, `ts:check`, `test` and `test:bundle` in parallel and prints only a
+    // line per task, plus the output of a task that failed. See `infra/scripts/check.ts`.
     "check": {
       "command": "deno run --allow-run=deno infra/scripts/check.ts",
       "description": "Format, lint, types and the unit tier; quiet unless something fails"
@@ -53,7 +53,13 @@
     //
     // `--ignore` replaces both `exclude` lists below for this run, so it names the other tiers
     // and `.volumes` itself. A package alone: `deno task test net/`.
-    "test": "deno test --no-prompt --unstable-kv --allow-read --allow-env --ignore=**/*.integration.test.ts,**/*.vips.test.ts,.volumes",
+    //
+    // `platform/universal/core-bundle.test.ts` runs on its own, as `test:bundle`, with
+    // `--allow-run=deno` added: it runs `deno bundle` to prove the `money-core` and `color-core`
+    // subpaths carry no arktype into a browser bundle (#863). No other test gets that grant. It is a
+    // task of its own so that `deno task test net/` adds `net/` to the one `deno test` command.
+    "test": "deno test --no-prompt --unstable-kv --allow-read --allow-env --ignore=**/*.integration.test.ts,**/*.vips.test.ts,.volumes,platform/universal/core-bundle.test.ts",
+    "test:bundle": "deno test --no-prompt --allow-read --allow-env --allow-run=deno platform/universal/core-bundle.test.ts",
     // The integration tier. The glob is the only thing that selects it, so a file
     // joins the tier by its name alone.
     //
@@ -135,6 +141,9 @@
     // `platform/universal/uuid.ts`'s version 7 generator (#541): its stable `./v7` entry builds the
     // id, so the layout is not hand-written.
     "@std/uuid": "jsr:@std/uuid@1.1.2",
+    // `platform/universal/csv.ts`'s reader (#818): RFC 4180 parsing is well solved, so the parser
+    // stays; the reader adds the encoding guess, the delimiter sniff and the size limits.
+    "@std/csv": "jsr:@std/csv@1.0.6",
 
     // HTTP framework. `server/http` (#9) and `platform/rate-limit` (#4)
     // middleware.
@@ -224,6 +233,7 @@
       "server/__fixtures__",
       "server/env-age64/__fixtures__",
       "platform/server/_fake-fs.ts",
+      "platform/universal/testdata",
       "server/db/testing"
     ]
   }

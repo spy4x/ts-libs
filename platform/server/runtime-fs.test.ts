@@ -74,6 +74,12 @@ describe("fsErrorOver", () => {
       Deno.errors.AlreadyExists,
     )
     expect(fsErrorOver(denoHost, "WriteZero", "stuck")).toBeInstanceOf(Deno.errors.WriteZero)
+    expect(fsErrorOver(denoHost, "IsADirectory", "folder")).toBeInstanceOf(
+      Deno.errors.IsADirectory,
+    )
+    expect(fsErrorOver(denoHost, "NotADirectory", "file")).toBeInstanceOf(
+      Deno.errors.NotADirectory,
+    )
   })
 
   it("makes an Error named after the kind with Node's code on Node and Bun", () => {
@@ -83,6 +89,10 @@ describe("fsErrorOver", () => {
     expect([there.name, there.code]).toEqual(["AlreadyExists", "EEXIST"])
     const stuck = fsErrorOver(nodeHost, "WriteZero", "stuck") as Error & { code?: string }
     expect([stuck.name, stuck.code]).toEqual(["WriteZero", undefined])
+    const folder = fsErrorOver(nodeHost, "IsADirectory", "folder") as Error & { code?: string }
+    expect([folder.name, folder.code]).toEqual(["IsADirectory", "EISDIR"])
+    const file = fsErrorOver(nodeHost, "NotADirectory", "file") as Error & { code?: string }
+    expect([file.name, file.code]).toEqual(["NotADirectory", "ENOTDIR"])
   })
 })
 

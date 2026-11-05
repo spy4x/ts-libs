@@ -1,9 +1,10 @@
 # AGENTS.md — ts-libs
 
-TypeScript libraries on web standards, published to JSR as `@spy4x/*`. A Deno workspace: one
-package per top-level directory, listed with what it holds in `README.md` ("Packages").
-`CONTRIBUTING.md` has the repository rules, `docs/testing.md` the test tiers. The global agent
-instructions own Git Flow, review, commits and cleanup; this file adds what holds in this repo.
+TypeScript libraries on web standards for Deno, Node and Bun, published to JSR as `@spy4x/*`. A
+Deno workspace: one package per top-level directory, listed with what it holds and what it runs on
+in `README.md` ("Packages"). `CONTRIBUTING.md` has the repository rules, `docs/testing.md` the test
+tiers. The global agent instructions own Git Flow, review, commits and cleanup; this file adds what
+holds in this repo.
 
 ## Commands
 
@@ -24,8 +25,10 @@ integration tier.
 New code, and the old functions you change anyway, runs unchanged on Deno, Node and Bun: web
 standards and `@std/*`. A runtime call (`Deno.*`, `process`, `Bun.*`, `node:*`) goes behind an
 adapter in `@spy4x/platform` (`platform/server/process.ts`, `runtime-fs.ts`, `serve.ts` and the
-other `server/*` entries). Deno is the toolchain for building and testing this repo: no npm, pnpm,
-Yarn or Bun commands in tasks, CI or docs.
+other `server/*` entries). What each package runs on today is the "Runs on"
+column of the README's package table. Deno is the toolchain: tasks, tests, formatting, linting and
+publishing run through it, with no `package.json` and no npm, pnpm or Yarn commands. Node and Bun
+commands appear only to run the code on those runtimes, in a check or a doc.
 
 ## Adding a package
 
@@ -105,7 +108,7 @@ after the rebase.
 
 ## Checks
 
-`deno task check` runs `fmt:check`, `lint`, `ts:check` and `test` in parallel and prints one line
+`deno task check` runs `fmt:check`, `lint`, `ts:check`, `test` and `test:bundle` in parallel and prints one line
 per task; a failing task also prints its errors (`infra/scripts/check.ts`). It needs no
 containers, so a package PR can be verified anywhere.
 

@@ -116,6 +116,29 @@ export function weekdayLabels(locale: string = DEFAULT_LOCALE): WeekdayLabel[] {
   })
 }
 
+/** One month's names in a locale. */
+export interface MonthLabel {
+  /** The abbreviation, e.g. `Sep` (`Sept` in `en-GB`). */
+  short: string
+  /** The full name as it stands alone, e.g. `September` or Russian `сентябрь`. */
+  long: string
+}
+
+/**
+ * Twelve localised month names, January first, as `Intl` writes a month on its own (without a day,
+ * so Russian gives the nominative `сентябрь`, not `сентября`).
+ *
+ * @param locale A BCP 47 tag, e.g. `pt-BR`.
+ */
+export function monthLabels(locale: string = DEFAULT_LOCALE): MonthLabel[] {
+  const short = new Intl.DateTimeFormat(locale, { month: "short", timeZone: "UTC" })
+  const long = new Intl.DateTimeFormat(locale, { month: "long", timeZone: "UTC" })
+  return Array.from({ length: 12 }, (_, index) => {
+    const day = new Date(Date.UTC(2024, index, 1))
+    return { short: short.format(day), long: long.format(day) }
+  })
+}
+
 /**
  * Region formats a picker offers: a language with a country, the way people choose how numbers
  * and dates are written. `Intl` has no list of locales (`Intl.supportedValuesOf` covers zones,

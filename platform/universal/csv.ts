@@ -1,9 +1,31 @@
 /**
- * RFC 4180 CSV writer. Plain functions only — no DOM, no Deno, no Preact — so this module runs in
- * a browser tab as well as on the server. Ported from `spy4x/preact-components`'s package-private
- * `ui/csv.ts` (spy4x/preact-components#141, spy4x/ts-libs#175), which stays the reviewed source of
- * this guard until that repo switches its import to here.
+ * RFC 4180 CSV writer and reader. Plain functions only — no DOM, no Deno, no Preact — so this module
+ * runs in a browser tab as well as on the server. The writer is ported from
+ * `spy4x/preact-components`'s package-private `ui/csv.ts` (spy4x/preact-components#141,
+ * spy4x/ts-libs#175), which stays the reviewed source of this guard until that repo switches its
+ * import to here. The reader — {@link decodeTextFile}, {@link sniffCsv}, {@link parseCsv} — lives
+ * in `./csv-read.ts` and is re-exported here.
+ *
+ * @module
  */
+
+export {
+  CSV_DEFAULT_LIMITS,
+  CSV_DELIMITERS,
+  type CsvDelimiter,
+  type CsvLimits,
+  type CsvParseError,
+  type CsvSniff,
+  type DecodedTextFile,
+  decodeTextFile,
+  type DecodeTextFileOptions,
+  parseCsv,
+  type ParseCsvOptions,
+  SINGLE_BYTE_ENCODINGS,
+  type SingleByteEncoding,
+  sniffCsv,
+  type TextFileEncoding,
+} from "./csv-read.ts"
 
 /**
  * What a `format` function, or an unformatted field, may hand back for one cell.

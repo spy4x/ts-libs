@@ -186,6 +186,12 @@ export interface StaticFileHandle {
   /** File contents, read lazily as the response body is consumed. */
   body: ReadableStream<Uint8Array>
   /**
+   * When the file was last modified, or `null` when the platform cannot tell. {@link serveFile}
+   * builds its `ETag` and `Last-Modified` from it. Optional: a `StaticFs` written before it was
+   * added may leave it out, and {@link serveFile} then sends neither header.
+   */
+  mtime?: Date | null
+  /**
    * Releases the file handle. `serveStatic` never calls this more than once for
    * a handle, so an implementation does not need to guard against a second
    * call. It is not guaranteed to be called at all: a `GET` response whose body
@@ -206,13 +212,19 @@ export interface StaticFs {
   stat: (path: string) => Promise<StaticFileInfo | null>
   /** Canonical absolute path, resolving symlinks. */
   realPath: (path: string) => Promise<string>
+  /**
+   * Opens a file as {@link StaticFs.open} does, with a body that starts at byte `start`, so a
+   * range request deep into a video reads nothing before it. Optional: without it,
+   * {@link serveFile} opens the file and skips the bytes before `start`.
+   */
+  openAt?: (path: string, start: number) => Promise<StaticFileHandle | null>
 }
 
 /** Options for {@link serveStatic}. */
 export interface ServeStaticOptions {
   /** Static root directory, e.g. `./static`. */
   root: string
-  /** Filesystem to read through. Defaults to {@link denoStaticFs}. */
+  /** Filesystem to read through. Defaults to {@link runtimeStaticFs}. */
   fs?: StaticFs
   /**
    * Serve `<root>/index.html` for a path that does not exist, and for one that
@@ -272,7 +284,7 @@ export async function serveStatic(
   requestPath: string,
   options: ServeStaticOptions,
 ): Promise<Response | undefined> {
-  const fs = options.fs ?? denoStaticFs
+  const fs = options.fs ?? runtimeStaticFs
 
   const path = requestPath.endsWith("/") ? `${requestPath}${INDEX_FILE}` : requestPath
   let resolved = resolveStaticPath(path, options.root)
@@ -371,32 +383,38 @@ function closingStream(handle: StaticFileHandle): ReadableStream<Uint8Array> {
   })
 }
 
-/** Filesystem implementation backed by `Deno.*`, used when none is injected. */
+/** Open `path` with Deno, its body starting at byte `start`; `null` when it is no regular file. */
+async function openDeno(path: string, start: number): Promise<StaticFileHandle | null> {
+  let file: Deno.FsFile
+  try {
+    file = await Deno.open(path, { read: true })
+  } catch {
+    return null
+  }
+  let info: Deno.FileInfo
+  try {
+    info = await file.stat()
+    if (start > 0) await file.seek(start, Deno.SeekMode.Start)
+  } catch {
+    closeQuietly(file)
+    return null
+  }
+  if (!info.isFile) {
+    closeQuietly(file)
+    return null
+  }
+  return {
+    size: info.size,
+    mtime: info.mtime,
+    body: file.readable,
+    close: () => closeQuietly(file),
+  }
+}
+
+/** Filesystem implementation backed by `Deno.*`, the default on Deno. */
 export const denoStaticFs: StaticFs = {
-  async open(path) {
-    let file: Deno.FsFile
-    try {
-      file = await Deno.open(path, { read: true })
-    } catch {
-      return null
-    }
-    let info: Deno.FileInfo
-    try {
-      info = await file.stat()
-    } catch {
-      closeQuietly(file)
-      return null
-    }
-    if (!info.isFile) {
-      closeQuietly(file)
-      return null
-    }
-    return {
-      size: info.size,
-      body: file.readable,
-      close: () => closeQuietly(file),
-    }
-  },
+  open: (path) => openDeno(path, 0),
+  openAt: openDeno,
   async stat(path) {
     try {
       const info = await Deno.stat(path)
@@ -420,4 +438,306 @@ function closeQuietly(file: Deno.FsFile): void {
   } catch {
     // already closed by the stream finishing or being cancelled
   }
+}
+
+/** A `node:fs/promises` file handle, as far as {@link nodeStaticFs} uses it. */
+interface NodeFileHandle {
+  stat(): Promise<{ isFile(): boolean; size: number; mtime: Date }>
+  read(
+    buffer: Uint8Array,
+    offset: number,
+    length: number,
+    position: number,
+  ): Promise<{ bytesRead: number }>
+  close(): Promise<void>
+}
+
+/** `node:fs/promises`, as far as {@link nodeStaticFs} uses it. */
+interface NodeFs {
+  open(path: string, flags: "r"): Promise<NodeFileHandle>
+  stat(path: string): Promise<{ isFile(): boolean }>
+  realpath(path: string): Promise<string>
+}
+
+let nodeFsModule: Promise<NodeFs> | undefined
+
+/**
+ * Load `node:fs/promises` on the first call, with a specifier the type checker does not resolve,
+ * as `@spy4x/platform/server/runtime-fs` does, so a Deno program never pulls in Node's types.
+ */
+const nodeFs = (): Promise<NodeFs> =>
+  nodeFsModule ??= import(["node", "fs/promises"].join(":")) as Promise<NodeFs>
+
+/** Bytes read from a Node file handle per pull of the response body. */
+const NODE_CHUNK_BYTES = 64 * 1024
+
+/**
+ * Filesystem implementation over `node:fs/promises`, for Node and Bun (Bun implements Node's
+ * `fs`). The body is read one 64 KiB chunk per pull, so memory stays flat whatever the file's
+ * size, and the handle closes once the body is read to the end, cancelled or fails.
+ */
+export const nodeStaticFs: StaticFs = {
+  open: (path) => openNode(path, 0),
+  openAt: openNode,
+  async stat(path) {
+    const fs = await nodeFs()
+    try {
+      return { isFile: (await fs.stat(path)).isFile() }
+    } catch {
+      return null
+    }
+  },
+  realPath: async (path) => await (await nodeFs()).realpath(path),
+}
+
+/** Open `path` with Node, its body starting at byte `start`; `null` when it is no regular file. */
+async function openNode(path: string, start: number): Promise<StaticFileHandle | null> {
+  const fs = await nodeFs()
+  let file: NodeFileHandle
+  try {
+    file = await fs.open(path, "r")
+  } catch {
+    return null
+  }
+  let closed = false
+  const close = () => {
+    if (closed) return
+    closed = true
+    file.close().catch(() => {})
+  }
+  let info: { isFile(): boolean; size: number; mtime: Date }
+  try {
+    info = await file.stat()
+  } catch {
+    close()
+    return null
+  }
+  if (!info.isFile()) {
+    close()
+    return null
+  }
+  let position = start
+  const body = new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      try {
+        const buffer = new Uint8Array(NODE_CHUNK_BYTES)
+        const { bytesRead } = await file.read(buffer, 0, buffer.byteLength, position)
+        position += bytesRead
+        if (bytesRead > 0) return controller.enqueue(buffer.subarray(0, bytesRead))
+        close()
+        controller.close()
+      } catch (error) {
+        close()
+        controller.error(error)
+      }
+    },
+    cancel: close,
+  })
+  return { size: info.size, mtime: info.mtime, body, close }
+}
+
+/** {@link denoStaticFs} on Deno, {@link nodeStaticFs} elsewhere, chosen on each call. */
+const currentStaticFs = (): StaticFs => "Deno" in globalThis ? denoStaticFs : nodeStaticFs
+
+/**
+ * The files of the running runtime: {@link denoStaticFs} on Deno, {@link nodeStaticFs} on Node and
+ * Bun. The default of {@link serveStatic}.
+ */
+export const runtimeStaticFs: StaticFs = {
+  open: (path) => currentStaticFs().open(path),
+  openAt: (path, start) => currentStaticFs().openAt!(path, start),
+  stat: (path) => currentStaticFs().stat(path),
+  realPath: (path) => currentStaticFs().realPath(path),
+}
+
+/** Options for {@link serveFile}. */
+export interface ServeFileOptions {
+  /** Filesystem to read through. Defaults to {@link runtimeStaticFs}. */
+  fs?: StaticFs
+  /** `Cache-Control` value to set on the response. Omitted means no header. */
+  cacheControl?: string
+}
+
+/** A byte range of a file, both ends included. */
+interface ByteRange {
+  start: number
+  end: number
+}
+
+/**
+ * The one range a `Range` header asks for: a {@link ByteRange}, `"unsatisfiable"` for a range
+ * that starts past the end (answered `416`), or `undefined` for a header to ignore — absent,
+ * malformed, not in bytes, or asking for several ranges, which is answered with the whole file.
+ */
+function parseRange(header: string | null, size: number): ByteRange | "unsatisfiable" | undefined {
+  const match = header?.trim().match(/^bytes=(\d*)-(\d*)$/)
+  if (!match) return undefined
+  const [, first, last] = match
+  if (first === "" && last === "") return undefined
+  if (first === "") {
+    const suffix = Number(last)
+    if (suffix === 0 || size === 0) return "unsatisfiable"
+    return { start: Math.max(0, size - suffix), end: size - 1 }
+  }
+  const start = Number(first)
+  const end = last === "" ? Infinity : Number(last)
+  if (end < start) return undefined
+  if (start >= size) return "unsatisfiable"
+  return { start, end: Math.min(end, size - 1) }
+}
+
+/** Whether `If-None-Match` lists `etag`, compared weakly as RFC 9110 says for this header. */
+function noneMatchHits(header: string, etag: string): boolean {
+  const bare = (tag: string) => tag.trim().replace(/^W\//, "")
+  return header.split(",").some((tag) => tag.trim() === "*" || bare(tag) === bare(etag))
+}
+
+/**
+ * Wrap `handle`'s body to skip its first `skip` bytes and end after `length` more, closing the
+ * handle exactly once: when the window is sent, the client cancels, or a read fails.
+ */
+function windowStream(
+  handle: StaticFileHandle,
+  skip: number,
+  length: number,
+): ReadableStream<Uint8Array> {
+  const reader = handle.body.getReader()
+  let toSkip = skip
+  let left = length
+  let closed = false
+  const closeOnce = () => {
+    if (closed) return
+    closed = true
+    handle.close()
+  }
+  return new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      try {
+        while (left > 0) {
+          const { done, value } = await reader.read()
+          if (done) break
+          let chunk = value
+          if (toSkip > 0) {
+            const dropped = Math.min(toSkip, chunk.byteLength)
+            toSkip -= dropped
+            chunk = chunk.subarray(dropped)
+          }
+          if (chunk.byteLength === 0) continue
+          if (chunk.byteLength > left) chunk = chunk.subarray(0, left)
+          left -= chunk.byteLength
+          controller.enqueue(chunk)
+          if (left > 0) return
+        }
+        closeOnce()
+        controller.close()
+        await reader.cancel().catch(() => {})
+      } catch (error) {
+        closeOnce()
+        controller.error(error)
+      }
+    },
+    cancel(reason) {
+      closeOnce()
+      return reader.cancel(reason)
+    },
+  })
+}
+
+/**
+ * Answer `request` with the file at `path`, on Deno, Node and Bun: the runtime-neutral
+ * counterpart of `serveFile` from `@std/http/file-server`.
+ *
+ * - **Range.** One `bytes=` range is answered `206` with `Content-Range`, which Safari needs to
+ *   play a video; a range past the end is `416` with a `Content-Range` that names the size. A malformed
+ *   header, or one asking for several ranges, gets the whole file. An `If-Range` other than the
+ *   current `Last-Modified` also gets the whole file: the `ETag` is weak, which `If-Range` never
+ *   matches.
+ * - **Validators.** With a modification time from the `StaticFs`, the response carries a weak
+ *   `ETag` (size and time) and `Last-Modified`; a matching `If-None-Match`, or without one an
+ *   `If-Modified-Since` no older than the file, is answered `304` with no body.
+ * - `Content-Type` comes from the extension ({@link contentTypeFor}), with `nosniff`, and
+ *   `Accept-Ranges: bytes`. A `HEAD` request gets the same headers and no body.
+ *
+ * `path` is used as given: no root, no traversal or symlink check. Pass only a path the caller
+ * built itself, or use {@link serveStatic} for a request path.
+ *
+ * @returns The response, or `undefined` when `path` is missing or not a regular file, for the
+ * caller's own `404`.
+ *
+ * @example
+ * ```ts
+ * app.get("/video/:file", async (c) =>
+ *   await serveFile(c.req.raw, `./video/${c.req.param("file")}`) ?? c.notFound())
+ * ```
+ */
+export async function serveFile(
+  request: Request,
+  path: string,
+  options: ServeFileOptions = {},
+): Promise<Response | undefined> {
+  const fs = options.fs ?? runtimeStaticFs
+  const handle = await fs.open(path).catch(() => null)
+  if (!handle) return undefined
+  const { size } = handle
+  const mtime = handle.mtime ?? null
+
+  const headers = new Headers({
+    "Content-Type": contentTypeFor(path),
+    "Accept-Ranges": "bytes",
+    "X-Content-Type-Options": "nosniff",
+  })
+  if (options.cacheControl) headers.set("Cache-Control", options.cacheControl)
+  const etag = mtime ? `W/"${size.toString(36)}-${mtime.getTime().toString(36)}"` : undefined
+  if (etag) headers.set("ETag", etag)
+  if (mtime) headers.set("Last-Modified", mtime.toUTCString())
+
+  const noneMatch = request.headers.get("If-None-Match")
+  const modifiedSince = Date.parse(request.headers.get("If-Modified-Since") ?? "")
+  const notModified = noneMatch !== null
+    ? etag !== undefined && noneMatchHits(noneMatch, etag)
+    : mtime !== null && !Number.isNaN(modifiedSince) &&
+      Math.floor(mtime.getTime() / 1000) * 1000 <= modifiedSince
+  if (notModified) {
+    handle.close()
+    return new Response(null, { status: 304, headers })
+  }
+
+  const ifRange = request.headers.get("If-Range")
+  // If-Range compares strongly (RFC 9110 13.1.5), so the weak ETag never matches it.
+  const rangeAllowed = ifRange === null || (mtime !== null && ifRange === mtime.toUTCString())
+  const range = rangeAllowed ? parseRange(request.headers.get("Range"), size) : undefined
+  const isHead = request.method === "HEAD"
+
+  if (range === "unsatisfiable") {
+    handle.close()
+    headers.set("Content-Range", `bytes */${size}`)
+    return new Response(null, { status: 416, headers })
+  }
+
+  if (range === undefined) {
+    headers.set("Content-Length", String(size))
+    if (isHead) {
+      handle.close()
+      return new Response(null, { headers })
+    }
+    return new Response(closingStream(handle), { headers })
+  }
+
+  const length = range.end - range.start + 1
+  headers.set("Content-Length", String(length))
+  headers.set("Content-Range", `bytes ${range.start}-${range.end}/${size}`)
+  if (isHead) {
+    handle.close()
+    return new Response(null, { status: 206, headers })
+  }
+  let source = handle
+  let skip = range.start
+  if (range.start > 0 && fs.openAt) {
+    handle.close()
+    const moved = await fs.openAt(path, range.start).catch(() => null)
+    if (!moved) return undefined
+    source = moved
+    skip = 0
+  }
+  return new Response(windowStream(source, skip, length), { status: 206, headers })
 }

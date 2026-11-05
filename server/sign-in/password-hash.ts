@@ -22,6 +22,7 @@
  * @module
  */
 
+import { exitProcess, processEnv, processStdin, writeStderr } from "@spy4x/platform/server/process"
 import { createPasswordHasher } from "./password.ts"
 
 /** Where {@link runPasswordHash} gets its two inputs. */
@@ -123,14 +124,13 @@ export async function runPasswordHash(input: PasswordHashInput): Promise<Passwor
 
 /** Reads one line from the terminal without echoing it. Returns `null` on Ctrl-C or Ctrl-D. */
 async function readHidden(): Promise<string | null> {
-  const encoder = new TextEncoder()
-  await Deno.stderr.write(encoder.encode("Password (not shown): "))
-  Deno.stdin.setRaw(true)
+  writeStderr("Password (not shown): ")
+  processStdin.setRaw(true)
   const line = new HiddenLine()
   const buffer = new Uint8Array(64)
   try {
     while (true) {
-      const read = await Deno.stdin.read(buffer)
+      const read = await processStdin.read(buffer)
       if (read === null) return null
       for (const byte of buffer.subarray(0, read)) {
         const result = line.type(byte)
@@ -143,20 +143,18 @@ async function readHidden(): Promise<string | null> {
   } finally {
     buffer.fill(0)
     line.bytes.fill(0)
-    Deno.stdin.setRaw(false)
-    await Deno.stderr.write(encoder.encode("\n"))
+    processStdin.setRaw(false)
+    writeStderr("\n")
   }
 }
 
 if (import.meta.main) {
   const result = await runPasswordHash({
-    pepper: Deno.env.get("AUTH_PEPPER"),
+    pepper: processEnv.get("AUTH_PEPPER"),
     readPassword: async () =>
-      Deno.stdin.isTerminal()
-        ? await readHidden()
-        : passwordFromInput(await new Response(Deno.stdin.readable).text()),
+      processStdin.isTerminal() ? await readHidden() : passwordFromInput(await processStdin.text()),
   })
   if (result.success) console.log(result.output)
   else console.error(result.error)
-  Deno.exit(result.success ? 0 : 1)
+  exitProcess(result.success ? 0 : 1)
 }

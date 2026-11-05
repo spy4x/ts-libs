@@ -13,8 +13,11 @@ hand. Exported names and signatures are frozen since 1.0: they change only addit
 - **arktype only.** No zod. Sources that carry zod are ported, not copied — schemas are rewritten
   at extraction time. No `{parse, safeParse}` adapter: that would institutionalise a second
   validator.
-- **Deno is the only runtime for building and testing this repo.** No Node.js, npm, pnpm, Yarn or
-  Bun commands. `npm:` specifiers run through Deno where unavoidable. What a published package
+- **Deno is the toolchain; Deno, Node and Bun are supported runtimes.** Tasks, tests, formatting,
+  linting and publishing run through Deno. No `package.json`, and no npm, pnpm or Yarn commands,
+  not in tasks, not in CI, not in docs. Node and Bun commands are allowed only to run the code on
+  those runtimes: a check that it works there, locally or in CI, or a doc that shows how to run it
+  there. `npm:` specifiers run through Deno where unavoidable. What a published package
   itself runs on at the consumer's end is the "Runs on" column of the
   [package table](README.md#packages).
 - **Port the behaviour, not the dependency.** A bug found in an app's copy is fixed here, and the
