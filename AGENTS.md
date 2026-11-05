@@ -1,9 +1,9 @@
 # AGENTS.md — ts-libs
 
-Framework-agnostic TypeScript primitives and adapters for Deno, published to JSR. Read `README.md`
-for scope, `CONTRIBUTING.md` for the repository rules and maintenance, and `LICENSE` for terms
-(MIT, © 2026 Anton Shubin). The global agent instructions own Git Flow, worktrees, review and
-cleanup; this file adds constraints and overrides them where they conflict.
+Framework-agnostic TypeScript primitives and adapters for Deno, Node and Bun, published to JSR.
+Read `README.md` for scope, `CONTRIBUTING.md` for the repository rules and maintenance, and
+`LICENSE` for terms (MIT, © 2026 Anton Shubin). The global agent instructions own Git Flow,
+worktrees, review and cleanup; this file adds constraints and overrides them where they conflict.
 
 This repo is a Deno workspace: one package per top-level directory.
 
@@ -329,8 +329,13 @@ dependency in the PR body. No speculative entries.
 
 ## Hard rules
 
-- **Deno is the only runtime.** No Node.js, npm, pnpm, Yarn or Bun commands anywhere — not in tasks,
-  not in CI, not in docs. `npm:` specifiers run through Deno where unavoidable.
+- **Deno, Node and Bun are all supported runtimes; Deno is the toolchain.** New code, and old code
+  you change anyway, runs unchanged on all three; what each package runs on today is the "Runs on"
+  column of the [package table](README.md#packages). Tasks, tests, formatting, linting and
+  publishing run through Deno. No `package.json`, and no npm, pnpm or Yarn commands, not in tasks,
+  not in CI, not in docs. Node and Bun commands are allowed only to run the code on those runtimes:
+  a check that it works there, locally or in CI, or a doc that shows how to run it there. `npm:`
+  specifiers run through Deno where unavoidable.
 - Never commit a secret, token, credential, `.env` value or raw production URL.
 - One logical change per commit. Keep commits small.
 - Do not reformat or edit a directory another agent owns.
