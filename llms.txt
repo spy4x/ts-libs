@@ -295,9 +295,14 @@ DevtoArticleRef	interface	@spy4x/integrations	A Dev.to article: its numeric id a
 DevtoClientOptions	interface	@spy4x/integrations	Settings both calls share.
 DevtoCreateResult	type	@spy4x/integrations	Outcome of createDevtoArticle: the new article on success, `error` on failure.
 DevtoFindResult	type	@spy4x/integrations	Outcome of findDevtoArticleByCanonical: the article, or `null` when none of the key's articles has that canonical address.
+DevtoResultsResult	type	@spy4x/integrations	Outcome of readDevtoArticleResults: the article's ShareResults (`score` is always `null`), or `null` when none of the key's articles has that id.
 ExchangeRateClientOptions	interface	@spy4x/integrations	Options every client takes.
 ExchangeRateSource	interface	@spy4x/integrations	A provider of daily exchange rates.
 FRANKFURTER_URL	constant	@spy4x/integrations	Frankfurter's public instance.
+HACKERNEWS_SEARCH_LIMIT	constant	@spy4x/integrations	Stories asked for per address search: plenty for one address, cheap to read.
+HackerNewsFindResult	type	@spy4x/integrations	Outcome of findHackerNewsStoriesByUrl; an empty list when nobody submitted it.
+HackerNewsResultsResult	type	@spy4x/integrations	Outcome of readHackerNewsItemResults; `output: null` when no such story is indexed.
+HackerNewsStoryRef	interface	@spy4x/integrations	A story that links to the address asked for.
 HealthchecksClient	class	@spy4x/integrations	healthchecks.io client.
 HealthchecksErrorCode	type	@spy4x/integrations	Failure reasons `ping` can report.
 HealthchecksFailure	interface	@spy4x/integrations	A ping that could not be delivered after retrying.
@@ -333,14 +338,21 @@ NtfyResult	type	@spy4x/integrations	Outcome of NtfyClient.push.
 NtfyRetryOptions	interface	@spy4x/integrations	Overrides for the client's default retry policy.
 NtfySkipped	interface	@spy4x/integrations	A push that was never sent because its severity did not meet the gate.
 PURGE_BATCH_SIZE	constant	@spy4x/integrations	Cloudflare's purge-by-URL endpoint accepts at most this many files per call.
+REDDIT_INFO_LIMIT	constant	@spy4x/integrations	Submissions asked for at most: the most one `info.json` page holds.
 RandomSource	type	@spy4x/integrations	Deprecated: Use `RandomSource` from "@spy4x/platform/universal/async". A source of numbers in `[0, 1)`, the shape `Math.random` has.
 Rates	interface	@spy4x/integrations	What a source found for one day.
 RatesError	interface	@spy4x/integrations	A failed call: which source, and why.
 RatesErrorCode	type	@spy4x/integrations	Why a call failed.
 RatesResult	type	@spy4x/integrations	Outcome of ExchangeRateSource.daily.
+RedditClientOptions	interface	@spy4x/integrations	Settings both calls share.
+RedditFindResult	type	@spy4x/integrations	Outcome of findRedditPostsByUrl; an empty list when nobody submitted the address.
+RedditPostRef	interface	@spy4x/integrations	A submission that links to the address asked for.
+RedditPostResults	interface	@spy4x/integrations	A post's ShareResults, plus the share of its votes that are upvotes (0 to 1).
+RedditResultsResult	type	@spy4x/integrations	Outcome of readRedditPostResults; `output: null` when Reddit lists no such post.
 RetryPolicy	interface	@spy4x/integrations	
 RetryRunOptions	interface	@spy4x/integrations	
 RetryRunResult	interface	@spy4x/integrations	
+ShareResults	interface	@spy4x/integrations	How one shared copy did.
 Sleeper	type	@spy4x/integrations	Waits a duration.
 SpendGuard	interface	@spy4x/integrations	The port an app implements to cap what it spends, for example over `@spy4x/server/quota`'s `QuotaMeter`.
 SpendRequest	interface	@spy4x/integrations	What a SpendGuard is asked to allow before a request is sent.
@@ -385,6 +397,8 @@ createUmamiLink	function	@spy4x/integrations	Creates an Umami link and returns i
 describeTransportError	function	@spy4x/integrations	Describes a transport failure **without** the request URL.
 findBlueskyPostByLink	function	@spy4x/integrations	Finds the author's own post that links to `uri`, among the latest `maxPages` pages of their feed.
 findDevtoArticleByCanonical	function	@spy4x/integrations	Finds the key owner's article whose `canonical_url` is `canonicalUrl`, published or not.
+findHackerNewsStoriesByUrl	function	@spy4x/integrations	Lists the Hacker News stories whose address is `url`, ignoring the scheme, a trailing slash, the fragment and `utm_*` parameters, at most HACKERNEWS_SEARCH_LIMIT.
+findRedditPostsByUrl	function	@spy4x/integrations	Lists the Reddit submissions of `url`, newest data Reddit has, at most REDDIT_INFO_LIMIT.
 healthchecksConfigFromEnv	function	@spy4x/integrations	Reads a ping URL from an environment reader.
 isPermanentStatus	function	@spy4x/integrations	Deprecated: No client in this package uses it; compare `status >= 400 && status < 500` in place. Statuses that will never succeed on a retry: the request itself is wrong.
 isRequestTimeout	function	@spy4x/integrations	True when `cause` is the `TimeoutError` an `AbortSignal.timeout()` firing produces.
@@ -395,7 +409,10 @@ postBlueskyLink	function	@spy4x/integrations	Posts `text` with a link card.
 postMastodonStatus	function	@spy4x/integrations	Posts a status and returns its id and address.
 purgeUrls	function	@spy4x/integrations	Purges `urls` from a Cloudflare zone, 30 per call, and reports the outcome.
 readBlueskyPostResults	function	@spy4x/integrations	Reads a post's likes, replies, reposts and quotes from the public AppView.
+readDevtoArticleResults	function	@spy4x/integrations	Reads how one of the key owner's articles did: views, reactions and comments.
+readHackerNewsItemResults	function	@spy4x/integrations	Reads a Hacker News story's points and comment count.
 readMastodonStatusResults	function	@spy4x/integrations	Reads a status's favourites, reblogs and replies.
+readRedditPostResults	function	@spy4x/integrations	Reads a Reddit post's comments, score and upvote ratio.
 readUmamiEventValues	function	@spy4x/integrations	Reads how many custom events carried each value of one property, most first, such as the item of an `order-telegram` event (Umami's `GET /api/websites/<id>/event-data/values`).
 readUmamiMetrics	function	@spy4x/integrations	Reads a breakdown of a website's period by `type`, largest first (Umami's `GET /api/websites/<id>/metrics`).
 readUmamiPageviews	function	@spy4x/integrations	Reads page views and visitors per `unit` of a period, in `timezone` (Umami's `GET /api/websites/<id>/pageviews`).
@@ -441,8 +458,10 @@ DevtoArticleRef	interface	@spy4x/integrations/devto	A Dev.to article: its numeri
 DevtoClientOptions	interface	@spy4x/integrations/devto	Settings both calls share.
 DevtoCreateResult	type	@spy4x/integrations/devto	Outcome of createDevtoArticle: the new article on success, `error` on failure.
 DevtoFindResult	type	@spy4x/integrations/devto	Outcome of findDevtoArticleByCanonical: the article, or `null` when none of the key's articles has that canonical address.
+DevtoResultsResult	type	@spy4x/integrations/devto	Outcome of readDevtoArticleResults: the article's ShareResults (`score` is always `null`), or `null` when none of the key's articles has that id.
 createDevtoArticle	function	@spy4x/integrations/devto	Posts `article` to Dev.to and returns its id and address.
 findDevtoArticleByCanonical	function	@spy4x/integrations/devto	Finds the key owner's article whose `canonical_url` is `canonicalUrl`, published or not.
+readDevtoArticleResults	function	@spy4x/integrations/devto	Reads how one of the key owner's articles did: views, reactions and comments.
 COINGECKO_COINS	constant	@spy4x/integrations/exchange-rates	CoinGecko's ids of common coins, by code.
 CoinGeckoPlan	type	@spy4x/integrations/exchange-rates	CoinGecko's plans differ in host and key header: the free Demo plan, or a paid one.
 ExchangeRateClientOptions	interface	@spy4x/integrations/exchange-rates	Options every client takes.
@@ -456,6 +475,12 @@ createCoinGeckoRates	function	@spy4x/integrations/exchange-rates	Coin prices fro
 createExchangeRateApiRates	function	@spy4x/integrations/exchange-rates	Rates from exchangerate-api.com's history endpoint (`GET /v6/{key}/history/{base}/{year}/{month}/{day}`, Pro plan and above).
 createFrankfurterRates	function	@spy4x/integrations/exchange-rates	Rates from Frankfurter v2 (`GET /v2/rates?date=&base=&quotes=`), which needs no key.
 withFallback	function	@spy4x/integrations/exchange-rates	One source made of several: each is asked in turn for the quotes still missing, and the rates are joined.
+HACKERNEWS_SEARCH_LIMIT	constant	@spy4x/integrations/hackernews	Stories asked for per address search: plenty for one address, cheap to read.
+HackerNewsFindResult	type	@spy4x/integrations/hackernews	Outcome of findHackerNewsStoriesByUrl; an empty list when nobody submitted it.
+HackerNewsResultsResult	type	@spy4x/integrations/hackernews	Outcome of readHackerNewsItemResults; `output: null` when no such story is indexed.
+HackerNewsStoryRef	interface	@spy4x/integrations/hackernews	A story that links to the address asked for.
+findHackerNewsStoriesByUrl	function	@spy4x/integrations/hackernews	Lists the Hacker News stories whose address is `url`, ignoring the scheme, a trailing slash, the fragment and `utm_*` parameters, at most HACKERNEWS_SEARCH_LIMIT.
+readHackerNewsItemResults	function	@spy4x/integrations/hackernews	Reads a Hacker News story's points and comment count.
 HealthchecksClient	class	@spy4x/integrations/healthchecks	healthchecks.io client.
 HealthchecksErrorCode	type	@spy4x/integrations/healthchecks	Failure reasons `ping` can report.
 HealthchecksFailure	interface	@spy4x/integrations/healthchecks	A ping that could not be delivered after retrying.
@@ -525,6 +550,15 @@ ReminderForPush	interface	@spy4x/integrations/push-reminders	The parts of a `Due
 createReminderNotify	function	@spy4x/integrations/push-reminders	Builds the `notify` of a reminder runner: it pushes each reminder to every device of `userId`.
 reminderDeliveryOutcome	function	@spy4x/integrations/push-reminders	What a sender's result means for a reminder runner: `"delivered"` when a device got the push, when there was no device, or when every device was gone and removed; `"retry"` when no device got it and a failure may pass later; `"drop"` when no device got it and every failure is for good.
 reminderPushMessage	function	@spy4x/integrations/push-reminders	The push message of one reminder.
+REDDIT_INFO_LIMIT	constant	@spy4x/integrations/reddit	Submissions asked for at most: the most one `info.json` page holds.
+RedditClientOptions	interface	@spy4x/integrations/reddit	Settings both calls share.
+RedditFindResult	type	@spy4x/integrations/reddit	Outcome of findRedditPostsByUrl; an empty list when nobody submitted the address.
+RedditPostRef	interface	@spy4x/integrations/reddit	A submission that links to the address asked for.
+RedditPostResults	interface	@spy4x/integrations/reddit	A post's ShareResults, plus the share of its votes that are upvotes (0 to 1).
+RedditResultsResult	type	@spy4x/integrations/reddit	Outcome of readRedditPostResults; `output: null` when Reddit lists no such post.
+findRedditPostsByUrl	function	@spy4x/integrations/reddit	Lists the Reddit submissions of `url`, newest data Reddit has, at most REDDIT_INFO_LIMIT.
+readRedditPostResults	function	@spy4x/integrations/reddit	Reads a Reddit post's comments, score and upvote ratio.
+ShareResults	interface	@spy4x/integrations/share-results	How one shared copy did.
 TELEGRAM_API_BASE_URL	constant	@spy4x/integrations/telegram	Where the Bot API lives unless a config names a local Bot API server.
 TELEGRAM_RETRY_POLICY	constant	@spy4x/integrations/telegram	Default retry policy: 3 attempts, 1s doubling, at most 30s per wait (Telegram's `retry_after` on a 429 is honoured up to that), 60s for the whole call, +/-20% jitter.
 TelegramAnswerCallbackQuery	interface	@spy4x/integrations/telegram	Parameters of `answerCallbackQuery`, named as in the Bot API.
@@ -3101,4 +3135,4 @@ firstIssueMessage	function	@spy4x/validation/validate	First issue message in a v
 isArkErrors	function	@spy4x/validation/validate	Whether a value is an arktype rejection, without relying on `instanceof`.
 toValidationError	function	@spy4x/validation/validate	Build a ValidationError from arktype's issues.
 validate	function	@spy4x/validation/validate	Parse `value` with an arktype schema exactly once.
-# export surface: sha256 477735def5d4541b1a28a987c99e0606c104f04473f3c9db11a22a8a25780143
+# export surface: sha256 5294923409de3caab3ad6209709b843e89b39206221876600501e536e2615b9b
