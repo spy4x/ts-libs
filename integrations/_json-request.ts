@@ -1,6 +1,9 @@
 /**
- * The JSON request `mastodon.ts` and `bluesky.ts` share: one place for the redirect refusal, the
- * bounded and checked body, the token redaction and the retry rules of a social client.
+ * The JSON request the social and publishing clients (`mastodon.ts`, `bluesky.ts`, `hashnode.ts`,
+ * `linkedin.ts`) share: one place for the redirect refusal, the byte caps, the secret redaction,
+ * the `429` and `Retry-After` handling and the rule that a request which is not idempotent is
+ * never sent again after a `5xx` or a lost answer. Each client keeps only what differs: its URL,
+ * its headers and how it reads the answer.
  *
  * Not an entry point: nothing here is exported from the package.
  *
@@ -10,6 +13,7 @@
 import { readBoundedJson } from "@spy4x/net/bounded-body"
 import { createPostTransport, type PostTransport } from "./_post.ts"
 import {
+  type Clock,
   describeTransportError,
   isRequestTimeout,
   parseRetryAfterMs,
@@ -19,7 +23,9 @@ import {
   type Sleeper,
 } from "./retry.ts"
 
-/** Error bodies are small; a larger one is read as "no detail". */
+/** What replaces a token, a client secret or an authorization code in any error text. */
+export const REDACTED = "<REDACTED:TOKEN>"
+
 const MAX_ERROR_BYTES = 64 * 1024
 const MAX_MESSAGE_CHARS = 200
 const DEFAULT_TIMEOUT_MS = 30_000
@@ -32,10 +38,7 @@ const POLICY: RetryPolicy = {
   jitterRatio: 0.2,
 }
 
-/** Printable ASCII without spaces, so `Headers` cannot throw on it. */
-export const TOKEN_SHAPE = /^[\x21-\x7E]+$/
-
-/** What the caller may inject: the same three settings every client takes. */
+/** The transport settings every client of this kind takes. */
 export interface JsonClientOptions {
   /** Defaults to `globalThis.fetch`. */
   fetch?: typeof fetch
@@ -45,53 +48,67 @@ export interface JsonClientOptions {
   sleep?: Sleeper
 }
 
-/** One request to send. */
+/** One request, and what may be done with its failure. */
 export interface JsonRequest {
   /** Service name for messages, e.g. `mastodon`. */
   service: string
   method: "GET" | "POST"
   url: string
+  /** Every header, credential included. */
   headers: Headers
   body?: string | Uint8Array<ArrayBuffer>
-  /** Cap for the 2xx body. */
+  /** Cap for a success answer's body. */
   maxBytes: number
   /** Whether a `5xx`, a timeout or a transport failure may be sent again. */
   idempotent: boolean
-  /** Values replaced by `<REDACTED:TOKEN>` in any error text the server sends back. */
+  /** `false`: a success answer's body is released unread and `body` is `null`. Default `true`. */
+  readBody?: boolean
+  /** Values that must never appear in an error: the token, a client secret, a code. */
   secrets: readonly string[]
+  /**
+   * Picks the provider's own message out of an error body; `undefined` when it has none. By
+   * default, `error` and `message` joined with ": " (Mastodon's and Bluesky's shape).
+   */
+  detail?: (body: unknown) => string | undefined
 }
 
-/** What a request produced. */
+/** Reads `{ error?, message? }`; anything else reads as no detail. */
+const errorAndMessage = (body: unknown): string | undefined => {
+  const { error, message } = (body ?? {}) as { error?: unknown; message?: unknown }
+  const parts = [error, message].filter((part): part is string => typeof part === "string")
+  return parts.length === 0 ? undefined : parts.join(": ")
+}
+
+/** What one request produced. */
 export type JsonOutcome =
-  | { ok: true; body: unknown }
+  | { ok: true; status: number; headers: Headers; body: unknown }
   | {
     ok: false
-    message: string
-    /** HTTP status, when the server answered. */
     status?: number
+    message: string
     retryable: boolean
     /** True when the server may have acted anyway: a `5xx`, a lost answer, a timeout. */
     uncertain: boolean
     retryAfterMs?: number
   }
 
-/** Builds the transport, or returns why the options are invalid. */
-export const createJsonTransport = (options: JsonClientOptions): PostTransport | string => {
-  const timeout = options.requestTimeoutMs ?? DEFAULT_TIMEOUT_MS
-  if (!Number.isFinite(timeout) || timeout <= 0) {
-    return "invalid options: requestTimeoutMs must be a positive number"
+/** Removes control characters and every secret from provider text, then caps it. */
+export const cleanText = (text: string, secrets: readonly string[]): string => {
+  let clean = text.replace(/\p{Cc}+/gu, " ")
+  for (const secret of secrets) if (secret !== "") clean = clean.split(secret).join(REDACTED)
+  clean = clean.trim()
+  return clean.length > MAX_MESSAGE_CHARS ? `${clean.slice(0, MAX_MESSAGE_CHARS)}...` : clean
+}
+
+/** `input` parsed as an `http`/`https` URL, or `undefined`. */
+export const webUrl = (input: unknown): URL | undefined => {
+  if (typeof input !== "string") return undefined
+  try {
+    const url = new URL(input)
+    return url.protocol === "http:" || url.protocol === "https:" ? url : undefined
+  } catch {
+    return undefined
   }
-  const transport = createPostTransport(POLICY, {
-    fetcher: options.fetch ?? ((input, init) => globalThis.fetch(input, init)),
-    sleep: options.sleep,
-    requestTimeoutMs: timeout,
-  })
-  const jittered = transport.backoff
-  // `Retry-After` is waited exactly, capped at `maxDelayMs`: jitter could cut it short and spend
-  // the next attempt on another 429.
-  transport.backoff = (attempt, retryAfterMs) =>
-    retryAfterMs === undefined ? jittered(attempt) : Math.min(retryAfterMs, POLICY.maxDelayMs)
-  return transport
 }
 
 /**
@@ -110,44 +127,46 @@ export const httpsOrigin = (input: unknown): string | undefined => {
   }
 }
 
-/** `input` parsed as an `http`/`https` URL, or `undefined`. */
-export const webUrl = (input: unknown): URL | undefined => {
-  if (typeof input !== "string") return undefined
-  try {
-    const url = new URL(input)
-    return url.protocol === "http:" || url.protocol === "https:" ? url : undefined
-  } catch {
-    return undefined
-  }
-}
+/** Printable ASCII without spaces, so `Headers` cannot throw on it. */
+export const TOKEN_SHAPE = /^[\x21-\x7E]+$/
 
-/** Removes control characters and every secret from server text, then caps it. */
-const cleanMessage = (text: string, secrets: readonly string[]): string => {
-  let clean = text.replace(/\p{Cc}+/gu, " ")
-  for (const secret of secrets) {
-    if (secret !== "") clean = clean.split(secret).join("<REDACTED:TOKEN>")
+/** Checks the transport settings; returns the transport, or the reason it cannot be built. */
+export const createJsonTransport = (
+  options: JsonClientOptions & { clock?: Clock },
+): PostTransport | string => {
+  const timeout = options.requestTimeoutMs ?? DEFAULT_TIMEOUT_MS
+  if (!Number.isFinite(timeout) || timeout <= 0) {
+    return "invalid options: requestTimeoutMs must be a positive number"
   }
-  clean = clean.trim()
-  return clean.length > MAX_MESSAGE_CHARS ? `${clean.slice(0, MAX_MESSAGE_CHARS)}...` : clean
-}
-
-/** Both APIs answer `{ error, message? }` on failure; anything else reads as no detail. */
-const describeHttpFailure = async (response: Response, request: JsonRequest): Promise<string> => {
-  let detail = ""
-  try {
-    const body = await readBoundedJson(response, { maxBytes: MAX_ERROR_BYTES, timeoutMs: 5_000 })
-    const { error, message } = (body ?? {}) as { error?: unknown; message?: unknown }
-    const parts = [error, message].filter((part): part is string => typeof part === "string")
-    detail = cleanMessage(parts.join(": "), request.secrets)
-  } catch {
-    // `readBoundedJson` cancels the body on every failure it throws for.
-  }
-  return `${request.service} answered HTTP ${response.status}${detail === "" ? "" : `: ${detail}`}`
+  const transport = createPostTransport(POLICY, {
+    fetcher: options.fetch ?? ((input, init) => globalThis.fetch(input, init)),
+    sleep: options.sleep,
+    clock: options.clock,
+    requestTimeoutMs: timeout,
+  })
+  const jittered = transport.backoff
+  // `Retry-After` is waited exactly, capped at `maxDelayMs`: jitter could cut it short and
+  // spend the next attempt on another 429.
+  transport.backoff = (attempt, retryAfterMs) =>
+    retryAfterMs === undefined ? jittered(attempt) : Math.min(retryAfterMs, POLICY.maxDelayMs)
+  return transport
 }
 
 /** A 3xx to a `redirect: "manual"` request; a browser reports it as `opaqueredirect`. */
 const isRedirect = (response: Response): boolean =>
   response.type === "opaqueredirect" || (response.status >= 300 && response.status < 400)
+
+const describeHttpFailure = async (response: Response, request: JsonRequest) => {
+  let detail = ""
+  try {
+    const body = await readBoundedJson(response, { maxBytes: MAX_ERROR_BYTES, timeoutMs: 5_000 })
+    const text = (request.detail ?? errorAndMessage)(body)
+    if (text !== undefined) detail = cleanText(text, request.secrets)
+  } catch {
+    // `readBoundedJson` cancels the body on every failure it throws for.
+  }
+  return `${request.service} answered HTTP ${response.status}${detail === "" ? "" : `: ${detail}`}`
+}
 
 /** Sends one request; never throws. */
 const sendOnce = async (
@@ -156,7 +175,7 @@ const sendOnce = async (
   remainingBudgetMs: number,
 ): Promise<JsonOutcome> => {
   const timeoutMs = Math.max(Math.min(transport.requestTimeoutMs, remainingBudgetMs), 0)
-  const service = request.service
+  const { service } = request
   try {
     const response = await transport.fetcher(request.url, {
       method: request.method,
@@ -170,8 +189,8 @@ const sendOnce = async (
       await releaseResponseBody(response).catch(() => undefined)
       return {
         ok: false,
-        message: `${service} answered with a redirect (${response.status})`,
         status: response.status,
+        message: `${service} answered with a redirect (${response.status})`,
         retryable: false,
         uncertain: false,
       }
@@ -181,16 +200,20 @@ const sendOnce = async (
       const retryAfter = response.headers.get("Retry-After")
       return {
         ok: false,
-        message: await describeHttpFailure(response, request),
         status,
+        message: await describeHttpFailure(response, request),
         retryable: status === 429 || (request.idempotent && status >= 500),
         uncertain: status >= 500,
         retryAfterMs: parseRetryAfterMs(retryAfter),
       }
     }
+    if (request.readBody === false) {
+      await releaseResponseBody(response).catch(() => undefined)
+      return { ok: true, status: response.status, headers: response.headers, body: null }
+    }
     try {
       const body = await readBoundedJson(response, { maxBytes: request.maxBytes, timeoutMs })
-      return { ok: true, body }
+      return { ok: true, status: response.status, headers: response.headers, body }
     } catch (cause) {
       return {
         ok: false,

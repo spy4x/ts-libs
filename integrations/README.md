@@ -22,6 +22,8 @@ Each module's usage is in its module doc, shown by `deno doc` and on JSR.
 - [`@spy4x/integrations/cloudflare`](cloudflare.ts): Cloudflare cache purge by URL.
 - [`@spy4x/integrations/indexnow`](indexnow.ts): IndexNow.
 - [`@spy4x/integrations/devto`](devto.ts): Dev.to (Forem API v1).
+- [`@spy4x/integrations/hashnode`](hashnode.ts): Hashnode (GraphQL API).
+- [`@spy4x/integrations/linkedin`](linkedin.ts): LinkedIn sign-in and shares on a member's profile.
 - [`@spy4x/integrations/mastodon`](mastodon.ts): Mastodon: post a status and read back how it did.
 - [`@spy4x/integrations/bluesky`](bluesky.ts): Bluesky (AT Protocol): sign in with an app password, post a link with its card, find that post again, and read back how it did.
 - [`@spy4x/integrations/share-results`](share-results.ts): The numbers a channel reports for one shared copy of a post, in one shape for every channel.

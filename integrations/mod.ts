@@ -195,6 +195,48 @@ export type {
 } from "./hackernews.ts"
 
 export {
+  findHashnodePostBySlug,
+  HASHNODE_API,
+  HASHNODE_MAX_TAGS,
+  publishHashnodePost,
+  readHashnodePostResults,
+} from "./hashnode.ts"
+export type {
+  FindHashnodePostBySlugOptions,
+  HashnodeClientOptions,
+  HashnodeFindResult,
+  HashnodePostRef,
+  HashnodePublicationRef,
+  HashnodePublishResult,
+  HashnodeResultsResult,
+  PublishHashnodePostOptions,
+  ReadHashnodePostResultsOptions,
+} from "./hashnode.ts"
+
+export {
+  exchangeLinkedinCode,
+  LINKEDIN_DEFAULT_SCOPES,
+  LINKEDIN_MAX_COMMENTARY,
+  LINKEDIN_VERSION,
+  linkedinAuthorizeUrl,
+  postLinkedinShare,
+  readLinkedinMember,
+} from "./linkedin.ts"
+export type {
+  ExchangeLinkedinCodeOptions,
+  LinkedinAuthorizeUrlOptions,
+  LinkedinMember,
+  LinkedinMemberOptions,
+  LinkedinMemberResult,
+  LinkedinPostRef,
+  LinkedinShareLink,
+  LinkedinShareResult,
+  LinkedinTokens,
+  LinkedinTokensResult,
+  PostLinkedinShareOptions,
+} from "./linkedin.ts"
+
+export {
   checkUmami,
   checkUmamiWebsite,
   createUmamiLink,
