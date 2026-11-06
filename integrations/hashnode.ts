@@ -45,6 +45,7 @@ import { type } from "arktype"
 import {
   cleanText,
   createJsonTransport,
+  failure,
   type JsonClientOptions,
   type JsonOutcome,
   sendJson,
@@ -137,8 +138,6 @@ export type HashnodeFindResult =
 export type HashnodeResultsResult =
   | { success: true; output: HashnodePostRef & HashnodeResults; error: "" }
   | { success: false; output: null; error: string }
-
-const failure = (error: string) => ({ success: false as const, output: null, error })
 
 const OBJECT_ID = /^[0-9a-f]{24}$/i
 const HOST = /^[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?$/i

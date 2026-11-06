@@ -58,6 +58,7 @@
 import { type } from "arktype"
 import {
   createJsonTransport,
+  failure,
   type JsonClientOptions,
   sendJson,
   TOKEN_SHAPE,
@@ -170,8 +171,6 @@ export type LinkedinMemberResult =
 export type LinkedinShareResult =
   | { success: true; output: LinkedinPostRef; error: "" }
   | { success: false; output: null; error: string }
-
-const failure = (error: string) => ({ success: false as const, output: null, error })
 
 const SCOPE = /^[A-Za-z0-9_:.-]+$/
 const SUB = /^[A-Za-z0-9_-]{1,100}$/
