@@ -110,6 +110,7 @@ export {
   DEVTO_MAX_TAGS,
   DEVTO_PAGE_SIZE,
   findDevtoArticleByCanonical,
+  readDevtoArticleResults,
 } from "./devto.ts"
 export type {
   CreateDevtoArticleOptions,
@@ -118,8 +119,36 @@ export type {
   DevtoClientOptions,
   DevtoCreateResult,
   DevtoFindResult,
+  DevtoResultsResult,
   FindDevtoArticleByCanonicalOptions,
+  ReadDevtoArticleResultsOptions,
 } from "./devto.ts"
+
+export type { ShareResults } from "./share-results.ts"
+
+export { findRedditPostsByUrl, readRedditPostResults, REDDIT_INFO_LIMIT } from "./reddit.ts"
+export type {
+  FindRedditPostsByUrlOptions,
+  ReadRedditPostResultsOptions,
+  RedditClientOptions,
+  RedditFindResult,
+  RedditPostRef,
+  RedditPostResults,
+  RedditResultsResult,
+} from "./reddit.ts"
+
+export {
+  findHackerNewsStoriesByUrl,
+  HACKERNEWS_SEARCH_LIMIT,
+  readHackerNewsItemResults,
+} from "./hackernews.ts"
+export type {
+  FindHackerNewsStoriesByUrlOptions,
+  HackerNewsFindResult,
+  HackerNewsResultsResult,
+  HackerNewsStoryRef,
+  ReadHackerNewsItemResultsOptions,
+} from "./hackernews.ts"
 
 export {
   checkUmami,
