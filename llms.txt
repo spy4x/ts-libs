@@ -281,6 +281,15 @@ DevtoFindResult	type	@spy4x/integrations	Outcome of findDevtoArticleByCanonical:
 ExchangeRateClientOptions	interface	@spy4x/integrations	Options every client takes.
 ExchangeRateSource	interface	@spy4x/integrations	A provider of daily exchange rates.
 FRANKFURTER_URL	constant	@spy4x/integrations	Frankfurter's public instance.
+HASHNODE_API	constant	@spy4x/integrations	Hashnode's GraphQL endpoint.
+HASHNODE_MAX_TAGS	constant	@spy4x/integrations	The most tags Hashnode accepts on one post.
+HashnodeClientOptions	interface	@spy4x/integrations	Settings every call shares.
+HashnodeFindResult	type	@spy4x/integrations	Outcome of findHashnodePostBySlug; a failure never means "not found".
+HashnodePostRef	interface	@spy4x/integrations	A Hashnode post: its id and public address.
+HashnodePublicationRef	type	@spy4x/integrations	Which publication to look in: its host (`blog.example.com`) or its id.
+HashnodePublishResult	type	@spy4x/integrations	Outcome of publishHashnodePost.
+HashnodeResults	interface	@spy4x/integrations	How a copy did, in the shape every channel answers.
+HashnodeResultsResult	type	@spy4x/integrations	Outcome of readHashnodePostResults.
 HealthchecksClient	class	@spy4x/integrations	healthchecks.io client.
 HealthchecksErrorCode	type	@spy4x/integrations	Failure reasons `ping` can report.
 HealthchecksFailure	interface	@spy4x/integrations	A ping that could not be delivered after retrying.
@@ -359,13 +368,16 @@ createFrankfurterRates	function	@spy4x/integrations	Rates from Frankfurter v2 (`
 createUmamiLink	function	@spy4x/integrations	Creates an Umami link and returns it.
 describeTransportError	function	@spy4x/integrations	Describes a transport failure **without** the request URL.
 findDevtoArticleByCanonical	function	@spy4x/integrations	Finds the key owner's article whose `canonical_url` is `canonicalUrl`, published or not.
+findHashnodePostBySlug	function	@spy4x/integrations	Finds the post with `slug` in a publication, given its host or id.
 healthchecksConfigFromEnv	function	@spy4x/integrations	Reads a ping URL from an environment reader.
 isPermanentStatus	function	@spy4x/integrations	Deprecated: No client in this package uses it; compare `status >= 400 && status < 500` in place. Statuses that will never succeed on a retry: the request itself is wrong.
 isRequestTimeout	function	@spy4x/integrations	True when `cause` is the `TimeoutError` an `AbortSignal.timeout()` firing produces.
 isTransientStatus	function	@spy4x/integrations	Statuses worth another attempt: rate limiting and upstream faults.
 ntfyConfigFromEnv	function	@spy4x/integrations	Reads ntfy settings from an environment reader.
 parseRetryAfterMs	function	@spy4x/integrations	Parses a `Retry-After` header.
+publishHashnodePost	function	@spy4x/integrations	Publishes a post to a Hashnode publication and returns its id and address.
 purgeUrls	function	@spy4x/integrations	Purges `urls` from a Cloudflare zone, 30 per call, and reports the outcome.
+readHashnodePostResults	function	@spy4x/integrations	Reads a post's views, reactions and comments, by its id or by its publication host and slug.
 readUmamiEventValues	function	@spy4x/integrations	Reads how many custom events carried each value of one property, most first, such as the item of an `order-telegram` event (Umami's `GET /api/websites/<id>/event-data/values`).
 readUmamiMetrics	function	@spy4x/integrations	Reads a breakdown of a website's period by `type`, largest first (Umami's `GET /api/websites/<id>/metrics`).
 readUmamiPageviews	function	@spy4x/integrations	Reads page views and visitors per `unit` of a period, in `timezone` (Umami's `GET /api/websites/<id>/pageviews`).
@@ -403,6 +415,18 @@ createCoinGeckoRates	function	@spy4x/integrations/exchange-rates	Coin prices fro
 createExchangeRateApiRates	function	@spy4x/integrations/exchange-rates	Rates from exchangerate-api.com's history endpoint (`GET /v6/{key}/history/{base}/{year}/{month}/{day}`, Pro plan and above).
 createFrankfurterRates	function	@spy4x/integrations/exchange-rates	Rates from Frankfurter v2 (`GET /v2/rates?date=&base=&quotes=`), which needs no key.
 withFallback	function	@spy4x/integrations/exchange-rates	One source made of several: each is asked in turn for the quotes still missing, and the rates are joined.
+HASHNODE_API	constant	@spy4x/integrations/hashnode	Hashnode's GraphQL endpoint.
+HASHNODE_MAX_TAGS	constant	@spy4x/integrations/hashnode	The most tags Hashnode accepts on one post.
+HashnodeClientOptions	interface	@spy4x/integrations/hashnode	Settings every call shares.
+HashnodeFindResult	type	@spy4x/integrations/hashnode	Outcome of findHashnodePostBySlug; a failure never means "not found".
+HashnodePostRef	interface	@spy4x/integrations/hashnode	A Hashnode post: its id and public address.
+HashnodePublicationRef	type	@spy4x/integrations/hashnode	Which publication to look in: its host (`blog.example.com`) or its id.
+HashnodePublishResult	type	@spy4x/integrations/hashnode	Outcome of publishHashnodePost.
+HashnodeResults	interface	@spy4x/integrations/hashnode	How a copy did, in the shape every channel answers.
+HashnodeResultsResult	type	@spy4x/integrations/hashnode	Outcome of readHashnodePostResults.
+findHashnodePostBySlug	function	@spy4x/integrations/hashnode	Finds the post with `slug` in a publication, given its host or id.
+publishHashnodePost	function	@spy4x/integrations/hashnode	Publishes a post to a Hashnode publication and returns its id and address.
+readHashnodePostResults	function	@spy4x/integrations/hashnode	Reads a post's views, reactions and comments, by its id or by its publication host and slug.
 HealthchecksClient	class	@spy4x/integrations/healthchecks	healthchecks.io client.
 HealthchecksErrorCode	type	@spy4x/integrations/healthchecks	Failure reasons `ping` can report.
 HealthchecksFailure	interface	@spy4x/integrations/healthchecks	A ping that could not be delivered after retrying.
@@ -3039,4 +3063,4 @@ firstIssueMessage	function	@spy4x/validation/validate	First issue message in a v
 isArkErrors	function	@spy4x/validation/validate	Whether a value is an arktype rejection, without relying on `instanceof`.
 toValidationError	function	@spy4x/validation/validate	Build a ValidationError from arktype's issues.
 validate	function	@spy4x/validation/validate	Parse `value` with an arktype schema exactly once.
-# export surface: sha256 56b63c2a12fb50cf029509d9f204d90b8fdf7d6141cdf85d16f55116d57e741a
+# export surface: sha256 c2ac95f1ef8ce5f57ac6a0ee812f5ea47d1ba4f601c90db6122cf1a6326d3901

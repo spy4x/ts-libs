@@ -9,6 +9,7 @@
     "./cloudflare": "./cloudflare.ts",
     "./indexnow": "./indexnow.ts",
     "./devto": "./devto.ts",
+    "./hashnode": "./hashnode.ts",
     "./umami": "./umami.ts",
     "./push": "./push.ts",
     "./push-file-store": "./push-file-store.ts",
