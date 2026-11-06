@@ -128,7 +128,6 @@ export { postMastodonStatus, readMastodonStatusResults } from "./mastodon.ts"
 export type {
   MastodonClientOptions,
   MastodonPostResult,
-  MastodonResults,
   MastodonResultsResult,
   MastodonStatusRef,
   MastodonStatusResults,
@@ -158,7 +157,6 @@ export type {
   BlueskyPostRef,
   BlueskyPostResult,
   BlueskyPostResults,
-  BlueskyResults,
   BlueskyResultsResult,
   BlueskySession,
   BlueskySessionResult,
