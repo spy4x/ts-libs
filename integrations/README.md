@@ -23,6 +23,7 @@ Each module's usage is in its module doc, shown by `deno doc` and on JSR.
 - [`@spy4x/integrations/indexnow`](indexnow.ts): IndexNow.
 - [`@spy4x/integrations/devto`](devto.ts): Dev.to (Forem API v1).
 - [`@spy4x/integrations/hashnode`](hashnode.ts): Hashnode (GraphQL API).
+- [`@spy4x/integrations/linkedin`](linkedin.ts): LinkedIn sign-in and shares on a member's profile.
 - [`@spy4x/integrations/umami`](umami.ts): A small client for a self-hosted Umami (v3).
 - [`@spy4x/integrations/push`](push.ts): Web Push sender.
 - [`@spy4x/integrations/push-file-store`](push-file-store.ts): A push subscription store for an app with no database.

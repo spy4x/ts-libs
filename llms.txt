@@ -301,8 +301,19 @@ HealthchecksSuccess	interface	@spy4x/integrations	A ping that reached healthchec
 INDEXNOW_MAX_URLS	constant	@spy4x/integrations	The most addresses IndexNow accepts in one submission.
 IndexNowOptions	interface	@spy4x/integrations	Options for submitIndexNow.
 IndexNowResult	interface	@spy4x/integrations	Outcome of a submission: `output` describes what happened on success, `error` on failure.
+LINKEDIN_DEFAULT_SCOPES	constant	@spy4x/integrations	The scopes that sign a member in and let the app post as them.
+LINKEDIN_MAX_COMMENTARY	constant	@spy4x/integrations	The longest `commentary` LinkedIn accepts, in characters.
+LINKEDIN_VERSION	constant	@spy4x/integrations	The Posts API version sent by default, `YYYYMM`: the newest LinkedIn listed in 2026-10.
 LLM_DEFAULT_TIMEOUT_MS	constant	@spy4x/integrations	How long one call may take by default: a model can think for a while before it answers.
 LLM_PRESETS	constant	@spy4x/integrations	The OpenAI-compatible endpoints of OpenAI, DeepSeek, Google Gemini and a local Ollama.
+LinkedinMember	interface	@spy4x/integrations	The signed-in member.
+LinkedinMemberOptions	interface	@spy4x/integrations	Settings the member's calls share.
+LinkedinMemberResult	type	@spy4x/integrations	Outcome of readLinkedinMember.
+LinkedinPostRef	interface	@spy4x/integrations	A LinkedIn post: its URN and public address.
+LinkedinShareLink	interface	@spy4x/integrations	The article a share links to.
+LinkedinShareResult	type	@spy4x/integrations	Outcome of postLinkedinShare.
+LinkedinTokens	interface	@spy4x/integrations	A member's tokens.
+LinkedinTokensResult	type	@spy4x/integrations	Outcome of exchangeLinkedinCode.
 LlmEndpoint	interface	@spy4x/integrations	Where a provider's OpenAI-compatible API lives and how it differs from OpenAI's.
 LlmError	interface	@spy4x/integrations	A failed call.
 LlmErrorCode	type	@spy4x/integrations	Why a call failed.
@@ -367,17 +378,21 @@ createExponentialBackoff	function	@spy4x/integrations	Deprecated: Thin wrapper o
 createFrankfurterRates	function	@spy4x/integrations	Rates from Frankfurter v2 (`GET /v2/rates?date=&base=&quotes=`), which needs no key.
 createUmamiLink	function	@spy4x/integrations	Creates an Umami link and returns it.
 describeTransportError	function	@spy4x/integrations	Describes a transport failure **without** the request URL.
+exchangeLinkedinCode	function	@spy4x/integrations	Trades the callback's `code` for the member's tokens.
 findDevtoArticleByCanonical	function	@spy4x/integrations	Finds the key owner's article whose `canonical_url` is `canonicalUrl`, published or not.
 findHashnodePostBySlug	function	@spy4x/integrations	Finds the post with `slug` in a publication, given its host or id.
 healthchecksConfigFromEnv	function	@spy4x/integrations	Reads a ping URL from an environment reader.
 isPermanentStatus	function	@spy4x/integrations	Deprecated: No client in this package uses it; compare `status >= 400 && status < 500` in place. Statuses that will never succeed on a retry: the request itself is wrong.
 isRequestTimeout	function	@spy4x/integrations	True when `cause` is the `TimeoutError` an `AbortSignal.timeout()` firing produces.
 isTransientStatus	function	@spy4x/integrations	Statuses worth another attempt: rate limiting and upstream faults.
+linkedinAuthorizeUrl	function	@spy4x/integrations	Builds the address that asks the member to sign in and grant `scopes`.
 ntfyConfigFromEnv	function	@spy4x/integrations	Reads ntfy settings from an environment reader.
 parseRetryAfterMs	function	@spy4x/integrations	Parses a `Retry-After` header.
+postLinkedinShare	function	@spy4x/integrations	Shares `link` with `commentary` on the member's own profile, visible to everyone.
 publishHashnodePost	function	@spy4x/integrations	Publishes a post to a Hashnode publication and returns its id and address.
 purgeUrls	function	@spy4x/integrations	Purges `urls` from a Cloudflare zone, 30 per call, and reports the outcome.
 readHashnodePostResults	function	@spy4x/integrations	Reads a post's views, reactions and comments, by its id or by its publication host and slug.
+readLinkedinMember	function	@spy4x/integrations	Reads the signed-in member's id and author URN.
 readUmamiEventValues	function	@spy4x/integrations	Reads how many custom events carried each value of one property, most first, such as the item of an `order-telegram` event (Umami's `GET /api/websites/<id>/event-data/values`).
 readUmamiMetrics	function	@spy4x/integrations	Reads a breakdown of a website's period by `type`, largest first (Umami's `GET /api/websites/<id>/metrics`).
 readUmamiPageviews	function	@spy4x/integrations	Reads page views and visitors per `unit` of a period, in `timezone` (Umami's `GET /api/websites/<id>/pageviews`).
@@ -440,6 +455,21 @@ INDEXNOW_MAX_URLS	constant	@spy4x/integrations/indexnow	The most addresses Index
 IndexNowOptions	interface	@spy4x/integrations/indexnow	Options for submitIndexNow.
 IndexNowResult	interface	@spy4x/integrations/indexnow	Outcome of a submission: `output` describes what happened on success, `error` on failure.
 submitIndexNow	function	@spy4x/integrations/indexnow	Submits `urls` to IndexNow and reports the outcome.
+LINKEDIN_DEFAULT_SCOPES	constant	@spy4x/integrations/linkedin	The scopes that sign a member in and let the app post as them.
+LINKEDIN_MAX_COMMENTARY	constant	@spy4x/integrations/linkedin	The longest `commentary` LinkedIn accepts, in characters.
+LINKEDIN_VERSION	constant	@spy4x/integrations/linkedin	The Posts API version sent by default, `YYYYMM`: the newest LinkedIn listed in 2026-10.
+LinkedinMember	interface	@spy4x/integrations/linkedin	The signed-in member.
+LinkedinMemberOptions	interface	@spy4x/integrations/linkedin	Settings the member's calls share.
+LinkedinMemberResult	type	@spy4x/integrations/linkedin	Outcome of readLinkedinMember.
+LinkedinPostRef	interface	@spy4x/integrations/linkedin	A LinkedIn post: its URN and public address.
+LinkedinShareLink	interface	@spy4x/integrations/linkedin	The article a share links to.
+LinkedinShareResult	type	@spy4x/integrations/linkedin	Outcome of postLinkedinShare.
+LinkedinTokens	interface	@spy4x/integrations/linkedin	A member's tokens.
+LinkedinTokensResult	type	@spy4x/integrations/linkedin	Outcome of exchangeLinkedinCode.
+exchangeLinkedinCode	function	@spy4x/integrations/linkedin	Trades the callback's `code` for the member's tokens.
+linkedinAuthorizeUrl	function	@spy4x/integrations/linkedin	Builds the address that asks the member to sign in and grant `scopes`.
+postLinkedinShare	function	@spy4x/integrations/linkedin	Shares `link` with `commentary` on the member's own profile, visible to everyone.
+readLinkedinMember	function	@spy4x/integrations/linkedin	Reads the signed-in member's id and author URN.
 ChatClient	interface	@spy4x/integrations/llm	A configured client.
 ChatJsonRequest	interface	@spy4x/integrations/llm	Options for chatJson.
 ChatJsonResult	type	@spy4x/integrations/llm	Outcome of chatJson.
@@ -3063,4 +3093,4 @@ firstIssueMessage	function	@spy4x/validation/validate	First issue message in a v
 isArkErrors	function	@spy4x/validation/validate	Whether a value is an arktype rejection, without relying on `instanceof`.
 toValidationError	function	@spy4x/validation/validate	Build a ValidationError from arktype's issues.
 validate	function	@spy4x/validation/validate	Parse `value` with an arktype schema exactly once.
-# export surface: sha256 c2ac95f1ef8ce5f57ac6a0ee812f5ea47d1ba4f601c90db6122cf1a6326d3901
+# export surface: sha256 5d7bdde52f18282002ca7e08b63870b3433b7de1bf935e506d1cf7f98c161d63

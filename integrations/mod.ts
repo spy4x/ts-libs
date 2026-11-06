@@ -142,6 +142,29 @@ export type {
 } from "./hashnode.ts"
 
 export {
+  exchangeLinkedinCode,
+  LINKEDIN_DEFAULT_SCOPES,
+  LINKEDIN_MAX_COMMENTARY,
+  LINKEDIN_VERSION,
+  linkedinAuthorizeUrl,
+  postLinkedinShare,
+  readLinkedinMember,
+} from "./linkedin.ts"
+export type {
+  ExchangeLinkedinCodeOptions,
+  LinkedinAuthorizeUrlOptions,
+  LinkedinMember,
+  LinkedinMemberOptions,
+  LinkedinMemberResult,
+  LinkedinPostRef,
+  LinkedinShareLink,
+  LinkedinShareResult,
+  LinkedinTokens,
+  LinkedinTokensResult,
+  PostLinkedinShareOptions,
+} from "./linkedin.ts"
+
+export {
   checkUmami,
   checkUmamiWebsite,
   createUmamiLink,
