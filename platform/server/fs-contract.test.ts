@@ -294,6 +294,8 @@ export function describeFileSystemContract(
         await fs.mkdirp(`${root}/sub`)
         const file = await fs.stat!(`${root}/a.txt`)
         expect(file).toMatchObject({ isFile: true, isDirectory: false, size: 5 })
+        // Deno's `node:fs` already reports whole milliseconds, so on this tier this line cannot
+        // catch a `nodeFileSystem` that keeps real Node's fraction.
         expect(Number.isInteger(file!.mtimeMs)).toBe(true)
         // Slack for a file system clock that rounds to whole seconds.
         expect(file!.mtimeMs).toBeGreaterThanOrEqual(before - 2000)
