@@ -10,6 +10,7 @@
     "./indexnow": "./indexnow.ts",
     "./devto": "./devto.ts",
     "./mastodon": "./mastodon.ts",
+    "./bluesky": "./bluesky.ts",
     "./umami": "./umami.ts",
     "./push": "./push.ts",
     "./push-file-store": "./push-file-store.ts",
