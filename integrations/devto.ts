@@ -1,5 +1,6 @@
 /**
- * Dev.to (Forem API v1): cross-post an article and find one by its canonical address.
+ * Dev.to (Forem API v1): cross-post an article, find one by its canonical address and read how it
+ * did.
  *
  * A blog that cross-posts sets `canonical_url` to its own page, so search engines rank the
  * original. Posting is not idempotent, so the pair is meant to be used together: look the
@@ -16,7 +17,7 @@
  *  - The functions never throw.
  *
  * Cross-posts an article to Dev.to (Forem API v1) with `canonical_url` pointing at the original, so
- * the copy helps the original's search ranking. Both return `{ success, output, error }` and never
+ * the copy helps the original's search ranking. All three return `{ success, output, error }` and never
  * throw.
  *
  * - **`createDevtoArticle({ apiKey, article, fetch?, requestTimeoutMs?, sleep? })`** posts
@@ -27,6 +28,10 @@
  *   reads `/api/articles/me/all` 1,000 articles per page until an empty page, and answers the
  *   article whose `canonical_url` matches after URL parsing, or `output: null`. A malformed page, or
  *   more than 100 pages, is a failure, never "not found".
+ * - **`readDevtoArticleResults({ apiKey, id, … })`** reads the same listing until the article with
+ *   that id, and answers its {@link ShareResults}: `views` is `page_views_count` (reported to the
+ *   owner only; `null` when absent), `reactions` is `public_reactions_count`, `comments` is
+ *   `comments_count`, `score` is `null`. `output` is `null` when no article of the key has the id.
  * - **Look up before posting.** Posting is not idempotent. Only `429` is retried on a post; after a
  *   `5xx`, a timeout or a dropped connection the error says the article may exist. The lookup also
  *   retries those. `Retry-After` is waited exactly, up to 30 s; three attempts at most.
@@ -51,6 +56,7 @@ import {
   runWithRetry,
   type Sleeper,
 } from "./retry.ts"
+import type { ShareResults } from "./share-results.ts"
 
 const API = "https://dev.to/api"
 
@@ -121,6 +127,20 @@ export interface FindDevtoArticleByCanonicalOptions extends DevtoClientOptions {
   canonicalUrl: string
 }
 
+/** Options for {@link readDevtoArticleResults}. */
+export interface ReadDevtoArticleResultsOptions extends DevtoClientOptions {
+  /** The article's numeric id, as {@link createDevtoArticle} answers it. */
+  id: number
+}
+
+/**
+ * Outcome of {@link readDevtoArticleResults}: the article's {@link ShareResults} (`score` is
+ * always `null`), or `null` when none of the key's articles has that id.
+ */
+export type DevtoResultsResult =
+  | { success: true; output: ShareResults | null; error: "" }
+  | { success: false; output: null; error: string }
+
 /** Outcome of {@link createDevtoArticle}: the new article on success, `error` on failure. */
 export type DevtoCreateResult =
   | { success: true; output: DevtoArticleRef; error: "" }
@@ -150,6 +170,13 @@ const ArticleInput = type({
 })
 
 const ArticleRef = type({ id: "number.integer > 0", url: "string" })
+
+/** The counts a `/articles/me/all` entry carries; `page_views_count` is the owner's alone. */
+const Stats = type({
+  "page_views_count?": "number.integer >= 0 | null",
+  "public_reactions_count?": "number.integer >= 0",
+  "comments_count?": "number.integer >= 0",
+})
 
 const Page = type({
   id: "number.integer > 0",
@@ -414,25 +441,90 @@ export const findDevtoArticleByCanonical = async (
     return failure("invalid options: canonicalUrl must be an http or https URL")
   }
 
+  const scan = await scanOwnArticles(
+    transport,
+    options.apiKey,
+    (entry) => webUrl(entry.canonical_url)?.href === wanted,
+  )
+  if (!scan.ok) return failure(scan.error)
+  if (scan.entry === null) return { success: true, output: null, error: "" }
+  const ref = toRef(scan.entry)
+  if (ref === undefined) return failure(`dev.to article ${scan.entry.id} has no https url`)
+  return { success: true, output: ref, error: "" }
+}
+
+/**
+ * Reads how one of the key owner's articles did: views, reactions and comments. Never throws.
+ *
+ * Forem reports views (`page_views_count`) only to the owner, in `/articles/me/all`, so this
+ * reads that listing page by page until the article with `id` turns up, as
+ * {@link findDevtoArticleByCanonical} does. `output` is `null` when no article of the key has
+ * that id; `views` is `null` when Forem leaves the field out. A malformed page fails the read.
+ */
+export const readDevtoArticleResults = async (
+  options: ReadDevtoArticleResultsOptions,
+): Promise<DevtoResultsResult> => {
+  if (typeof options !== "object" || options === null) {
+    return failure("invalid options: expected an options object")
+  }
+  const transport = prepare(options)
+  if (typeof transport === "string") return failure(transport)
+  if (!Number.isSafeInteger(options.id) || options.id <= 0) {
+    return failure("invalid options: id must be a positive integer")
+  }
+  const scan = await scanOwnArticles(transport, options.apiKey, (entry) => entry.id === options.id)
+  if (!scan.ok) return failure(scan.error)
+  if (scan.entry === null) return { success: true, output: null, error: "" }
+  const stats = Stats(scan.raw)
+  if (stats instanceof type.errors) {
+    return failure(`dev.to article ${options.id} has malformed counts: ${stats.summary}`)
+  }
+  return {
+    success: true,
+    output: {
+      views: stats.page_views_count ?? null,
+      reactions: stats.public_reactions_count ?? null,
+      comments: stats.comments_count ?? null,
+      score: null,
+    },
+    error: "",
+  }
+}
+
+type PageEntry = typeof Page.infer[number]
+
+/** What {@link scanOwnArticles} found: the matching entry and its raw object, or `null`. */
+type Scan =
+  | { ok: true; entry: PageEntry; raw: unknown }
+  | { ok: true; entry: null; raw: null }
+  | { ok: false; error: string }
+
+/**
+ * Reads `/articles/me/all` page by page until `matches` picks an entry or a page is empty. A
+ * malformed page, or more than {@link DEVTO_MAX_PAGES} pages, is a failure, never "not found".
+ */
+const scanOwnArticles = async (
+  transport: PostTransport,
+  apiKey: string,
+  matches: (entry: PageEntry) => boolean,
+): Promise<Scan> => {
   for (let page = 1; page <= DEVTO_MAX_PAGES; page++) {
-    const outcome = await send(transport, options.apiKey, {
+    const outcome = await send(transport, apiKey, {
       method: "GET",
       url: `${API}/articles/me/all?page=${page}&per_page=${DEVTO_PAGE_SIZE}`,
       maxBytes: MAX_PAGE_BYTES,
       idempotent: true,
     })
-    if (!outcome.ok) return failure(outcome.message)
+    if (!outcome.ok) return { ok: false, error: outcome.message }
     const entries = Page(outcome.body)
     if (entries instanceof type.errors) {
-      return failure(`dev.to page ${page} is not a list of articles`)
+      return { ok: false, error: `dev.to page ${page} is not a list of articles` }
     }
-    if (entries.length === 0) return { success: true, output: null, error: "" }
-    const match = entries.find((entry) => webUrl(entry.canonical_url)?.href === wanted)
-    if (match !== undefined) {
-      const ref = toRef(match)
-      if (ref === undefined) return failure(`dev.to article ${match.id} has no https url`)
-      return { success: true, output: ref, error: "" }
+    if (entries.length === 0) return { ok: true, entry: null, raw: null }
+    const index = entries.findIndex(matches)
+    if (index !== -1) {
+      return { ok: true, entry: entries[index], raw: (outcome.body as unknown[])[index] }
     }
   }
-  return failure(`dev.to lookup stopped after ${DEVTO_MAX_PAGES} pages`)
+  return { ok: false, error: `dev.to lookup stopped after ${DEVTO_MAX_PAGES} pages` }
 }

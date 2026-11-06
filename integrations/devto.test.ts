@@ -4,6 +4,7 @@ import {
   DEVTO_MAX_PAGES,
   type DevtoArticleInput,
   findDevtoArticleByCanonical,
+  readDevtoArticleResults,
 } from "./devto.ts"
 
 const KEY = "s3cr3t-DEVTO-key"
@@ -218,6 +219,7 @@ Deno.test("never puts the api key in an error, whatever fails", async () => {
         fetch: fetcher,
         sleep,
       }),
+      await readDevtoArticleResults({ apiKey: KEY, id: 42, fetch: fetcher, sleep }),
     ]
     for (const result of results) {
       assertEquals(result.success, false)
@@ -323,5 +325,58 @@ Deno.test("refuses a canonicalUrl that is not http or https without a request", 
     fetch: fetcher,
   })
   assertStringIncludes(result.error, "canonicalUrl")
+  assertEquals(calls.length, 0)
+})
+
+const stats = (id: number, counts: Record<string, unknown>) => ({ ...entry(id, null), ...counts })
+
+Deno.test("reads views, reactions and comments of the key's article with that id", async () => {
+  const { calls, fetcher } = stub((n) =>
+    json(
+      n === 1 ? [stats(1, { page_views_count: 5 })] : [
+        stats(42, { page_views_count: 310, public_reactions_count: 12, comments_count: 3 }),
+      ],
+    )
+  )
+  const result = await readDevtoArticleResults({ apiKey: KEY, id: 42, fetch: fetcher })
+  assertEquals(result, {
+    success: true,
+    output: { views: 310, reactions: 12, comments: 3, score: null },
+    error: "",
+  })
+  assertEquals(calls.map((call) => call.url), [
+    "https://dev.to/api/articles/me/all?page=1&per_page=1000",
+    "https://dev.to/api/articles/me/all?page=2&per_page=1000",
+  ])
+  assertEquals(calls[1].headers.get("api-key"), KEY)
+})
+
+Deno.test("reports views as null when Forem leaves page_views_count out", async () => {
+  const { fetcher } = stub(() =>
+    json([stats(42, { public_reactions_count: 0, comments_count: 0 })])
+  )
+  const result = await readDevtoArticleResults({ apiKey: KEY, id: 42, fetch: fetcher })
+  assertEquals(result.output, { views: null, reactions: 0, comments: 0, score: null })
+})
+
+Deno.test("answers null when none of the key's articles has the id", async () => {
+  const { fetcher } = stub((n) => json(n === 1 ? [stats(1, {})] : []))
+  const result = await readDevtoArticleResults({ apiKey: KEY, id: 42, fetch: fetcher })
+  assertEquals(result, { success: true, output: null, error: "" })
+})
+
+Deno.test("fails on malformed counts instead of reporting them", async () => {
+  const { fetcher } = stub(() => json([stats(42, { comments_count: "3" })]))
+  const result = await readDevtoArticleResults({ apiKey: KEY, id: 42, fetch: fetcher })
+  assertEquals(result.success, false)
+  assertStringIncludes(result.error, "malformed counts")
+})
+
+Deno.test("refuses an id that is not a positive integer without a request", async () => {
+  const { calls, fetcher } = stub(() => json([]))
+  for (const id of [0, -1, 1.5, Number.NaN]) {
+    const result = await readDevtoArticleResults({ apiKey: KEY, id, fetch: fetcher })
+    assertStringIncludes(result.error, "id must be a positive integer")
+  }
   assertEquals(calls.length, 0)
 })

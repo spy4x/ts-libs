@@ -110,6 +110,7 @@ export {
   DEVTO_MAX_TAGS,
   DEVTO_PAGE_SIZE,
   findDevtoArticleByCanonical,
+  readDevtoArticleResults,
 } from "./devto.ts"
 export type {
   CreateDevtoArticleOptions,
@@ -118,8 +119,80 @@ export type {
   DevtoClientOptions,
   DevtoCreateResult,
   DevtoFindResult,
+  DevtoResultsResult,
   FindDevtoArticleByCanonicalOptions,
+  ReadDevtoArticleResultsOptions,
 } from "./devto.ts"
+
+export { postMastodonStatus, readMastodonStatusResults } from "./mastodon.ts"
+export type {
+  MastodonClientOptions,
+  MastodonPostResult,
+  MastodonResults,
+  MastodonResultsResult,
+  MastodonStatusRef,
+  MastodonStatusResults,
+  MastodonVisibility,
+  PostMastodonStatusOptions,
+  ReadMastodonStatusResultsOptions,
+} from "./mastodon.ts"
+
+export {
+  BLUESKY_DEFAULT_SERVICE,
+  BLUESKY_FEED_PAGES,
+  BLUESKY_MAX_GRAPHEMES,
+  BLUESKY_MAX_TEXT_BYTES,
+  BLUESKY_MAX_THUMB_BYTES,
+  BLUESKY_PUBLIC_APPVIEW,
+  createBlueskySession,
+  findBlueskyPostByLink,
+  postBlueskyLink,
+  readBlueskyPostResults,
+  uploadBlueskyBlob,
+} from "./bluesky.ts"
+export type {
+  BlueskyBlob,
+  BlueskyBlobResult,
+  BlueskyFindResult,
+  BlueskyLinkCard,
+  BlueskyPostRef,
+  BlueskyPostResult,
+  BlueskyPostResults,
+  BlueskyResults,
+  BlueskyResultsResult,
+  BlueskySession,
+  BlueskySessionResult,
+  CreateBlueskySessionOptions,
+  FindBlueskyPostByLinkOptions,
+  PostBlueskyLinkOptions,
+  ReadBlueskyPostResultsOptions,
+  UploadBlueskyBlobOptions,
+} from "./bluesky.ts"
+export type { ShareResults } from "./share-results.ts"
+
+export { findRedditPostsByUrl, readRedditPostResults, REDDIT_INFO_LIMIT } from "./reddit.ts"
+export type {
+  FindRedditPostsByUrlOptions,
+  ReadRedditPostResultsOptions,
+  RedditClientOptions,
+  RedditFindResult,
+  RedditPostRef,
+  RedditPostResults,
+  RedditResultsResult,
+} from "./reddit.ts"
+
+export {
+  findHackerNewsStoriesByUrl,
+  HACKERNEWS_SEARCH_LIMIT,
+  readHackerNewsItemResults,
+} from "./hackernews.ts"
+export type {
+  FindHackerNewsStoriesByUrlOptions,
+  HackerNewsFindResult,
+  HackerNewsResultsResult,
+  HackerNewsStoryRef,
+  ReadHackerNewsItemResultsOptions,
+} from "./hackernews.ts"
 
 export {
   findHashnodePostBySlug,

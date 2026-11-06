@@ -1,8 +1,9 @@
 /**
- * The JSON request that `hashnode.ts` and `linkedin.ts` share: one place for the redirect
- * refusal, the byte caps, the secret redaction, the `429` and `Retry-After` handling and the rule
- * that a request which is not idempotent is never sent again after a `5xx` or a lost answer.
- * Each client keeps only what differs: its URL, its headers and how it reads the answer.
+ * The JSON request the social and publishing clients (`mastodon.ts`, `bluesky.ts`, `hashnode.ts`,
+ * `linkedin.ts`) share: one place for the redirect refusal, the byte caps, the secret redaction,
+ * the `429` and `Retry-After` handling and the rule that a request which is not idempotent is
+ * never sent again after a `5xx` or a lost answer. Each client keeps only what differs: its URL,
+ * its headers and how it reads the answer.
  *
  * Not an entry point: nothing here is exported from the package.
  *
@@ -49,23 +50,33 @@ export interface JsonClientOptions {
 
 /** One request, and what may be done with its failure. */
 export interface JsonRequest {
-  /** Service name for messages, e.g. `hashnode`. */
+  /** Service name for messages, e.g. `mastodon`. */
   service: string
   method: "GET" | "POST"
   url: string
   /** Every header, credential included. */
   headers: Headers
-  body?: string
+  body?: string | Uint8Array<ArrayBuffer>
   /** Cap for a success answer's body. */
   maxBytes: number
   /** Whether a `5xx`, a timeout or a transport failure may be sent again. */
   idempotent: boolean
-  /** `false`: a success answer's body is released unread and `body` is `null`. */
-  readBody: boolean
+  /** `false`: a success answer's body is released unread and `body` is `null`. Default `true`. */
+  readBody?: boolean
   /** Values that must never appear in an error: the token, a client secret, a code. */
   secrets: readonly string[]
-  /** Picks the provider's own message out of an error body; `undefined` when it has none. */
-  detail: (body: unknown) => string | undefined
+  /**
+   * Picks the provider's own message out of an error body; `undefined` when it has none. By
+   * default, `error` and `message` joined with ": " (Mastodon's and Bluesky's shape).
+   */
+  detail?: (body: unknown) => string | undefined
+}
+
+/** Reads `{ error?, message? }`; anything else reads as no detail. */
+const errorAndMessage = (body: unknown): string | undefined => {
+  const { error, message } = (body ?? {}) as { error?: unknown; message?: unknown }
+  const parts = [error, message].filter((part): part is string => typeof part === "string")
+  return parts.length === 0 ? undefined : parts.join(": ")
 }
 
 /** What one request produced. */
@@ -95,6 +106,22 @@ export const webUrl = (input: unknown): URL | undefined => {
   try {
     const url = new URL(input)
     return url.protocol === "http:" || url.protocol === "https:" ? url : undefined
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * `input` as an `https` origin with nothing else (no path, query, fragment or credentials), or
+ * `undefined`. A base URL with a path would be silently dropped by `new URL(path, base)`.
+ */
+export const httpsOrigin = (input: unknown): string | undefined => {
+  if (typeof input !== "string") return undefined
+  try {
+    const url = new URL(input)
+    const bare = url.username === "" && url.password === "" && url.search === "" &&
+      url.hash === "" && url.pathname === "/"
+    return url.protocol === "https:" && bare ? url.origin : undefined
   } catch {
     return undefined
   }
@@ -133,7 +160,7 @@ const describeHttpFailure = async (response: Response, request: JsonRequest) => 
   let detail = ""
   try {
     const body = await readBoundedJson(response, { maxBytes: MAX_ERROR_BYTES, timeoutMs: 5_000 })
-    const text = request.detail(body)
+    const text = (request.detail ?? errorAndMessage)(body)
     if (text !== undefined) detail = cleanText(text, request.secrets)
   } catch {
     // `readBoundedJson` cancels the body on every failure it throws for.
@@ -154,6 +181,7 @@ const sendOnce = async (
       method: request.method,
       headers: request.headers,
       body: request.body,
+      // Following a redirect would carry the token to wherever `Location` points.
       redirect: "manual",
       signal: AbortSignal.timeout(timeoutMs),
     })
@@ -179,7 +207,7 @@ const sendOnce = async (
         retryAfterMs: parseRetryAfterMs(retryAfter),
       }
     }
-    if (!request.readBody) {
+    if (request.readBody === false) {
       await releaseResponseBody(response).catch(() => undefined)
       return { ok: true, status: response.status, headers: response.headers, body: null }
     }
@@ -197,6 +225,7 @@ const sendOnce = async (
       }
     }
   } catch (cause) {
+    // Only the error class: `fetch` puts the whole URL in its error text.
     return {
       ok: false,
       message: isRequestTimeout(cause)
@@ -229,3 +258,6 @@ export const sendJson = async (
   })
   return run.result
 }
+
+/** The failure half of every result in these clients. */
+export const failure = (error: string) => ({ success: false as const, output: null, error })
