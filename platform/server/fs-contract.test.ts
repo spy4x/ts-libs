@@ -246,6 +246,63 @@ export function describeFileSystemContract(
       })
     })
 
+    it("readBytes with a range reads from the offset, at most length bytes, nothing past the end", async () => {
+      await withFixture(open, async (fs, root) => {
+        const path = `${root}/log.jsonl`
+        await fs.writeBytes!(path, new Uint8Array([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]))
+        expect(await fs.readBytes!(path, { offset: 4 })).toEqual(new Uint8Array([4, 5, 6, 7, 8, 9]))
+        expect(await fs.readBytes!(path, { offset: 4, length: 3 })).toEqual(
+          new Uint8Array([4, 5, 6]),
+        )
+        expect(await fs.readBytes!(path, { length: 2 })).toEqual(new Uint8Array([0, 1]))
+        expect(await fs.readBytes!(path, { offset: 8, length: 5 })).toEqual(new Uint8Array([8, 9]))
+        expect(await fs.readBytes!(path, { offset: 10 })).toEqual(new Uint8Array())
+        expect(await fs.readBytes!(path, { offset: 50 })).toEqual(new Uint8Array())
+        // Reading from the old size returns only what was appended since.
+        await fs.appendText(path, "new\n")
+        expect(await fs.readBytes!(path, { offset: 10 })).toEqual(new TextEncoder().encode("new\n"))
+        expect(await fs.readBytes!(`${root}/absent.bin`, { offset: 1 })).toBeNull()
+      })
+    })
+
+    it("readBytes rejects a negative or fractional offset or length", async () => {
+      await withFixture(open, async (fs, root) => {
+        const path = `${root}/a.bin`
+        await fs.writeBytes!(path, new Uint8Array([1, 2, 3]))
+        await expect(fs.readBytes!(path, { offset: -1 })).rejects.toThrow("non-negative integer")
+        await expect(fs.readBytes!(path, { length: 1.5 })).rejects.toThrow("non-negative integer")
+        await expect(fs.readBytes!(path, { offset: NaN })).rejects.toThrow("non-negative integer")
+      })
+    })
+
+    it("readBytes from an offset reads a range longer than one read chunk", async () => {
+      await withFixture(open, async (fs, root) => {
+        const path = `${root}/big.bin`
+        const data = new Uint8Array(200_000).map((_, index) => index % 251)
+        await fs.writeBytes!(path, data)
+        expect(await fs.readBytes!(path, { offset: 70_001 })).toEqual(data.slice(70_001))
+        expect(await fs.readBytes!(path, { offset: 1, length: 150_000 })).toEqual(
+          data.slice(1, 150_001),
+        )
+      })
+    })
+
+    it("stat reports a file's size and recent mtime, a folder's kind, and null for a missing path", async () => {
+      await withFixture(open, async (fs, root) => {
+        const before = Date.now()
+        await fs.writeText(`${root}/a.txt`, "ü€") // 5 bytes
+        await fs.mkdirp(`${root}/sub`)
+        const file = await fs.stat!(`${root}/a.txt`)
+        expect(file).toMatchObject({ isFile: true, isDirectory: false, size: 5 })
+        expect(Number.isInteger(file!.mtimeMs)).toBe(true)
+        // Slack for a file system clock that rounds to whole seconds.
+        expect(file!.mtimeMs).toBeGreaterThanOrEqual(before - 2000)
+        expect(file!.mtimeMs).toBeLessThanOrEqual(Date.now() + 2000)
+        expect(await fs.stat!(`${root}/sub`)).toMatchObject({ isFile: false, isDirectory: true })
+        expect(await fs.stat!(`${root}/absent`)).toBeNull()
+      })
+    })
+
     it("removeTree removes a folder with everything in it, and a missing path is not an error", async () => {
       await withFixture(open, async (fs, root) => {
         await fs.mkdirp(`${root}/job/nested`)

@@ -6,6 +6,7 @@
 
 import { join } from "@std/path"
 
+import { checkRange, readUpTo } from "./_read-range.ts"
 import type { ByteReader, FileSystemPort, LockHandle, WalkEntry } from "./ports.ts"
 
 /** Node/Deno error shape carrying a string code — `ENOENT`, `EEXIST`, … */
@@ -71,8 +72,10 @@ export const denoFileSystem: FileSystemPort = {
     }
   },
 
-  mkdirp(path) {
-    return Deno.mkdir(path, { recursive: true }).then(() => {})
+  async mkdirp(path, options) {
+    await Deno.mkdir(path, { recursive: true, ...modeOption(options?.mode) })
+    // `mkdir` leaves an existing folder's bits alone and masks a new one's with the umask.
+    if (options?.mode !== undefined) await Deno.chmod(path, options.mode)
   },
 
   async readDir(path): Promise<WalkEntry[]> {
@@ -94,12 +97,28 @@ export const denoFileSystem: FileSystemPort = {
     )
   },
 
-  async readBytes(path) {
+  async readBytes(path, options) {
+    if (options === undefined) {
+      try {
+        return await Deno.readFile(path)
+      } catch (error) {
+        if (isNotFound(error)) return null
+        throw error
+      }
+    }
+    const { offset, length } = checkRange(options)
+    let file: Deno.FsFile
     try {
-      return await Deno.readFile(path)
+      file = await Deno.open(path, { read: true })
     } catch (error) {
       if (isNotFound(error)) return null
       throw error
+    }
+    try {
+      await file.seek(offset, Deno.SeekMode.Start)
+      return await readUpTo(async (buffer) => (await file.read(buffer)) ?? 0, length)
+    } finally {
+      file.close()
     }
   },
 
@@ -145,6 +164,21 @@ export const denoFileSystem: FileSystemPort = {
       await Deno.remove(path, { recursive: true })
     } catch (error) {
       if (isNotFound(error)) return
+      throw error
+    }
+  },
+
+  async stat(path) {
+    try {
+      const info = await Deno.stat(path)
+      return {
+        isDirectory: info.isDirectory,
+        isFile: info.isFile,
+        size: info.size,
+        mtimeMs: info.mtime?.getTime() ?? 0,
+      }
+    } catch (error) {
+      if (isNotFound(error)) return null
       throw error
     }
   },

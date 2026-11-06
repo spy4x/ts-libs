@@ -1312,6 +1312,7 @@ DEFAULT_REMINDER_TICK_TIMEOUT_MS	constant	@spy4x/platform/server	How long one ti
 EnvReader	interface	@spy4x/platform/server	Reads environment values.
 FileLock	class	@spy4x/platform/server	One held lock.
 FileLockWaitError	class	@spy4x/platform/server	Raised when a FileLock.runExclusive call waited FileLockOptions.waitMs for an earlier `runExclusive` on the same instance and gave up.
+FileStat	interface	@spy4x/platform/server	What FileSystemPort.stat reports about a path, following symbolic links.
 FileSystemPort	interface	@spy4x/platform/server	Storage primitives a server helper needs.
 FsErrorKind	type	@spy4x/platform/server	A file-system failure that `fsError` makes and `isFsError` recognises on every runtime.
 IntervalRunnerOptions	interface	@spy4x/platform/server	Options of startIntervalRunner.
@@ -1320,10 +1321,12 @@ LockHandle	interface	@spy4x/platform/server	A held file lock.
 LockState	enum	@spy4x/platform/server	Lock state, so a check can distinguish "held" from "held by me".
 LockUnavailableError	class	@spy4x/platform/server	Raised when another holder owns the lock.
 LogRecord	type	@spy4x/platform/server	One log record: the caller's event plus a timestamp.
+MkdirOptions	interface	@spy4x/platform/server	Options of FileSystemPort.mkdirp.
 NodeChildProcess	interface	@spy4x/platform/server	The subset of `node:child_process` and `node:os` that nodeSpawner uses.
 NodeNet	interface	@spy4x/platform/server	`node:net`, as far as nodeTcpConnect uses it.
 NodeSocket	interface	@spy4x/platform/server	One `node:net` socket, as far as nodeTcpConnect uses it.
 OsSignal	type	@spy4x/platform/server	An operating-system signal name.
+ReadBytesOptions	interface	@spy4x/platform/server	Options of FileSystemPort.readBytes: which bytes to read.
 ReadJsonOptions	interface	@spy4x/platform/server	Options of readJsonFile.
 ReadJsonResult	type	@spy4x/platform/server	Result of reading a JSON document.
 ReminderNotifyResult	type	@spy4x/platform/server	What `notify` says about one reminder:
@@ -1394,8 +1397,11 @@ formatLogLine	function	@spy4x/platform/server/jsonl-logger	Serialise a log recor
 parseLogLines	function	@spy4x/platform/server/jsonl-logger	Parse JSONL text, skipping blank lines and reporting the lines that do not parse.
 ByteReader	interface	@spy4x/platform/server/ports	Chunked byte source for streaming hashing.
 ClockPort	type	@spy4x/platform/server/ports	Deprecated: Identical shape to `Clock` from `@spy4x/platform/universal/time`, which is now the one home for this shape. Clock injection point, so throttling is testable without sleeping.
+FileStat	interface	@spy4x/platform/server/ports	What FileSystemPort.stat reports about a path, following symbolic links.
 FileSystemPort	interface	@spy4x/platform/server/ports	Storage primitives a server helper needs.
 LockHandle	interface	@spy4x/platform/server/ports	A held file lock.
+MkdirOptions	interface	@spy4x/platform/server/ports	Options of FileSystemPort.mkdirp.
+ReadBytesOptions	interface	@spy4x/platform/server/ports	Options of FileSystemPort.readBytes: which bytes to read.
 WalkEntry	interface	@spy4x/platform/server/ports	A single directory entry, as returned by a directory listing.
 WriteTextOptions	interface	@spy4x/platform/server/ports	Options of FileSystemPort.writeText, `writeBytes` and `writeStream`.
 systemClockPort	constant	@spy4x/platform/server/ports	Deprecated: Use `systemClock` from `@spy4x/platform/universal/time`. The host clock.
@@ -3183,4 +3189,4 @@ firstIssueMessage	function	@spy4x/validation/validate	First issue message in a v
 isArkErrors	function	@spy4x/validation/validate	Whether a value is an arktype rejection, without relying on `instanceof`.
 toValidationError	function	@spy4x/validation/validate	Build a ValidationError from arktype's issues.
 validate	function	@spy4x/validation/validate	Parse `value` with an arktype schema exactly once.
-# export surface: sha256 064208ce568788f78c16f212b5d4cfd0ad9b07c495820e049684ce22c6933d91
+# export surface: sha256 56b4c2b3ef7ee8ef8cbff1c1c4a195bd7f504c382b55e5a0fdd13939037ef6d6
