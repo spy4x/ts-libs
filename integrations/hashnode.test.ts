@@ -274,6 +274,20 @@ Deno.test("fails rather than answering not found for a missing publication or a 
   }
 })
 
+Deno.test("fails rather than answering not found when the publication has no post key or is not an object", async () => {
+  const successes = []
+  for (const data of [{ publication: { id: PUBLICATION } }, { publication: [] }]) {
+    const { fetcher } = stub(() => json({ data }))
+    const result = await findHashnodePostBySlug({
+      host: "blog.seed.dev",
+      slug: "a",
+      fetch: fetcher,
+    })
+    successes.push(result.success)
+  }
+  assertEquals(successes, [false, false])
+})
+
 Deno.test("retries a 5xx and a dropped connection during the lookup", async () => {
   const { calls, fetcher } = stub((n) =>
     n === 1

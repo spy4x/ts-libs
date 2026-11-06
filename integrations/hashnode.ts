@@ -281,8 +281,11 @@ const postInPublication = (
   if (publication === null || publication === undefined) {
     return { error: "hashnode has no such publication" }
   }
-  if (typeof publication !== "object") return { error: "hashnode answer has no publication" }
-  return { post: (publication as { post?: unknown }).post ?? null }
+  // Only an explicit `post: null` means "not found": a caller trusts it and publishes again.
+  if (typeof publication !== "object" || !("post" in publication)) {
+    return { error: "hashnode answer has no publication" }
+  }
+  return { post: publication.post }
 }
 
 /**
