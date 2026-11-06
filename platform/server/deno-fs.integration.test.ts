@@ -60,3 +60,18 @@ Deno.test("an atomic write with a mode replaces a world-readable document with a
     await removeScratchFolder(root)
   }
 })
+
+Deno.test("denoFileSystem mkdirp with a mode makes a new folder and an existing one owner-only", async () => {
+  const root = await createScratchFolder("it_deno_fs_dir_mode")
+  try {
+    await denoFileSystem.mkdirp(`${root}/existing`)
+    // The control: without a mode the folder is open to more than its owner.
+    expect(await permissionBits(`${root}/existing`)).not.toBe(0o700)
+    await denoFileSystem.mkdirp(`${root}/existing`, { mode: 0o700 })
+    expect(await permissionBits(`${root}/existing`)).toBe(0o700)
+    await denoFileSystem.mkdirp(`${root}/new/private`, { mode: 0o700 })
+    expect(await permissionBits(`${root}/new/private`)).toBe(0o700)
+  } finally {
+    await removeScratchFolder(root)
+  }
+})

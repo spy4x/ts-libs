@@ -30,6 +30,7 @@ import {
   type FsErrorKind,
   fsErrorOver,
 } from "./_runtime-host.ts"
+import { checkRange, readUpTo } from "./_read-range.ts"
 import { denoFileSystem } from "./deno-fs.ts"
 import type { FileSystemPort, WalkEntry } from "./ports.ts"
 
@@ -39,7 +40,7 @@ interface NodeFileHandle {
     buffer: Uint8Array,
     offset: number,
     length: number,
-    position: null,
+    position: number | null,
   ): Promise<{ bytesRead: number }>
   write(data: Uint8Array): Promise<unknown>
   close(): Promise<void>
@@ -47,14 +48,17 @@ interface NodeFileHandle {
 
 /** `node:fs/promises`, as far as this file uses it. */
 interface NodeFs {
-  stat(path: string): Promise<{ size: number }>
+  stat(path: string): Promise<
+    { size: number; mtimeMs: number; isFile(): boolean; isDirectory(): boolean }
+  >
   readFile(path: string, encoding: "utf8"): Promise<string>
   readFile(path: string): Promise<Uint8Array>
   writeFile(path: string, data: string | Uint8Array, options: { mode?: number }): Promise<void>
   appendFile(path: string, data: string): Promise<void>
   rename(from: string, to: string): Promise<void>
   rm(path: string, options: { force?: boolean; recursive?: boolean }): Promise<void>
-  mkdir(path: string, options: { recursive: true }): Promise<unknown>
+  mkdir(path: string, options: { recursive: true; mode?: number }): Promise<unknown>
+  chmod(path: string, mode: number): Promise<void>
   readdir(
     path: string,
     options: { withFileTypes: true },
@@ -128,8 +132,11 @@ export const nodeFileSystem: FileSystemPort = {
     await (await nodeFs()).rm(path, { force: true })
   },
 
-  async mkdirp(path) {
-    await (await nodeFs()).mkdir(path, { recursive: true })
+  async mkdirp(path, options) {
+    const fs = await nodeFs()
+    await fs.mkdir(path, { recursive: true, mode: options?.mode })
+    // `mkdir` leaves an existing folder's bits alone and masks a new one's with the umask.
+    if (options?.mode !== undefined) await fs.chmod(path, options.mode)
   },
 
   async readDir(path): Promise<WalkEntry[]> {
@@ -149,10 +156,25 @@ export const nodeFileSystem: FileSystemPort = {
     return Promise.reject(new Error("no file lock on Node or Bun: use denoFileSystem on Deno"))
   },
 
-  async readBytes(path) {
+  async readBytes(path, options) {
     const fs = await nodeFs()
-    const data = await orNull(() => fs.readFile(path))
-    return data === null ? null : plainBytes(data)
+    if (options === undefined) {
+      const data = await orNull(() => fs.readFile(path))
+      return data === null ? null : plainBytes(data)
+    }
+    const { offset, length } = checkRange(options)
+    const file = await orNull(() => fs.open(path, "r"))
+    if (file === null) return null
+    let position = offset
+    try {
+      return await readUpTo(async (buffer) => {
+        const { bytesRead } = await file.read(buffer, 0, buffer.byteLength, position)
+        position += bytesRead
+        return bytesRead
+      }, length)
+    } finally {
+      await file.close()
+    }
   },
 
   async writeBytes(path, data, options) {
@@ -201,6 +223,19 @@ export const nodeFileSystem: FileSystemPort = {
 
   async removeTree(path) {
     await (await nodeFs()).rm(path, { recursive: true, force: true })
+  },
+
+  async stat(path) {
+    const fs = await nodeFs()
+    const info = await orNull(() => fs.stat(path))
+    if (info === null) return null
+    return {
+      isDirectory: info.isDirectory(),
+      isFile: info.isFile(),
+      size: info.size,
+      // Whole milliseconds, as Deno's `Date` gives them; Node adds a fraction.
+      mtimeMs: Math.trunc(info.mtimeMs),
+    }
   },
 }
 

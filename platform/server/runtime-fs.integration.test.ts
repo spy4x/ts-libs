@@ -35,3 +35,19 @@ Deno.test("nodeFileSystem creates a file with the permission bits asked for, as 
     await removeScratchFolder(root)
   }
 })
+
+Deno.test("nodeFileSystem mkdirp with a mode makes a new folder and an existing one owner-only", async () => {
+  const root = await createScratchFolder("it_node_fs_dir_mode")
+  try {
+    const bits = async (path: string) => (await Deno.stat(path)).mode! & 0o777
+    await nodeFileSystem.mkdirp(`${root}/existing`)
+    // The control: without a mode the folder is open to more than its owner.
+    expect(await bits(`${root}/existing`)).not.toBe(0o700)
+    await nodeFileSystem.mkdirp(`${root}/existing`, { mode: 0o700 })
+    expect(await bits(`${root}/existing`)).toBe(0o700)
+    await nodeFileSystem.mkdirp(`${root}/new/private`, { mode: 0o700 })
+    expect(await bits(`${root}/new/private`)).toBe(0o700)
+  } finally {
+    await removeScratchFolder(root)
+  }
+})

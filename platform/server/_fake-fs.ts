@@ -9,6 +9,7 @@
  * rather than only what the final state looks like.
  */
 
+import { checkRange } from "./_read-range.ts"
 import type { ByteReader, FileSystemPort, LockHandle, WalkEntry } from "./ports.ts"
 import type { TimerPort } from "./throttled-saver.ts"
 import type { Clock } from "../universal/time.ts"
@@ -25,8 +26,12 @@ export interface FakeFs extends FileSystemPort {
   readonly files: Map<string, string>
   /** The exact bytes of the files written through `writeBytes` or `writeStream`, keyed by path. */
   readonly bytes: Map<string, Uint8Array>
-  /** Permission bits of the files that were created with a `mode`, keyed by path. */
+  /** Permission bits of the files created with a `mode` and the folders given one, keyed by path. */
   readonly modes: Map<string, number>
+  /** Modification time of each file and folder, as `now` gave it, keyed by path. */
+  readonly mtimes: Map<string, number>
+  /** The clock `mtimes` reads; `Date.now` unless a test replaces it. */
+  now: () => number
   /** Paths known to be directories. */
   readonly dirs: Set<string>
   /** Every call, in order. */
@@ -81,6 +86,12 @@ export function fakeFs(initial: Record<string, string> = {}): FakeFs {
   const files = new Map<string, string>(Object.entries(initial))
   const dirs = new Set<string>(Object.keys(initial).flatMap((path) => withAncestors(path).slice(1)))
   const modes = new Map<string, number>()
+  const created = Date.now()
+  const mtimes = new Map<string, number>([...files.keys(), ...dirs].map((path) => [path, created]))
+  /** Mark `path` as modified now. */
+  const touch = (path: string): void => {
+    mtimes.set(path, fake.now())
+  }
   const calls: FsCall[] = []
   const locks = new Set<string>()
   const bytes = new Map<string, Uint8Array>()
@@ -98,6 +109,7 @@ export function fakeFs(initial: Record<string, string> = {}): FakeFs {
     if (!files.has(path) && mode !== undefined) modes.set(path, mode)
     bytes.set(path, data.slice())
     files.set(path, new TextDecoder().decode(data))
+    touch(path)
   }
   /** A rejection for a write into `path`, or `null` when the write may go ahead. */
   const refuseWrite = (path: string): Promise<never> | null => {
@@ -114,6 +126,8 @@ export function fakeFs(initial: Record<string, string> = {}): FakeFs {
     files,
     bytes,
     modes,
+    mtimes,
+    now: Date.now,
     dirs,
     calls,
     locks,
@@ -139,6 +153,7 @@ export function fakeFs(initial: Record<string, string> = {}): FakeFs {
       if (!files.has(path) && options?.mode !== undefined) modes.set(path, options.mode)
       files.set(path, content)
       bytes.delete(path)
+      touch(path)
       return Promise.resolve()
     },
 
@@ -149,7 +164,10 @@ export function fakeFs(initial: Record<string, string> = {}): FakeFs {
       if (missing) return missing
       const raw = bytes.get(path)
       if (raw) storeBytes(path, concat([raw, encoder.encode(content)]), undefined)
-      else files.set(path, (files.get(path) ?? "") + content)
+      else {
+        files.set(path, (files.get(path) ?? "") + content)
+        touch(path)
+      }
       return Promise.resolve()
     },
 
@@ -171,6 +189,9 @@ export function fakeFs(initial: Record<string, string> = {}): FakeFs {
       modes.delete(from)
       if (mode === undefined) modes.delete(to)
       else modes.set(to, mode)
+      // A rename keeps the file's modification time.
+      mtimes.set(to, mtimes.get(from)!)
+      mtimes.delete(from)
       return Promise.resolve()
     },
 
@@ -179,12 +200,18 @@ export function fakeFs(initial: Record<string, string> = {}): FakeFs {
       files.delete(path)
       bytes.delete(path)
       modes.delete(path)
+      mtimes.delete(path)
       return Promise.resolve()
     },
 
-    mkdirp(path) {
+    mkdirp(path, options) {
       calls.push({ op: "mkdirp", path })
-      for (const folder of withAncestors(path)) dirs.add(folder)
+      for (const folder of withAncestors(path)) {
+        if (!dirs.has(folder)) touch(folder)
+        dirs.add(folder)
+      }
+      // Like the real disk, the mode reaches the folder itself even when it existed already.
+      if (options?.mode !== undefined) modes.set(path.replace(/\/+$/, ""), options.mode)
       return Promise.resolve()
     },
 
@@ -221,7 +248,10 @@ export function fakeFs(initial: Record<string, string> = {}): FakeFs {
       calls.push({ op: "lock", path })
       const missing = missingParent(path)
       if (missing) return missing
-      if (!files.has(path)) files.set(path, "")
+      if (!files.has(path)) {
+        files.set(path, "")
+        touch(path)
+      }
       if (locks.has(path)) return Promise.resolve(null)
       locks.add(path)
       const handle: LockHandle = {
@@ -233,9 +263,17 @@ export function fakeFs(initial: Record<string, string> = {}): FakeFs {
       return Promise.resolve(handle)
     },
 
-    readBytes(path) {
+    readBytes(path, options) {
       calls.push({ op: "readBytes", path })
-      return Promise.resolve(bytesOf(path) ?? null)
+      let range: { offset: number; length: number }
+      try {
+        range = checkRange(options)
+      } catch (error) {
+        return Promise.reject(error)
+      }
+      const content = bytesOf(path)
+      if (content === undefined) return Promise.resolve(null)
+      return Promise.resolve(content.slice(range.offset, range.offset + range.length))
     },
 
     writeBytes(path, data, options) {
@@ -280,6 +318,7 @@ export function fakeFs(initial: Record<string, string> = {}): FakeFs {
       do path = `${parent.replace(/\/+$/, "")}/tmp-${nextTemp++}`
       while (dirs.has(path) || files.has(path))
       dirs.add(path)
+      touch(path)
       return Promise.resolve(path)
     },
 
@@ -290,9 +329,30 @@ export function fakeFs(initial: Record<string, string> = {}): FakeFs {
         files.delete(name)
         bytes.delete(name)
         modes.delete(name)
+        mtimes.delete(name)
       }
-      for (const name of [...dirs].filter(inside)) dirs.delete(name)
+      for (const name of [...dirs].filter(inside)) {
+        dirs.delete(name)
+        modes.delete(name)
+        mtimes.delete(name)
+      }
       return Promise.resolve()
+    },
+
+    stat(path) {
+      calls.push({ op: "stat", path })
+      const mtimeMs = mtimes.get(path) ?? 0
+      if (dirs.has(path)) {
+        return Promise.resolve({ isDirectory: true, isFile: false, size: 0, mtimeMs })
+      }
+      const content = bytesOf(path)
+      if (content === undefined) return Promise.resolve(null)
+      return Promise.resolve({
+        isDirectory: false,
+        isFile: true,
+        size: content.byteLength,
+        mtimeMs,
+      })
     },
   }
   return fake

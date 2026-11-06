@@ -20,16 +20,19 @@ describe("fileSystemOver", () => {
   it("hands every method, the optional ones too, to the chosen port", async () => {
     const both = ports()
     const fs = fileSystemOver(() => ({ process: {} }), both)
-    await fs.mkdirp("/job")
+    await fs.mkdirp("/job", { mode: 0o700 })
+    expect(both.node.modes.get("/job")).toBe(0o700)
     const dir = await fs.makeTempDir!("/job")
-    await fs.writeBytes!(`${dir}/b.bin`, new Uint8Array([1]))
-    expect(await fs.readBytes!(`${dir}/b.bin`)).toEqual(new Uint8Array([1]))
+    await fs.writeBytes!(`${dir}/b.bin`, new Uint8Array([1, 2]))
+    expect(await fs.readBytes!(`${dir}/b.bin`, { offset: 1 })).toEqual(new Uint8Array([2]))
+    expect(await fs.stat!(`${dir}/b.bin`)).toMatchObject({ isFile: true, size: 2 })
     await fs.removeTree!("/job")
     expect(both.node.calls.map((call) => call.op)).toEqual([
       "mkdirp",
       "makeTempDir",
       "writeBytes",
       "readBytes",
+      "stat",
       "removeTree",
     ])
     expect(both.deno.calls).toEqual([])

@@ -54,3 +54,27 @@ Deno.test("fakeFs moves and removes the exact bytes with the file", async () => 
   await fs.remove("/data/b.bin")
   expect(await fs.readBytes!("/data/b.bin")).toBeNull()
 })
+
+Deno.test("fakeFs mkdirp gives its mode to the folder whether it is new or existed already", async () => {
+  const fs = fakeFs({ "/data/old/a.json": "{}" })
+  await fs.mkdirp("/data/old", { mode: 0o700 })
+  await fs.mkdirp("/data/new/private", { mode: 0o700 })
+  expect(fs.modes.get("/data/old")).toBe(0o700)
+  expect(fs.modes.get("/data/new/private")).toBe(0o700)
+  expect(fs.modes.has("/data/new")).toBe(false)
+  await fs.removeTree!("/data/new")
+  expect(fs.modes.has("/data/new/private")).toBe(false)
+})
+
+Deno.test("fakeFs stat reports the time of the last write, and a rename keeps it", async () => {
+  const fs = fakeFs({ "/data/x": "" })
+  fs.now = () => 1_000
+  await fs.writeText("/data/a.txt", "one")
+  fs.now = () => 2_000
+  await fs.appendText("/data/a.txt", "two")
+  expect((await fs.stat!("/data/a.txt"))?.mtimeMs).toBe(2_000)
+  fs.now = () => 3_000
+  await fs.rename("/data/a.txt", "/data/b.txt")
+  expect((await fs.stat!("/data/b.txt"))?.mtimeMs).toBe(2_000)
+  expect(await fs.stat!("/data/a.txt")).toBeNull()
+})

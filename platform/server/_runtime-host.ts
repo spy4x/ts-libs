@@ -319,15 +319,16 @@ export function fileSystemOver(
     appendText: (path, content) => pick().appendText(path, content),
     rename: (from, to) => pick().rename(from, to),
     remove: (path) => pick().remove(path),
-    mkdirp: (path) => pick().mkdirp(path),
+    mkdirp: (path, options) => pick().mkdirp(path, options),
     readDir: (path) => pick().readDir(path),
     lock: (path) => pick().lock(path),
-    readBytes: (path) => pick().readBytes!(path),
+    readBytes: (path, options) => pick().readBytes!(path, options),
     writeBytes: (path, data, options) => pick().writeBytes!(path, data, options),
     readStream: (path) => pick().readStream!(path),
     writeStream: (path, source, options) => pick().writeStream!(path, source, options),
     makeTempDir: (parent) => pick().makeTempDir!(parent),
     removeTree: (path) => pick().removeTree!(path),
+    stat: (path) => pick().stat!(path),
   }
 }
 

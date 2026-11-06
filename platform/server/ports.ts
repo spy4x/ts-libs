@@ -12,12 +12,14 @@
  * monkey-patching a global.
  *
  * `FileSystemPort` also has four optional methods for binary files: `readBytes` and `writeBytes` for
- * a whole file, `readStream` and `writeStream` for one too large to hold in memory; and two for
- * scratch folders: `makeTempDir` and `removeTree`. They are optional so a port written before them
- * still compiles; `denoFileSystem`, `nodeFileSystem` and the in-memory fake have all six.
+ * a whole file or a byte range, `readStream` and `writeStream` for one too large to hold in memory;
+ * two for scratch folders: `makeTempDir` and `removeTree`; and `stat`. They are optional so a port
+ * written before them still compiles; `denoFileSystem`, `nodeFileSystem` and the in-memory fake have
+ * all seven.
  *
  * `writeText` and `atomicWriteJson` take an optional `mode` (such as `0o600`): the permission bits a
- * file is created with, for one that holds keys. An existing file keeps its bits.
+ * file is created with, for one that holds keys. An existing file keeps its bits. `mkdirp` takes one
+ * too, and it applies it to an existing folder as well, so a private folder stays private.
  *
  * @module
  */
@@ -49,6 +51,34 @@ export type ClockPort = Clock
  */
 export const systemClockPort: ClockPort = systemClock
 
+/** What {@link FileSystemPort.stat} reports about a path, following symbolic links. */
+export interface FileStat {
+  isDirectory: boolean
+  isFile: boolean
+  /** Size in bytes. */
+  size: number
+  /** Last modification time in whole milliseconds since the epoch; `0` where the platform has none. */
+  mtimeMs: number
+}
+
+/** Options of {@link FileSystemPort.readBytes}: which bytes to read. */
+export interface ReadBytesOptions {
+  /** The first byte to read; default `0`. Past the end of the file, the result is empty. */
+  offset?: number
+  /** The most bytes to read; default all of them up to the end of the file. */
+  length?: number
+}
+
+/** Options of {@link FileSystemPort.mkdirp}. */
+export interface MkdirOptions {
+  /**
+   * Permission bits for the folder `path` itself, such as `0o700` for one only its owner may open,
+   * applied whether this call creates the folder or it existed already. Parents it creates get the
+   * default. A platform without POSIX permissions ignores the value.
+   */
+  mode?: number
+}
+
 /** Options of {@link FileSystemPort.writeText}, `writeBytes` and `writeStream`. */
 export interface WriteTextOptions {
   /**
@@ -77,17 +107,19 @@ export interface FileSystemPort {
   rename(from: string, to: string): Promise<void>
   /** Remove a file; a missing file is not an error. */
   remove(path: string): Promise<void>
-  /** Create the directory and any missing parents. */
-  mkdirp(path: string): Promise<void>
+  /** Create the directory and any missing parents. `options.mode` applies to `path` even when it exists. */
+  mkdirp(path: string, options?: MkdirOptions): Promise<void>
   /** One directory level, entry order unspecified. */
   readDir(path: string): Promise<WalkEntry[]>
   /** Exclusive advisory lock on `path`. `null` when another holder owns it. */
   lock(path: string): Promise<LockHandle | null>
   /**
-   * Raw bytes, or `null` when the path is absent. Optional: an implementer written before it was
-   * added may leave it out, so a caller checks for it or documents that it needs it.
+   * Raw bytes, or `null` when the path is absent: the whole file, or the range `options` names, so a
+   * caller can read only what was appended since its last read. Rejects a negative or fractional
+   * offset or length. Optional: an implementer written before it was added may leave it out, so a
+   * caller checks for it or documents that it needs it.
    */
-  readBytes?(path: string): Promise<Uint8Array | null>
+  readBytes?(path: string, options?: ReadBytesOptions): Promise<Uint8Array | null>
   /**
    * Write bytes, replacing any existing content. `options.mode` applies when the file is new.
    * Optional, as {@link FileSystemPort.readBytes} is.
@@ -120,6 +152,11 @@ export interface FileSystemPort {
    * {@link FileSystemPort.readBytes} is.
    */
   removeTree?(path: string): Promise<void>
+  /**
+   * Kind, size and modification time of `path`, or `null` when it is absent. Optional, as
+   * {@link FileSystemPort.readBytes} is.
+   */
+  stat?(path: string): Promise<FileStat | null>
 }
 
 /** A held file lock. Releasing twice is a no-op. */
