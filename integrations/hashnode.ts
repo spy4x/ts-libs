@@ -53,6 +53,7 @@ import {
   webUrl,
 } from "./_json-request.ts"
 import type { PostTransport } from "./_post.ts"
+import type { ShareResults } from "./share-results.ts"
 
 /**
  * Hashnode's GraphQL endpoint. `https://apidocs.hashnode.com` points here; the older
@@ -113,17 +114,6 @@ export interface HashnodePostRef {
   url: string
 }
 
-/**
- * How a copy did, in the shape every channel answers. Matches `ShareResults` from
- * `./share-results.ts`; `null` is a number Hashnode does not report.
- */
-export interface HashnodeResults {
-  views: number | null
-  reactions: number | null
-  comments: number | null
-  score: number | null
-}
-
 /** Outcome of {@link publishHashnodePost}. */
 export type HashnodePublishResult =
   | { success: true; output: HashnodePostRef; error: "" }
@@ -134,9 +124,12 @@ export type HashnodeFindResult =
   | { success: true; output: HashnodePostRef | null; error: "" }
   | { success: false; output: null; error: string }
 
-/** Outcome of {@link readHashnodePostResults}. */
+/**
+ * Outcome of {@link readHashnodePostResults}: the post's {@link ShareResults}; `null` is a number
+ * Hashnode does not report.
+ */
 export type HashnodeResultsResult =
-  | { success: true; output: HashnodePostRef & HashnodeResults; error: "" }
+  | { success: true; output: HashnodePostRef & ShareResults; error: "" }
   | { success: false; output: null; error: string }
 
 const OBJECT_ID = /^[0-9a-f]{24}$/i

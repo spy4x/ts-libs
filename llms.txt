@@ -310,8 +310,7 @@ HashnodeFindResult	type	@spy4x/integrations	Outcome of findHashnodePostBySlug; a
 HashnodePostRef	interface	@spy4x/integrations	A Hashnode post: its id and public address.
 HashnodePublicationRef	type	@spy4x/integrations	Which publication to look in: its host (`blog.example.com`) or its id.
 HashnodePublishResult	type	@spy4x/integrations	Outcome of publishHashnodePost.
-HashnodeResults	interface	@spy4x/integrations	How a copy did, in the shape every channel answers.
-HashnodeResultsResult	type	@spy4x/integrations	Outcome of readHashnodePostResults.
+HashnodeResultsResult	type	@spy4x/integrations	Outcome of readHashnodePostResults: the post's ShareResults; `null` is a number Hashnode does not report.
 HealthchecksClient	class	@spy4x/integrations	healthchecks.io client.
 HealthchecksErrorCode	type	@spy4x/integrations	Failure reasons `ping` can report.
 HealthchecksFailure	interface	@spy4x/integrations	A ping that could not be delivered after retrying.
@@ -515,8 +514,7 @@ HashnodeFindResult	type	@spy4x/integrations/hashnode	Outcome of findHashnodePost
 HashnodePostRef	interface	@spy4x/integrations/hashnode	A Hashnode post: its id and public address.
 HashnodePublicationRef	type	@spy4x/integrations/hashnode	Which publication to look in: its host (`blog.example.com`) or its id.
 HashnodePublishResult	type	@spy4x/integrations/hashnode	Outcome of publishHashnodePost.
-HashnodeResults	interface	@spy4x/integrations/hashnode	How a copy did, in the shape every channel answers.
-HashnodeResultsResult	type	@spy4x/integrations/hashnode	Outcome of readHashnodePostResults.
+HashnodeResultsResult	type	@spy4x/integrations/hashnode	Outcome of readHashnodePostResults: the post's ShareResults; `null` is a number Hashnode does not report.
 findHashnodePostBySlug	function	@spy4x/integrations/hashnode	Finds the post with `slug` in a publication, given its host or id.
 publishHashnodePost	function	@spy4x/integrations/hashnode	Publishes a post to a Hashnode publication and returns its id and address.
 readHashnodePostResults	function	@spy4x/integrations/hashnode	Reads a post's views, reactions and comments, by its id or by its publication host and slug.
@@ -3189,4 +3187,4 @@ firstIssueMessage	function	@spy4x/validation/validate	First issue message in a v
 isArkErrors	function	@spy4x/validation/validate	Whether a value is an arktype rejection, without relying on `instanceof`.
 toValidationError	function	@spy4x/validation/validate	Build a ValidationError from arktype's issues.
 validate	function	@spy4x/validation/validate	Parse `value` with an arktype schema exactly once.
-# export surface: sha256 f943dd216e08d5913728e2d97f8b1a09d449d10ff46f7af3877cacf1df883344
+# export surface: sha256 fa5c6887369075520449f5beae1fff472775c286375f072e266dca0162237649

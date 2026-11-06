@@ -208,7 +208,6 @@ export type {
   HashnodePostRef,
   HashnodePublicationRef,
   HashnodePublishResult,
-  HashnodeResults,
   HashnodeResultsResult,
   PublishHashnodePostOptions,
   ReadHashnodePostResultsOptions,
