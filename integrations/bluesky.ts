@@ -67,6 +67,7 @@ import {
   webUrl,
 } from "./_json-request.ts"
 import type { PostTransport } from "./_post.ts"
+import type { ShareResults } from "./share-results.ts"
 
 const SERVICE = "bluesky"
 
@@ -127,19 +128,8 @@ export interface BlueskyPostRef {
   url: string
 }
 
-/**
- * How a copy did, in the shape every channel answers. Structurally identical to `ShareResults`
- * from `@spy4x/integrations/share-results`; `null` means Bluesky does not report it.
- */
-export interface BlueskyResults {
-  views: number | null
-  reactions: number | null
-  comments: number | null
-  score: number | null
-}
-
-/** {@link BlueskyResults} with Bluesky's own counts: likes are `reactions`, replies `comments`. */
-export interface BlueskyPostResults extends BlueskyResults {
+/** {@link ShareResults} with Bluesky's own counts: likes are `reactions`, replies `comments`. */
+export interface BlueskyPostResults extends ShareResults {
   views: null
   score: null
   reposts: number | null

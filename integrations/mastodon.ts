@@ -46,6 +46,7 @@ import {
   TOKEN_SHAPE,
   webUrl,
 } from "./_json-request.ts"
+import type { ShareResults } from "./share-results.ts"
 
 const SERVICE = "mastodon"
 const MAX_STATUS_BYTES = 1024 * 1024
@@ -89,19 +90,8 @@ export interface MastodonStatusRef {
   url: string
 }
 
-/**
- * How a copy did, in the shape every channel answers. Structurally identical to `ShareResults`
- * from `@spy4x/integrations/share-results`; `null` means Mastodon does not report it.
- */
-export interface MastodonResults {
-  views: number | null
-  reactions: number | null
-  comments: number | null
-  score: number | null
-}
-
-/** {@link MastodonResults} with Mastodon's own counts. */
-export interface MastodonStatusResults extends MastodonResults {
+/** {@link ShareResults} with Mastodon's own counts. */
+export interface MastodonStatusResults extends ShareResults {
   views: null
   reactions: number
   comments: number

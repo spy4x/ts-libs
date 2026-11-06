@@ -272,8 +272,7 @@ BlueskyFindResult	type	@spy4x/integrations	Outcome of findBlueskyPostByLink: `nu
 BlueskyLinkCard	interface	@spy4x/integrations	The link card.
 BlueskyPostRef	interface	@spy4x/integrations	A post: its `at://` address, content id and public page.
 BlueskyPostResult	type	@spy4x/integrations	Outcome of postBlueskyLink.
-BlueskyPostResults	interface	@spy4x/integrations	BlueskyResults with Bluesky's own counts: likes are `reactions`, replies `comments`.
-BlueskyResults	interface	@spy4x/integrations	How a copy did, in the shape every channel answers.
+BlueskyPostResults	interface	@spy4x/integrations	ShareResults with Bluesky's own counts: likes are `reactions`, replies `comments`.
 BlueskyResultsResult	type	@spy4x/integrations	Outcome of readBlueskyPostResults.
 BlueskySession	interface	@spy4x/integrations	A signed-in account.
 BlueskySessionResult	type	@spy4x/integrations	Outcome of createBlueskySession.
@@ -341,10 +340,9 @@ LlmErrorCode	type	@spy4x/integrations	Why a call failed.
 LlmUsage	interface	@spy4x/integrations	Token counts of one reply, as the provider billed them.
 MastodonClientOptions	interface	@spy4x/integrations	Settings both calls share.
 MastodonPostResult	type	@spy4x/integrations	Outcome of postMastodonStatus.
-MastodonResults	interface	@spy4x/integrations	How a copy did, in the shape every channel answers.
 MastodonResultsResult	type	@spy4x/integrations	Outcome of readMastodonStatusResults.
 MastodonStatusRef	interface	@spy4x/integrations	A posted status: its id on the instance and its public address.
-MastodonStatusResults	interface	@spy4x/integrations	MastodonResults with Mastodon's own counts.
+MastodonStatusResults	interface	@spy4x/integrations	ShareResults with Mastodon's own counts.
 MastodonVisibility	type	@spy4x/integrations	Who sees a status; Mastodon's four values.
 NotificationSeverity	enum	@spy4x/integrations	Severity gate.
 NtfyClient	class	@spy4x/integrations	ntfy client.
@@ -463,8 +461,7 @@ BlueskyFindResult	type	@spy4x/integrations/bluesky	Outcome of findBlueskyPostByL
 BlueskyLinkCard	interface	@spy4x/integrations/bluesky	The link card.
 BlueskyPostRef	interface	@spy4x/integrations/bluesky	A post: its `at://` address, content id and public page.
 BlueskyPostResult	type	@spy4x/integrations/bluesky	Outcome of postBlueskyLink.
-BlueskyPostResults	interface	@spy4x/integrations/bluesky	BlueskyResults with Bluesky's own counts: likes are `reactions`, replies `comments`.
-BlueskyResults	interface	@spy4x/integrations/bluesky	How a copy did, in the shape every channel answers.
+BlueskyPostResults	interface	@spy4x/integrations/bluesky	ShareResults with Bluesky's own counts: likes are `reactions`, replies `comments`.
 BlueskyResultsResult	type	@spy4x/integrations/bluesky	Outcome of readBlueskyPostResults.
 BlueskySession	interface	@spy4x/integrations/bluesky	A signed-in account.
 BlueskySessionResult	type	@spy4x/integrations/bluesky	Outcome of createBlueskySession.
@@ -562,10 +559,9 @@ chatJson	function	@spy4x/integrations/llm	Asks the model for JSON and checks it 
 createChatClient	function	@spy4x/integrations/llm	Builds a client.
 MastodonClientOptions	interface	@spy4x/integrations/mastodon	Settings both calls share.
 MastodonPostResult	type	@spy4x/integrations/mastodon	Outcome of postMastodonStatus.
-MastodonResults	interface	@spy4x/integrations/mastodon	How a copy did, in the shape every channel answers.
 MastodonResultsResult	type	@spy4x/integrations/mastodon	Outcome of readMastodonStatusResults.
 MastodonStatusRef	interface	@spy4x/integrations/mastodon	A posted status: its id on the instance and its public address.
-MastodonStatusResults	interface	@spy4x/integrations/mastodon	MastodonResults with Mastodon's own counts.
+MastodonStatusResults	interface	@spy4x/integrations/mastodon	ShareResults with Mastodon's own counts.
 MastodonVisibility	type	@spy4x/integrations/mastodon	Who sees a status; Mastodon's four values.
 postMastodonStatus	function	@spy4x/integrations/mastodon	Posts a status and returns its id and address.
 readMastodonStatusResults	function	@spy4x/integrations/mastodon	Reads a status's favourites, reblogs and replies.
@@ -3187,4 +3183,4 @@ firstIssueMessage	function	@spy4x/validation/validate	First issue message in a v
 isArkErrors	function	@spy4x/validation/validate	Whether a value is an arktype rejection, without relying on `instanceof`.
 toValidationError	function	@spy4x/validation/validate	Build a ValidationError from arktype's issues.
 validate	function	@spy4x/validation/validate	Parse `value` with an arktype schema exactly once.
-# export surface: sha256 fa5c6887369075520449f5beae1fff472775c286375f072e266dca0162237649
+# export surface: sha256 064208ce568788f78c16f212b5d4cfd0ad9b07c495820e049684ce22c6933d91
