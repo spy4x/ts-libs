@@ -9,6 +9,8 @@
     "./cloudflare": "./cloudflare.ts",
     "./indexnow": "./indexnow.ts",
     "./devto": "./devto.ts",
+    "./mastodon": "./mastodon.ts",
+    "./bluesky": "./bluesky.ts",
     "./share-results": "./share-results.ts",
     "./reddit": "./reddit.ts",
     "./hackernews": "./hackernews.ts",
