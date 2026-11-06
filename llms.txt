@@ -298,6 +298,13 @@ LlmEndpoint	interface	@spy4x/integrations	Where a provider's OpenAI-compatible A
 LlmError	interface	@spy4x/integrations	A failed call.
 LlmErrorCode	type	@spy4x/integrations	Why a call failed.
 LlmUsage	interface	@spy4x/integrations	Token counts of one reply, as the provider billed them.
+MastodonClientOptions	interface	@spy4x/integrations	Settings both calls share.
+MastodonPostResult	type	@spy4x/integrations	Outcome of postMastodonStatus.
+MastodonResults	interface	@spy4x/integrations	How a copy did, in the shape every channel answers.
+MastodonResultsResult	type	@spy4x/integrations	Outcome of readMastodonStatusResults.
+MastodonStatusRef	interface	@spy4x/integrations	A posted status: its id on the instance and its public address.
+MastodonStatusResults	interface	@spy4x/integrations	MastodonResults with Mastodon's own counts.
+MastodonVisibility	type	@spy4x/integrations	Who sees a status; Mastodon's four values.
 NotificationSeverity	enum	@spy4x/integrations	Severity gate.
 NtfyClient	class	@spy4x/integrations	ntfy client.
 NtfyErrorCode	type	@spy4x/integrations	Failure reasons `push` can report.
@@ -365,7 +372,9 @@ isRequestTimeout	function	@spy4x/integrations	True when `cause` is the `TimeoutE
 isTransientStatus	function	@spy4x/integrations	Statuses worth another attempt: rate limiting and upstream faults.
 ntfyConfigFromEnv	function	@spy4x/integrations	Reads ntfy settings from an environment reader.
 parseRetryAfterMs	function	@spy4x/integrations	Parses a `Retry-After` header.
+postMastodonStatus	function	@spy4x/integrations	Posts a status and returns its id and address.
 purgeUrls	function	@spy4x/integrations	Purges `urls` from a Cloudflare zone, 30 per call, and reports the outcome.
+readMastodonStatusResults	function	@spy4x/integrations	Reads a status's favourites, reblogs and replies.
 readUmamiEventValues	function	@spy4x/integrations	Reads how many custom events carried each value of one property, most first, such as the item of an `order-telegram` event (Umami's `GET /api/websites/<id>/event-data/values`).
 readUmamiMetrics	function	@spy4x/integrations	Reads a breakdown of a website's period by `type`, largest first (Umami's `GET /api/websites/<id>/metrics`).
 readUmamiPageviews	function	@spy4x/integrations	Reads page views and visitors per `unit` of a period, in `timezone` (Umami's `GET /api/websites/<id>/pageviews`).
@@ -430,6 +439,15 @@ SpendGuard	interface	@spy4x/integrations/llm	The port an app implements to cap w
 SpendRequest	interface	@spy4x/integrations/llm	What a SpendGuard is asked to allow before a request is sent.
 chatJson	function	@spy4x/integrations/llm	Asks the model for JSON and checks it with `schema`.
 createChatClient	function	@spy4x/integrations/llm	Builds a client.
+MastodonClientOptions	interface	@spy4x/integrations/mastodon	Settings both calls share.
+MastodonPostResult	type	@spy4x/integrations/mastodon	Outcome of postMastodonStatus.
+MastodonResults	interface	@spy4x/integrations/mastodon	How a copy did, in the shape every channel answers.
+MastodonResultsResult	type	@spy4x/integrations/mastodon	Outcome of readMastodonStatusResults.
+MastodonStatusRef	interface	@spy4x/integrations/mastodon	A posted status: its id on the instance and its public address.
+MastodonStatusResults	interface	@spy4x/integrations/mastodon	MastodonResults with Mastodon's own counts.
+MastodonVisibility	type	@spy4x/integrations/mastodon	Who sees a status; Mastodon's four values.
+postMastodonStatus	function	@spy4x/integrations/mastodon	Posts a status and returns its id and address.
+readMastodonStatusResults	function	@spy4x/integrations/mastodon	Reads a status's favourites, reblogs and replies.
 NotificationSeverity	enum	@spy4x/integrations/ntfy	Severity gate.
 NtfyClient	class	@spy4x/integrations/ntfy	ntfy client.
 NtfyErrorCode	type	@spy4x/integrations/ntfy	Failure reasons `push` can report.
@@ -3039,4 +3057,4 @@ firstIssueMessage	function	@spy4x/validation/validate	First issue message in a v
 isArkErrors	function	@spy4x/validation/validate	Whether a value is an arktype rejection, without relying on `instanceof`.
 toValidationError	function	@spy4x/validation/validate	Build a ValidationError from arktype's issues.
 validate	function	@spy4x/validation/validate	Parse `value` with an arktype schema exactly once.
-# export surface: sha256 56b63c2a12fb50cf029509d9f204d90b8fdf7d6141cdf85d16f55116d57e741a
+# export surface: sha256 d317578e643758bf93cd6c63184ce5ad886daf907be0ed18b58ea6fa679da0ac

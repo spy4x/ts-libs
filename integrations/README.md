@@ -22,6 +22,7 @@ Each module's usage is in its module doc, shown by `deno doc` and on JSR.
 - [`@spy4x/integrations/cloudflare`](cloudflare.ts): Cloudflare cache purge by URL.
 - [`@spy4x/integrations/indexnow`](indexnow.ts): IndexNow.
 - [`@spy4x/integrations/devto`](devto.ts): Dev.to (Forem API v1).
+- [`@spy4x/integrations/mastodon`](mastodon.ts): Mastodon: post a status and read back how it did.
 - [`@spy4x/integrations/umami`](umami.ts): A small client for a self-hosted Umami (v3).
 - [`@spy4x/integrations/push`](push.ts): Web Push sender.
 - [`@spy4x/integrations/push-file-store`](push-file-store.ts): A push subscription store for an app with no database.

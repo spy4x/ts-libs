@@ -121,6 +121,19 @@ export type {
   FindDevtoArticleByCanonicalOptions,
 } from "./devto.ts"
 
+export { postMastodonStatus, readMastodonStatusResults } from "./mastodon.ts"
+export type {
+  MastodonClientOptions,
+  MastodonPostResult,
+  MastodonResults,
+  MastodonResultsResult,
+  MastodonStatusRef,
+  MastodonStatusResults,
+  MastodonVisibility,
+  PostMastodonStatusOptions,
+  ReadMastodonStatusResultsOptions,
+} from "./mastodon.ts"
+
 export {
   checkUmami,
   checkUmamiWebsite,
