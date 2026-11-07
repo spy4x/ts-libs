@@ -38,6 +38,7 @@ Each module's usage is in its module doc, shown by `deno doc` and on JSR.
 ## Compatibility
 
 Deploy the server and the page together. Since 1.92.0, a `server.error` frame can carry `reason`
-and `fields`, and every refused payload carries `fields`. A page on 1.91.0 or older rejects such a
-frame whole, so its call waits for the request timeout instead of seeing the refusal. When a new
-server meets a page that was open before the deploy, make that page reload.
+and `fields`, and every payload that fails its schema check (`parsePayload`) carries `fields`. A
+page on 1.91.0 or older rejects such a frame whole, so its call waits for the request timeout
+instead of seeing the refusal. When a new server meets a page that was open before the deploy, make
+that page reload.
