@@ -4,6 +4,33 @@
 # Use: deno add jsr:<package>, then import { <name> } from "<import specifier>".
 # Left out: a type or interface that describes the parameters of a listed function or class Foo, foo or createFoo and is named Foo plus Props, Labels, Options, Config, Deps, Input. Its signature: https://jsr.io/<package>/doc
 # Usage: each entry point's module doc, https://jsr.io/<package>/doc/<entry>
+BalanceFailure	type	@spy4x/bank-statements	One reason a statement did not verify.
+DEFAULT_MAX_BYTES	constant	@spy4x/bank-statements	The default `maxBytes`: 10 MiB.
+DEFAULT_MAX_ROWS	constant	@spy4x/bank-statements	The default `maxRows`.
+ParsedStatement	interface	@spy4x/bank-statements	What a parser read from one file.
+ProfileMatch	interface	@spy4x/bank-statements	A profile and how well a file fits it, from 0 (not at all) to 1 (every header name).
+RowError	interface	@spy4x/bank-statements	A row the parser could not read, and why.
+StatementBalance	interface	@spy4x/bank-statements	A balance the file states, with the line it is written on.
+StatementError	class	@spy4x/bank-statements	Thrown when a whole file is refused.
+StatementErrorCode	type	@spy4x/bank-statements	Why a whole file was refused.
+StatementFormat	type	@spy4x/bank-statements	A file format detectFormat can name.
+StatementLimits	interface	@spy4x/bank-statements	Size limits for a file from a stranger.
+StatementProfile	interface	@spy4x/bank-statements	One bank's CSV export format.
+StatementRow	interface	@spy4x/bank-statements	One transaction read from a statement.
+Verification	type	@spy4x/bank-statements	What verifyStatement found.
+builtInProfiles	constant	@spy4x/bank-statements	The profiles this package ships, one per CSV shape, each with a synthetic fixture in `fixtures/` and a test that parses and verifies it.
+detectFormat	function	@spy4x/bank-statements	The format of a statement file, decided by its content, never by its name: `"%PDF-"` is a PDF, `OFXHEADER:` or an `<OFX>` element is OFX or QFX, an XML `Document` in a CAMT.053 namespace is CAMT.053, `!Type:` is QIF, `:20:` with a `:60F:` balance is MT940, and text that splits into the same number of columns on most lines is CSV.
+foldHeader	function	@spy4x/bank-statements	A header name as profiles compare it: Unicode-normalised, trimmed, lower case, one space.
+guessProfile	function	@spy4x/bank-statements	Build a candidate profile for a CSV file from the file alone, for a person to confirm: the delimiter, the header line (the first line with as many columns as most lines), the date column and pattern, the amount as a debit and credit pair or one signed column, the number format, and the balance, payee, description and reference columns by their header names.
+matchProfile	function	@spy4x/bank-statements	Rank `profiles` by how well `sample`, the start of a decoded CSV file, fits their fingerprint: the header line split on the profile's delimiter must have its column count, and the score is the share of header names equal in the same place.
+parseCamt053	function	@spy4x/bank-statements	Read a CAMT.053 file: its booked entries (`Ntry` with status `BOOK`; pending and informational ones are not in the balances, so they are left out), its opening balance (`OPBD`, or `PRCD`, the previous closing) and its closing balance (`CLBD`).
+parseMt940	function	@spy4x/bank-statements	Read an MT940 file.
+parseOfx	function	@spy4x/bank-statements	Read an OFX or QFX file: its transactions (`STMTTRN`), in the statement currency (`CURDEF`), and its closing balance (`LEDGERBAL`).
+parseQif	function	@spy4x/bank-statements	Read a QIF file's transactions.
+parseWithProfile	function	@spy4x/bank-statements	Read CSV text with a profile.
+readStatement	function	@spy4x/bank-statements	Read a statement file of any supported format.
+statementProfile	constant	@spy4x/bank-statements	The arktype schema of StatementProfile, for a profile read from storage or an AI.
+verifyStatement	function	@spy4x/bank-statements	Check a statement against its own balances.
 BillingError	interface	@spy4x/billing	A failed request, safe to log: it never carries the secret key.
 BillingErrorCode	type	@spy4x/billing	Why a request to the provider failed.
 BillingEvent	type	@spy4x/billing	A verified webhook delivery, in provider-neutral terms.
@@ -3189,4 +3216,4 @@ firstIssueMessage	function	@spy4x/validation/validate	First issue message in a v
 isArkErrors	function	@spy4x/validation/validate	Whether a value is an arktype rejection, without relying on `instanceof`.
 toValidationError	function	@spy4x/validation/validate	Build a ValidationError from arktype's issues.
 validate	function	@spy4x/validation/validate	Parse `value` with an arktype schema exactly once.
-# export surface: sha256 56b4c2b3ef7ee8ef8cbff1c1c4a195bd7f504c382b55e5a0fdd13939037ef6d6
+# export surface: sha256 3b06fc19f8c7d7d47329c84105bae1bfe04567d4798231fcc0e83a5943e9af75

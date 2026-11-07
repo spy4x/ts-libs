@@ -1,0 +1,10 @@
+{
+  "name": "@spy4x/bank-statements",
+  "version": "1.118.0",
+  "exports": {
+    ".": "./mod.ts"
+  },
+  "publish": {
+    "exclude": ["fixtures"]
+  }
+}

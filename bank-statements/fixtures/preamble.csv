@@ -1,0 +1,7 @@
+Example Bank statement
+Account: 0000 0000 0000
+Period: 01/01/2026 - 01/31/2026
+Posted Date,Payee,Reference,Amount,Original Amount,Original Currency
+01/02/2026,Online Shop,REF-001,"(1,234.56)",,
+01/10/2026,Hotel Example,REF-002,-110.00,-100.00,EUR
+01/15/2026,Refund Example,REF-003,25.00,,
