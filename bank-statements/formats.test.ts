@@ -139,10 +139,45 @@ describe("parseQif", () => {
     ])
   })
 
+  it("refuses an unknown currency as a StatementError", () => {
+    expect(() => parseQif("!Type:Bank\n", { currency: "XYZ" })).toThrow(StatementError)
+  })
+
   it("refuses an investment section", () => {
     expect(() => parseQif("!Type:Invst\nD1/2'26\n^\n", { currency: "USD" })).toThrow(
       "is not an account",
     )
+  })
+})
+
+describe("maxRows", () => {
+  /** Runs `parse` and returns the code of the `StatementError` it throws. */
+  function refusal(parse: () => unknown): string {
+    try {
+      parse()
+    } catch (error) {
+      if (error instanceof StatementError) return error.code
+      throw error
+    }
+    throw new Error("the file was read")
+  }
+
+  it("counts QIF records that end in an indented ^", () => {
+    const source = `!Type:Bank\n${" D1/2'26\n T1.00\n ^\n".repeat(3)}`
+    expect(refusal(() => parseQif(source, { currency: "USD", maxRows: 2 }))).toBe("too-large")
+  })
+
+  it("counts self-closing OFX 2 transactions", async () => {
+    const source = (await text("ofx2.qfx")).replace("</BANKTRANLIST>", "<STMTTRN/></BANKTRANLIST>")
+    expect(refusal(() => parseOfx(source, { maxRows: 2 }))).toBe("too-large")
+  })
+
+  it("counts CAMT.053 entries with a namespace prefix of any length", async () => {
+    const prefix = "p".repeat(100)
+    const entry =
+      `<${prefix}:Ntry xmlns:${prefix}="urn:iso:std:iso:20022:tech:xsd:camt.053.001.08"/>`
+    const source = (await text("camt053.xml")).replace("</Stmt>", `${entry}</Stmt>`)
+    expect(refusal(() => parseCamt053(source, { maxRows: 3 }))).toBe("too-large")
   })
 })
 

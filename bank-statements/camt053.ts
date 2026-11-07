@@ -37,8 +37,6 @@ export function parseCamt053(
   limits: StatementLimits = {},
 ): ParsedStatement {
   checkTextSize(text, limits.maxBytes)
-  const entryOffsets = openingTagOffsets(text, "Ntry")
-  checkRowCount(entryOffsets.length, limits.maxRows)
   const document = readXml(text, limits.maxBytes)
   const ns = document.namespace
   if (!ns.startsWith(CAMT053_NS) || document.name !== "Document") {
@@ -84,8 +82,10 @@ export function parseCamt053(
     } else result.openingBalance ??= { amount: amount.value, line }
   }
 
-  const lines = linesAt(text, entryOffsets)
-  for (const [index, entry] of childElements(statement, ns, "Ntry").entries()) {
+  const entries = childElements(statement, ns, "Ntry")
+  checkRowCount(entries.length, limits.maxRows)
+  const lines = linesAt(text, openingTagOffsets(text, "Ntry"))
+  for (const [index, entry] of entries.entries()) {
     const status = text1(entry, ns, "Sts", "Cd") || text1(entry, ns, "Sts")
     if (status !== "BOOK") continue
     const line = lines[index] ?? 0

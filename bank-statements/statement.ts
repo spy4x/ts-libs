@@ -137,7 +137,7 @@ export function linesAt(text: string, offsets: readonly number[]): number[] {
 
 /**
  * The offset of every opening tag named `name` in XML or SGML text, with or without a namespace
- * prefix: `<Ntry>`, `<camt:Ntry attr="1">`. Used to give rows of a tree-shaped file their line.
+ * prefix, self-closing too: `<Ntry>`, `<camt:Ntry attr="1">`, `<STMTTRN/>`. Used to give rows of a tree-shaped file their line.
  */
 export function openingTagOffsets(text: string, name: string): number[] {
   const offsets: number[] = []
@@ -148,15 +148,15 @@ export function openingTagOffsets(text: string, name: string): number[] {
   ) {
     const after = text[at + name.length]
     if (
-      after !== ">" && after !== " " && after !== "\t" && after !== "\r" &&
+      after !== ">" && after !== "/" && after !== " " && after !== "\t" && after !== "\r" &&
       after !== "\n"
     ) {
       continue
     }
     let start = at - 1
     if (text[start] === ":") {
-      const limit = Math.max(0, start - 64)
-      while (start > limit && /[\w.-]/.test(text[start - 1])) start--
+      // Linear overall: each prefix run ends at its own colon, so no character is walked twice.
+      while (start > 0 && /[\w.-]/.test(text[start - 1])) start--
       start--
     }
     if (text[start] === "<") offsets.push(start)

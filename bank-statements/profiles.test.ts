@@ -137,6 +137,13 @@ describe("verifyStatement", () => {
     })
   })
 
+  it("returns unverifiable for one row whose balance nothing else states", async () => {
+    const source = (await text("signed.csv")).split("\n").slice(0, 2).join("\n")
+    const statement = parseWithProfile(source, signed)
+    expect(statement.rows).toHaveLength(1)
+    expect(verifyStatement(statement)).toEqual({ status: "unverifiable" })
+  })
+
   it("returns unverifiable for a file without balances", async () => {
     expect(verifyStatement(parseWithProfile(await text("preamble.csv"), preamble))).toEqual({
       status: "unverifiable",

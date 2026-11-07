@@ -31,8 +31,9 @@ export type Verification =
  *   may come oldest or newest first; the order with fewer failures is the file's.
  * - **Totals**, otherwise, when the file states both: opening plus every amount equals closing.
  *
- * A statement with any row error is never `"verified"`: each one is a failure. Without balances to
- * check, the answer is `"unverifiable"`.
+ * A statement with any row error is never `"verified"`: each one is a failure. Without a balance
+ * comparison to make (no balances, or one row whose balance nothing else states), the answer is
+ * `"unverifiable"`. Without an opening balance, the first row's own amount is not compared.
  */
 export function verifyStatement(statement: ParsedStatement): Verification {
   const { rows, openingBalance: opening, closingBalance: closing } = statement
@@ -42,7 +43,8 @@ export function verifyStatement(statement: ParsedStatement): Verification {
   }))
   let checked = false
   if (rows.length > 0 && rows.every((row) => row.balance !== undefined)) {
-    checked = true
+    // One row with no stated balance around it compares nothing.
+    checked = rows.length > 1 || opening !== undefined || closing !== undefined
     const forward = runningFailures(rows, opening, closing)
     const backward = runningFailures(rows.toReversed(), opening, closing)
     failures.push(...(backward.length < forward.length ? backward : forward))

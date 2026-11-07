@@ -55,12 +55,13 @@ export function parseQif(
 ): ParsedStatement {
   const { currency } = options
   if (!isCurrencyCode(currency)) {
-    throw new RangeError(`unknown currency ${quote(currency)}`)
+    throw new StatementError("unsupported", `unknown currency ${quote(currency)}`)
   }
   checkTextSize(text, options.maxBytes)
   const lines = text.split(/\r\n|\r|\n/)
   checkRowCount(
-    lines.filter((line) => line.startsWith("^")).length,
+    // Counted the way the loop below reads them: trimmed, so ` ^` ends a record too.
+    lines.filter((line) => line.trim() === "^").length,
     options.maxRows,
   )
 

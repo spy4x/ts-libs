@@ -37,8 +37,6 @@ export function parseOfx(
   limits: StatementLimits = {},
 ): ParsedStatement {
   checkTextSize(text, limits.maxBytes)
-  const rowOffsets = openingTagOffsets(text, "STMTTRN")
-  checkRowCount(rowOffsets.length, limits.maxRows)
   const root = text.trimStart().startsWith("<?xml")
     ? readXml(text, limits.maxBytes)
     : sgmlTree(text)
@@ -63,13 +61,13 @@ export function parseOfx(
     )
   }
 
-  const lines = linesAt(text, rowOffsets)
+  const list = childElement(statement, "", "BANKTRANLIST")
+  const transactions = list ? childElements(list, "", "STMTTRN") : []
+  checkRowCount(transactions.length, limits.maxRows)
+  const lines = linesAt(text, openingTagOffsets(text, "STMTTRN"))
   const rows: StatementRow[] = []
   const rowErrors: RowError[] = []
-  const list = childElement(statement, "", "BANKTRANLIST")
-  for (
-    const [index, transaction] of (list ? childElements(list, "", "STMTTRN") : []).entries()
-  ) {
+  for (const [index, transaction] of transactions.entries()) {
     const line = lines[index] ?? 0
     const date = readIsoDate(leaf(transaction, "DTPOSTED"), true)
     const amount = readDecimal(leaf(transaction, "TRNAMT"), currency)
