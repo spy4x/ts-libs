@@ -253,15 +253,17 @@ describe("readStatement", () => {
     )
   })
 
-  it("reads a Windows-1252 CSV through its profile's encoding", async () => {
-    const statement = readStatement(await bytes("debit-credit.csv"), {
-      profile: builtInProfiles[1],
-    })
-    expect(statement.rows.map((row) => row.payee)).toEqual([
-      "Stadtwerke",
-      "Bäckerei Müller",
-      "Arbeitgeber GmbH",
-    ])
+  it("reads a CSV that is not UTF-8 in its profile's encoding", () => {
+    // "Магазин" in Windows-1251: `А`–`я` are 0xC0–0xFF. Read as Windows-1252, the default, it
+    // would come out as "Ìàãàçèí".
+    const shop = Uint8Array.from("Магазин", (char) => 0xc0 + char.charCodeAt(0) - 0x410)
+    const head = new TextEncoder().encode(
+      "Buchungstag;Empfänger;Verwendungszweck;Soll;Haben;Saldo\n03.01.2026;".replace("ä", "a"),
+    )
+    const tail = new TextEncoder().encode(";x;1,00;;-1,00\n")
+    const file = Uint8Array.from([...head, ...shop, ...tail])
+    const profile = { ...builtInProfiles[1], encoding: "windows-1251" as const }
+    expect(readStatement(file, { profile }).rows.map((row) => row.payee)).toEqual(["Магазин"])
   })
 
   it("asks for a profile for CSV and refuses a PDF", () => {
