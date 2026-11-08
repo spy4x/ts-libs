@@ -61,9 +61,9 @@ describe("maskSample", () => {
     expect(codePoints(masked)).toBe(codePoints(lines[0]))
   })
 
-  it("keeps only the header row's column-name words and masks every other word in it", () => {
-    expect(maskSample(["Datum der Buchung;Anna Kowalska;Betrag"], { headerRow: 0 }))
-      .toEqual(["Datum der Buchung;Xxxx Xxxxxxxx;Betrag"])
+  it("keeps only the header row's whole column-name words, masking a name that contains one", () => {
+    expect(maskSample(["Datum der Buchung;Anna Kowalska;Betrag;Inessa Dateman"], { headerRow: 0 }))
+      .toEqual(["Datum der Buchung;Xxxx Xxxxxxxx;Betrag;Xxxxxx Xxxxxxx"])
   })
 
   it("keeps the letters of a real German and a real Russian header row", () => {
