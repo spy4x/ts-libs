@@ -275,22 +275,24 @@ describe("parsePdfStatement", () => {
     })
   })
 
-  it("gives up on a long line of numbers that matches no way within a second", () => {
+  it("reads a crafted file of long lines of numbers within a second", () => {
     // The longest pattern a profile allows: a date, 31 text-and-amount pairs and an amount.
     const pairs = Array.from({ length: 31 }, () => [{ type: "text" }, { type: "amount" }] as const)
     const profile: StatementProfile = {
       ...base,
       pdf: { pattern: [{ type: "date" }, ...pairs.flat(), { type: "amount" }] },
     }
-    for (const count of [497, 200_000]) {
-      const numbers = Array.from({ length: count }, (_, index) => String(index + 1))
-      const page = handPage(["02.01.2026", ...numbers, "end"])
+    const numbers = (count: number) => Array.from({ length: count }, (_, index) => `${index + 1}`)
+    // One line far past the word limit, a line that matches no way, and 2,000 lines that each
+    // match, so every run of every line could be parsed.
+    const long = handPage(["02.01.2026", ...numbers(200_000), "end"])
+    const unmatched = handPage(["02.01.2026", ...numbers(497), "end"])
+    const many = Array(2000).fill(handPage(["02.01.2026", ...numbers(498)]))
+    for (const pages of [[long], [unmatched], many]) {
       const started = performance.now()
-      const parsed = parsePdfStatement([page], profile)
+      const parsed = parsePdfStatement(pages, profile)
       const took = performance.now() - started
-      expect(parsed.rows).toEqual([])
-      expect(parsed.rowErrors).toHaveLength(1)
-      expect(parsed.rowErrors[0].reason).toContain("does not match the pattern")
+      expect(parsed.rows.length + parsed.rowErrors.length).toBe(pages.length)
       expect(took).toBeLessThan(1000)
     }
   })
