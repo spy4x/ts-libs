@@ -251,6 +251,19 @@ function groupLines(words: (PdfWord & { y: number })[], page: number, before: nu
 const MAX_TOKEN_WORDS = 3
 
 /**
+ * Most words a line may have for a pattern to match it. A statement row holds far fewer; the
+ * limit keeps a crafted line of millions of words from holding the reader for seconds.
+ */
+const MAX_PATTERN_LINE_WORDS = 500
+
+/**
+ * Most words of one file that patterns are matched against, over twice a dense 50-page
+ * statement. Lines past it become row errors, so a crafted file of many long lines of numbers
+ * costs well under a second of matching.
+ */
+const MAX_PATTERN_FILE_WORDS = 50_000
+
+/**
  * Read the lines of a PDF statement with a profile that has a `pdf` layout. Each line becomes
  * the profile's columns, and those go through the same row reader as a CSV row, so the result
  * is the {@link ParsedStatement} that `verifyStatement` checks.
@@ -275,11 +288,14 @@ export function parsePdfStatement(
   const layout = profile.pdf
   const accepts = tokenTest(profile)
   const candidates: { line: PdfLine; cells: string[] | null }[] = []
+  let budget = MAX_PATTERN_FILE_WORDS
   for (const { lines } of pages) {
     for (const line of lines) {
       const cells = "columns" in layout
         ? columnCells(line.words, layout)
-        : patternCells(line.words, layout.pattern, accepts)
+        : (budget -= line.words.length) >= 0
+        ? patternCells(line.words, layout.pattern, accepts)
+        : null
       const isRow = "columns" in layout
         ? accepts("date", cells?.[profile.date.column] ?? "")
         : startsPattern(line.words, layout.pattern[0], accepts)
@@ -327,59 +343,95 @@ function columnCells(
 
 /** Whether `token` accepts the first words of `words`. */
 function startsPattern(words: readonly PdfWord[], token: PdfToken, accepts: TokenTest): boolean {
-  return tokenLength(words, 0, token, accepts) > 0
+  return tokenLengths(words, 0, token, accepts).length > 0
 }
 
 /**
- * How many words from `at` on `token` takes, 0 when it does not match there. A `text` token
- * takes one word here; {@link patternCells} extends it.
+ * How many words from `at` on `token` may take, in the order to try them; empty when it does not
+ * match there. A `text` token tries the shortest run first, so the tokens after it get the
+ * numbers in a description's tail; a date or amount tries the longest run first, so `1 234,56` is
+ * one amount and not `1`.
  */
-function tokenLength(
+function tokenLengths(
   words: readonly PdfWord[],
   at: number,
   token: PdfToken,
   accepts: TokenTest,
-): number {
+): number[] {
   if ("literal" in token) {
     const expected = token.literal.split(" ")
-    return expected.every((word, index) => words[at + index]?.text === word) ? expected.length : 0
+    return expected.every((word, index) => words[at + index]?.text === word)
+      ? [expected.length]
+      : []
   }
-  if (at >= words.length) return 0
-  if (token.type === "text") return 1
-  // The longest run that reads, so `1 234,56` is one amount and not `1`.
-  for (let length = Math.min(MAX_TOKEN_WORDS, words.length - at); length > 0; length--) {
-    if (accepts(token.type, joined(words, at, at + length))) return length
+  const left = words.length - at
+  if (token.type === "text") return Array.from({ length: left }, (_, index) => index + 1)
+  const lengths: number[] = []
+  for (let length = Math.min(MAX_TOKEN_WORDS, left); length > 0; length--) {
+    if (accepts(token.type, joined(words, at, at + length))) lengths.push(length)
   }
-  return 0
+  return lengths
 }
 
 /**
- * The cells a pattern fills from `words`, or `null` when the line does not match it whole. One
- * pass without backtracking: a `text` token takes words until the next token accepts one, so the
- * work is at most words times tokens times {@link MAX_TOKEN_WORDS}.
+ * The cells a pattern fills from `words`, or `null` when the line does not match it whole. A
+ * `text` token tries the shortest run first and a date or amount the longest first, and a token
+ * takes the first run after which the rest of the pattern still matches, so `Invoice 2024 paid`
+ * stays one description although `2024` reads as an amount. Whether the rest matches comes from a
+ * table filled from the end of the line, so the work is tokens times words times
+ * {@link MAX_TOKEN_WORDS}, and each run of each distinct token is tested once. A line longer than
+ * {@link MAX_PATTERN_LINE_WORDS} does not match.
  */
 function patternCells(
   words: readonly PdfWord[],
   pattern: readonly PdfToken[],
   accepts: TokenTest,
 ): string[] | null {
+  if (words.length > MAX_PATTERN_LINE_WORDS) return null
+  const width = words.length + 1
+  // reaches[index * width + at]: tokens from `index` on match the words from `at` to the end.
+  const reaches = new Uint8Array((pattern.length + 1) * width)
+  reaches[pattern.length * width + words.length] = 1
+  // The runs each date, amount or literal token may take from a position, worked out once per
+  // distinct token and position; `null` for a text token, which may take any run.
+  const runs = new Map<string, number[][]>()
+  const options = pattern.map((token) => {
+    if (!("literal" in token) && token.type === "text") return null
+    const key = "literal" in token ? `literal ${token.literal}` : token.type
+    const byPosition = runs.get(key) ?? []
+    runs.set(key, byPosition)
+    const longest = "literal" in token ? token.literal.split(" ").length : MAX_TOKEN_WORDS
+    const at = (from: number) => byPosition[from] ??= tokenLengths(words, from, token, accepts)
+    return { longest, at }
+  })
+  const fits = (index: number, at: number, length: number) =>
+    reaches[(index + 1) * width + at + length] === 1
+  for (let index = pattern.length - 1; index >= 0; index--) {
+    const option = options[index]
+    // The nearest position after `at` from which the next token reaches the end of the line.
+    let nearest = Infinity
+    for (let at = words.length; at >= 0; at--) {
+      if (at < words.length && reaches[(index + 1) * width + at + 1]) nearest = at + 1
+      // A run is parsed only when it could end where the next token can go on.
+      const reached = option
+        ? nearest - at <= option.longest &&
+          option.at(at).some((length) => fits(index, at, length))
+        : nearest !== Infinity
+      reaches[index * width + at] = reached ? 1 : 0
+    }
+  }
+  if (!reaches[0]) return null
   const cells: string[] = []
   let at = 0
   for (let index = 0; index < pattern.length; index++) {
-    const token = pattern[index]
-    let length = tokenLength(words, at, token, accepts)
-    if (length === 0) return null
-    if (!("literal" in token) && token.type === "text") {
-      const next = pattern[index + 1]
-      while (
-        at + length < words.length &&
-        (next === undefined || tokenLength(words, at + length, next, accepts) === 0)
-      ) length++
-    }
-    if (!("literal" in token)) cells.push(joined(words, at, at + length))
+    const option = options[index]
+    let length = 1
+    if (!option) { while (!fits(index, at, length)) length++ }
+    else length = option.at(at).find((run) => fits(index, at, run)) ?? 0
+    if (!("literal" in pattern[index])) cells.push(joined(words, at, at + length))
     at += length
   }
-  return at === words.length ? cells : null
+  return cells
 }
 
 const joined = (words: readonly PdfWord[], from: number, to: number) =>

@@ -18,7 +18,8 @@
  * The file comes from a stranger. `maxBytes` (10 MiB) is checked before pdf.js sees it and also
  * caps the text read, `maxPages` (50) is checked before any page's text is read, and `maxLines`
  * (100,000) caps the lines. pdf.js loads with `isEvalSupported: false` and renders nothing. A
- * line pattern is a list of typed tokens, never a regular expression, and is matched in one pass.
+ * line pattern is a list of typed tokens, never a regular expression, and is matched in time
+ * linear in a line's words, on lines of at most 500 words.
  *
  * @module
  */

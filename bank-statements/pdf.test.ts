@@ -87,6 +87,18 @@ const item = (str: string, x: number, y: number) => ({
   width: str.length * 5,
 })
 
+/** One page with one line of `words`, 50 points apart, as `extractPdfLines` would group it. */
+const handPage = (words: string[]): PdfPage => ({
+  page: 1,
+  lines: [{
+    line: 1,
+    page: 1,
+    y: 700,
+    text: words.join(" "),
+    words: words.map((text, index) => ({ text, x: index * 50, width: 40 })),
+  }],
+})
+
 describe("extractPdfLines", () => {
   it("groups the text fixture's words into numbered lines, left to right, with their x", async () => {
     const read = await pages("statement.pdf")
@@ -236,17 +248,7 @@ describe("parsePdfStatement", () => {
   })
 
   it("matches a literal token and an amount written over two words", () => {
-    const words = ["02.01.2026", "Salary", "EUR", "2", "500,00", "3", "500,00"]
-    const page: PdfPage = {
-      page: 1,
-      lines: [{
-        line: 1,
-        page: 1,
-        y: 700,
-        text: words.join(" "),
-        words: words.map((text, index) => ({ text, x: index * 50, width: 40 })),
-      }],
-    }
+    const page = handPage(["02.01.2026", "Salary", "EUR", "2", "500,00", "3", "500,00"])
     const profile: StatementProfile = {
       ...base,
       numberFormat: { decimal: ",", group: " " },
@@ -263,6 +265,47 @@ describe("parsePdfStatement", () => {
     expect(parsePdfStatement([page], profile).rows).toMatchObject([
       { line: 1, amount: 250000, memo: "Salary", balance: 350000 },
     ])
+  })
+
+  it("keeps a number inside the description when the amounts come after it", () => {
+    const page = handPage(["02.01.2026", "Invoice", "2024", "paid", "-5.00", "95.00"])
+    expect(parsePdfStatement([page], byPattern)).toMatchObject({
+      rows: [{ line: 1, memo: "Invoice 2024 paid", amount: -500, balance: 9500 }],
+      rowErrors: [],
+    })
+  })
+
+  it("reads a crafted file of long lines of numbers within a second", () => {
+    // The longest pattern a profile allows: a date, 31 text-and-amount pairs and an amount.
+    const pairs = Array.from({ length: 31 }, () => [{ type: "text" }, { type: "amount" }] as const)
+    const profile: StatementProfile = {
+      ...base,
+      pdf: { pattern: [{ type: "date" }, ...pairs.flat(), { type: "amount" }] },
+    }
+    const numbers = (count: number) => Array.from({ length: count }, (_, index) => `${index + 1}`)
+    // One line far past the word limit, a line that matches no way, and 2,000 lines that each
+    // match, so every run of every line could be parsed.
+    const long = handPage(["02.01.2026", ...numbers(200_000), "end"])
+    const unmatched = handPage(["02.01.2026", ...numbers(497), "end"])
+    const many = Array(2000).fill(handPage(["02.01.2026", ...numbers(498)]))
+    for (const pages of [[long], [unmatched], many]) {
+      const started = performance.now()
+      const parsed = parsePdfStatement(pages, profile)
+      const took = performance.now() - started
+      expect(parsed.rows.length + parsed.rowErrors.length).toBe(pages.length)
+      expect(took).toBeLessThan(1000)
+    }
+  })
+
+  it("reads a row of 500 words and rejects one of 501", () => {
+    const profile: StatementProfile = {
+      ...base,
+      pdf: { pattern: [{ type: "date" }, { type: "text" }, { type: "amount" }] },
+    }
+    const line = (count: number) =>
+      handPage(["02.01.2026", ...Array.from({ length: count - 2 }, () => "word"), "-5.00"])
+    expect(parsePdfStatement([line(500)], profile).rows).toHaveLength(1)
+    expect(parsePdfStatement([line(501)], profile).rowErrors).toHaveLength(1)
   })
 
   it("throws for a profile without a pdf layout", () => {
