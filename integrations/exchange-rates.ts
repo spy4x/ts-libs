@@ -5,11 +5,15 @@
  *
  * Behaviour:
  *
- *  - `daily` never throws. It returns `{ success, output, error }`: the rates it found and the
- *    quotes it has no rate for, or the source's id and the reason it failed.
+ *  - `daily` and Frankfurter's `timeSeries` never throw. Each returns `{ success, output, error }`:
+ *    the rates it found and the quotes it has no rate for, or the source's id and the reason it
+ *    failed.
  *  - A quote with no rate is listed in `missing`, never given a rate of `0`.
  *  - Each rate carries the date it is really for, which can be earlier than the date asked: on a
- *    weekend or a holiday Frankfurter answers with the last business day.
+ *    weekend or a holiday Frankfurter answers with the last business day. A range starting on one
+ *    also starts with the last business day before it.
+ *  - Frankfurter's `timeSeries` splits a range into requests of at most about 2000 rows, asked one
+ *    after another, so every reply stays under the 256 KiB cap.
  *  - A rate is a plain decimal string (`"0.000012907"`, never `1.2907e-5`), kept only when the
  *    source sent a finite number above zero. There is no upper limit: a bitcoin priced in dong is
  *    in the billions.
@@ -158,6 +162,10 @@ const plainDecimal = (value: unknown): string | undefined => {
   if (point >= digits.length) return digits + "0".repeat(point - digits.length)
   return `${digits.slice(0, point)}.${digits.slice(point)}`
 }
+
+/** The calendar date `days` after `date`, both `YYYY-MM-DD`. */
+const addDays = (date: string, days: number): string =>
+  new Date(Date.parse(`${date}T00:00:00Z`) + days * 86_400_000).toISOString().slice(0, 10)
 
 const isCalendarDate = (date: unknown): date is string => {
   if (typeof date !== "string" || !DATE.test(date)) return false
@@ -317,6 +325,24 @@ const FrankfurterReply = type({ date: "string", base: "string", quote: "string",
   .array()
 const FrankfurterRefusal = type({ message: "string" })
 const PROVIDER = /^[A-Z0-9_]{1,20}$/
+/** Rows one range request may ask for: a row is about 70 bytes, far under `MAX_REPLY_BYTES`. */
+const MAX_ROWS_PER_REQUEST = 2000
+
+/** Frankfurter's rates: a day, or every day of a range. */
+export interface FrankfurterSource extends ExchangeRateSource {
+  /**
+   * Every rate of `base` to each of `quotes` from `from` to `to` (`YYYY-MM-DD`, both included),
+   * sorted by date, then in the order of `quotes`. Days without rates (weekends, holidays) have
+   * none, except that a range starting on one also gets the business day before it. `missing`
+   * lists the quotes with no rate on any day. `from` after `to` is an `invalid-request`.
+   */
+  timeSeries(
+    from: string,
+    to: string,
+    base: string,
+    quotes: readonly string[],
+  ): Promise<RatesResult>
+}
 
 /**
  * Rates from Frankfurter v2 (`GET /v2/rates?date=&base=&quotes=`), which needs no key. Its id is
@@ -326,11 +352,22 @@ const PROVIDER = /^[A-Z0-9_]{1,20}$/
  * Friday's rates. A currency Frankfurter does not know is listed as missing, not an error, so a
  * fallback source can still be asked for it.
  *
+ * `timeSeries(from, to, base, quotes)` gives every day of a range in a few requests
+ * (`GET /v2/rates?from=&to=`), each under about 2000 rows, asked one after another; any request
+ * failing fails the call.
+ *
+ * @example
+ * ```ts
+ * const rates = createFrankfurterRates({ providers: ["ECB"] })
+ * const year = await rates.timeSeries("2025-01-01", "2025-12-31", "EUR", ["USD", "GBP"])
+ * if (year.success) year.output.rates // starts with 2024-12-31, the business day before
+ * ```
+ *
  * @throws {TypeError} When an option is malformed; the message names the option, not its value.
  */
 export const createFrankfurterRates = (
   options: FrankfurterRatesOptions = {},
-): ExchangeRateSource => {
+): FrankfurterSource => {
   const name = "createFrankfurterRates"
   checkOptions(name, options)
   let url: URL
@@ -357,46 +394,91 @@ export const createFrankfurterRates = (
   const transport = transportOf(name, id, options)
   const endpoint = `${url.href.replace(/\/+$/, "")}/v2/rates`
 
+  /**
+   * The rates of one request, `query` plus `base` and `quotes`, and the quotes Frankfurter knows.
+   * Frankfurter refuses the whole call over one currency it does not know (HTTP 422,
+   * `invalid currency: XYZ`); that currency is left out and the rest asked again. An unknown base
+   * knows no quote.
+   */
+  const ask = async (
+    query: Record<string, string>,
+    base: string,
+    quotes: readonly string[],
+  ): Promise<{ rates: ExchangeRate[]; known: string[] } | RatesResult> => {
+    let pending = [...quotes]
+    while (pending.length > 0) {
+      const params = new URLSearchParams({ ...query, base, quotes: pending.join(",") })
+      if (providers !== undefined) params.set("providers", providers.join(","))
+      const reply = await getJson(transport, `${endpoint}?${params}`)
+      if (isFailure(reply)) return reply
+      if (reply.status === 422) {
+        const refusal = FrankfurterRefusal(reply.body)
+        // One refusal names every unknown currency, comma-separated: `invalid currency: DOGE,ADA`.
+        const codes = refusal instanceof type.errors
+          ? []
+          : (/^invalid currency: (.+)$/.exec(refusal.message)?.[1] ?? "").split(",")
+            .map((code) => code.trim())
+        if (codes.includes(base)) return { rates: [], known: [] }
+        if (codes.some((code) => pending.includes(code))) {
+          pending = pending.filter((quote) => !codes.includes(quote))
+          continue
+        }
+      }
+      if (reply.status < 200 || reply.status >= 300) return statusFailure(id, reply.status)
+      const rows = FrankfurterReply(reply.body)
+      if (rows instanceof type.errors) {
+        return failure(id, "invalid-reply", "the reply is not a list of rates")
+      }
+      const rates: ExchangeRate[] = []
+      for (const row of rows) {
+        const rate = plainDecimal(row.rate)
+        if (row.base === base && pending.includes(row.quote) && DATE.test(row.date) && rate) {
+          rates.push({ base, quote: row.quote, rate, date: row.date, source: id })
+        }
+      }
+      return { rates, known: pending }
+    }
+    return { rates: [], known: [] }
+  }
+
   return {
     id,
     async daily(date, base, quotes) {
       const asked = checkAsk(date, base, quotes)
       if (typeof asked === "string") return failure(id, "invalid-request", asked)
+      const reply = await ask({ date }, base, asked)
+      return "success" in reply ? reply : found(reply.rates, asked, base)
+    },
+    async timeSeries(from, to, base, quotes) {
+      const asked = isCalendarDate(to)
+        ? checkAsk(from, base, quotes)
+        : "date must be a calendar date, YYYY-MM-DD"
+      if (typeof asked === "string") return failure(id, "invalid-request", asked)
+      if (from > to) return failure(id, "invalid-request", "from must not be after to")
+      const days = Math.max(1, Math.floor(MAX_ROWS_PER_REQUEST / Math.max(1, asked.length)))
+      const byDay = new Map<string, ExchangeRate>()
       let pending = asked
-      const rates: ExchangeRate[] = []
-      // Frankfurter refuses the whole call over one currency it does not know (HTTP 422,
-      // `invalid currency: XYZ`); that currency is left out and the rest asked again.
-      while (pending.length > 0) {
-        const params = new URLSearchParams({ date, base, quotes: pending.join(",") })
-        if (providers !== undefined) params.set("providers", providers.join(","))
-        const reply = await getJson(transport, `${endpoint}?${params}`)
-        if (isFailure(reply)) return reply
-        if (reply.status === 422) {
-          const refusal = FrankfurterRefusal(reply.body)
-          // One refusal names every unknown currency, comma-separated: `invalid currency: DOGE,ADA`.
-          const codes = refusal instanceof type.errors
-            ? []
-            : (/^invalid currency: (.+)$/.exec(refusal.message)?.[1] ?? "").split(",")
-              .map((code) => code.trim())
-          if (codes.includes(base)) return found([], asked, base)
-          if (codes.some((code) => pending.includes(code))) {
-            pending = pending.filter((quote) => !codes.includes(quote))
-            continue
-          }
+      for (let start = from; start <= to;) {
+        const last = addDays(start, days - 1)
+        const end = last < to ? last : to
+        const reply = await ask({ from: start, to: end }, base, pending)
+        if ("success" in reply) return reply
+        // Each request but the first also starts with the day before it, which the previous one
+        // already holds.
+        for (const rate of reply.rates) {
+          const key = `${rate.date} ${rate.quote}`
+          if (rate.date <= end && !byDay.has(key)) byDay.set(key, rate)
         }
-        if (reply.status < 200 || reply.status >= 300) return statusFailure(id, reply.status)
-        const rows = FrankfurterReply(reply.body)
-        if (rows instanceof type.errors) {
-          return failure(id, "invalid-reply", "the reply is not a list of rates")
-        }
-        for (const row of rows) {
-          const rate = plainDecimal(row.rate)
-          if (row.base === base && pending.includes(row.quote) && DATE.test(row.date) && rate) {
-            rates.push({ base, quote: row.quote, rate, date: row.date, source: id })
-          }
-        }
-        break
+        pending = reply.known
+        start = addDays(end, 1)
       }
+      const rates = [...byDay.values()].sort((a, b) =>
+        a.date === b.date
+          ? asked.indexOf(a.quote) - asked.indexOf(b.quote)
+          : a.date < b.date
+          ? -1
+          : 1
+      )
       return found(rates, asked, base)
     },
   }

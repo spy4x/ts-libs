@@ -227,6 +227,176 @@ describe("createFrankfurterRates", () => {
   })
 })
 
+describe("createFrankfurterRates timeSeries", () => {
+  /** `first`, then made-up codes up to 1000 quotes, so each request covers two days (2000 / 1000). */
+  const thousandQuotes = (...first: string[]) => [
+    ...first,
+    ...Array.from(
+      { length: 1000 - first.length },
+      (_, index) => `Q${String(index).padStart(3, "0")}`,
+    ),
+  ]
+
+  it("returns each day's rates in the order asked, starting with the Friday before a Saturday", async () => {
+    const { calls, fetcher } = stub(() =>
+      recorded("frankfurter/range-saturday-to-tuesday-ecb.json")
+    )
+    const source = createFrankfurterRates({ providers: ["ECB"], fetch: fetcher })
+
+    const range = output(await source.timeSeries("2026-10-31", "2026-11-03", "USD", ["GBP", "EUR"]))
+
+    assertEquals(range.rates.map((rate) => [rate.date, rate.quote, rate.rate]), [
+      ["2026-10-30", "GBP", "0.74633"],
+      ["2026-10-30", "EUR", "0.89509"],
+      ["2026-11-02", "GBP", "0.74519"],
+      ["2026-11-02", "EUR", "0.89158"],
+      ["2026-11-03", "GBP", "0.74567"],
+      ["2026-11-03", "EUR", "0.89453"],
+    ])
+    assertEquals(range.missing, [])
+    assertEquals(range.rates[0].source, "frankfurter:ECB")
+    assertEquals(calls.length, 1)
+    assertEquals(
+      calls[0].url.origin + calls[0].url.pathname,
+      "https://api.frankfurter.dev/v2/rates",
+    )
+    assertEquals(Object.fromEntries(calls[0].url.searchParams), {
+      from: "2026-10-31",
+      to: "2026-11-03",
+      base: "USD",
+      quotes: "GBP,EUR",
+      providers: "ECB",
+    })
+  })
+
+  it("splits a long range into requests and keeps one rate of the day both replies hold", async () => {
+    const replies = [
+      "frankfurter/range-friday-saturday-ecb.json",
+      "frankfurter/range-sunday-monday-ecb.json",
+    ]
+    const { calls, fetcher } = stub((_url, index) => recorded(replies[index]))
+    const source = createFrankfurterRates({ providers: ["ECB"], fetch: fetcher })
+    const quotes = thousandQuotes("EUR")
+
+    const range = output(await source.timeSeries("2026-10-30", "2026-11-02", "USD", quotes))
+
+    assertEquals(
+      calls.map((call) => [call.url.searchParams.get("from"), call.url.searchParams.get("to")]),
+      [
+        ["2026-10-30", "2026-10-31"],
+        ["2026-11-01", "2026-11-02"],
+      ],
+    )
+    assertEquals(calls[1].url.searchParams.get("quotes"), quotes.join(","))
+    assertEquals(range.rates.map((rate) => [rate.date, rate.quote, rate.rate]), [
+      ["2026-10-30", "EUR", "0.89509"],
+      ["2026-11-02", "EUR", "0.89158"],
+    ])
+    assertEquals(range.missing, quotes.slice(1))
+  })
+
+  it("keeps only finite rates above zero as plain decimals, of the base asked, up to the end", async () => {
+    const { fetcher } = stub(() =>
+      new Response(
+        `[{"date":"2026-10-30","base":"USD","quote":"AAA","rate":5.0112e-10},
+          {"date":"2026-10-30","base":"USD","quote":"BBB","rate":0},
+          {"date":"2026-10-30","base":"USD","quote":"CCC","rate":-1.2},
+          {"date":"2026-10-30","base":"USD","quote":"DDD","rate":"1.2"},
+          {"date":"2026-10-30","base":"USD","quote":"EEE","rate":1e999},
+          {"date":"2026-10-30","base":"EUR","quote":"FFF","rate":1.1},
+          {"date":"2026-11-03","base":"USD","quote":"FFF","rate":1.1}]`,
+      )
+    )
+    const source = createFrankfurterRates({ fetch: fetcher })
+
+    const range = output(
+      await source.timeSeries("2026-10-30", "2026-11-02", "USD", [
+        "AAA",
+        "BBB",
+        "CCC",
+        "DDD",
+        "EEE",
+        "FFF",
+      ]),
+    )
+
+    assertEquals(range.rates.map((rate) => [rate.quote, rate.rate]), [["AAA", "0.00000000050112"]])
+    assertEquals(range.missing, ["BBB", "CCC", "DDD", "EEE", "FFF"])
+  })
+
+  it("lists a quote Frankfurter does not know as missing and leaves it out of later requests", async () => {
+    const replies = [
+      () => recorded("frankfurter/invalid-currency.json", 422),
+      () => recorded("frankfurter/range-friday-saturday-ecb.json"),
+      () => recorded("frankfurter/range-sunday-monday-ecb.json"),
+    ]
+    const { calls, fetcher } = stub((_url, index) => replies[index]())
+    const source = createFrankfurterRates({ providers: ["ECB"], fetch: fetcher })
+    const quotes = thousandQuotes("EUR", "XXX")
+
+    const range = output(await source.timeSeries("2026-10-30", "2026-11-02", "USD", quotes))
+
+    const known = quotes.filter((quote) => quote !== "XXX").join(",")
+    assertEquals(calls.map((call) => call.url.searchParams.get("quotes")), [
+      quotes.join(","),
+      known,
+      known,
+    ])
+    assertEquals(range.rates.map((rate) => [rate.date, rate.quote]), [
+      ["2026-10-30", "EUR"],
+      ["2026-11-02", "EUR"],
+    ])
+    assert(range.missing.includes("XXX"))
+  })
+
+  it("refuses a start after the end or a malformed date, without a call", async () => {
+    const { calls, fetcher } = stub(() => recorded("frankfurter/no-rates.json"))
+    const source = createFrankfurterRates({ fetch: fetcher })
+
+    for (
+      const [from, to] of [
+        ["2026-11-03", "2026-11-02"],
+        ["2026-02-30", "2026-03-02"],
+        ["2026-10-30", "2026-11-31"],
+      ] as const
+    ) {
+      const result = await source.timeSeries(from, to, "EUR", ["USD"])
+      assertEquals(result.success ? null : result.error.code, "invalid-request")
+    }
+    assertEquals(calls.length, 0)
+  })
+
+  it("fails the whole call when a later request fails", async () => {
+    const replies = [
+      () => recorded("frankfurter/range-friday-saturday-ecb.json"),
+      () => new Response("<html>bad gateway</html>", { status: 502 }),
+    ]
+    const { calls, fetcher } = stub((_url, index) => replies[index]())
+    const source = createFrankfurterRates({ fetch: fetcher })
+
+    const result = await source.timeSeries("2026-10-30", "2026-11-02", "USD", thousandQuotes("EUR"))
+
+    assertEquals(calls.length, 2)
+    assertEquals(result.error, {
+      source: "frankfurter",
+      code: "unavailable",
+      message: "the server answered HTTP 502",
+      status: 502,
+    })
+  })
+
+  it("answers no quotes with no rates and no call", async () => {
+    const { calls, fetcher } = stub(() => recorded("frankfurter/no-rates.json"))
+    const source = createFrankfurterRates({ fetch: fetcher })
+
+    assertEquals(output(await source.timeSeries("2026-10-30", "2026-11-02", "EUR", [])), {
+      rates: [],
+      missing: [],
+    })
+    assertEquals(calls.length, 0)
+  })
+})
+
 describe("createExchangeRateApiRates", () => {
   it("reads a day of rates from the history endpoint", async () => {
     const { calls, fetcher } = stub(() => recorded("exchangerate-api/history-eur-2026-10-31.json"))
