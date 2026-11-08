@@ -147,12 +147,14 @@ export {
   findBlueskyPostByLink,
   postBlueskyLink,
   readBlueskyPostResults,
+  resolveBlueskyHandle,
   uploadBlueskyBlob,
 } from "./bluesky.ts"
 export type {
   BlueskyBlob,
   BlueskyBlobResult,
   BlueskyFindResult,
+  BlueskyHandleResult,
   BlueskyLinkCard,
   BlueskyPostRef,
   BlueskyPostResult,
@@ -164,6 +166,7 @@ export type {
   FindBlueskyPostByLinkOptions,
   PostBlueskyLinkOptions,
   ReadBlueskyPostResultsOptions,
+  ResolveBlueskyHandleOptions,
   UploadBlueskyBlobOptions,
 } from "./bluesky.ts"
 export type { ShareResults } from "./share-results.ts"

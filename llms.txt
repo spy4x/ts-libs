@@ -317,6 +317,7 @@ BackoffFn	type	@spy4x/integrations	Computes a delay.
 BlueskyBlob	interface	@spy4x/integrations	An uploaded blob, as the protocol references it from a record.
 BlueskyBlobResult	type	@spy4x/integrations	Outcome of uploadBlueskyBlob.
 BlueskyFindResult	type	@spy4x/integrations	Outcome of findBlueskyPostByLink: `null` when none of the pages read has the link.
+BlueskyHandleResult	type	@spy4x/integrations	Outcome of resolveBlueskyHandle: the account's DID.
 BlueskyLinkCard	interface	@spy4x/integrations	The link card.
 BlueskyPostRef	interface	@spy4x/integrations	A post: its `at://` address, content id and public page.
 BlueskyPostResult	type	@spy4x/integrations	Outcome of postBlueskyLink.
@@ -490,6 +491,7 @@ readUmamiMetrics	function	@spy4x/integrations	Reads a breakdown of a website's p
 readUmamiPageviews	function	@spy4x/integrations	Reads page views and visitors per `unit` of a period, in `timezone` (Umami's `GET /api/websites/<id>/pageviews`).
 readUmamiStats	function	@spy4x/integrations	Reads a website's totals over a period, and the same totals over the period of the same length just before it (Umami's `GET /api/websites/<id>/stats`).
 releaseResponseBody	function	@spy4x/integrations	Releases a response's body without reading it.
+resolveBlueskyHandle	function	@spy4x/integrations	Resolves a handle, such as `name.bsky.social`, to the account's DID.
 runWithRetry	function	@spy4x/integrations	Runs `attempt` under `policy`.
 settle	function	@spy4x/integrations	Consumes whatever a `Sleeper` returned.
 submitIndexNow	function	@spy4x/integrations	Submits `urls` to IndexNow and reports the outcome.
@@ -506,6 +508,7 @@ BLUESKY_PUBLIC_APPVIEW	constant	@spy4x/integrations/bluesky	The public AppView, 
 BlueskyBlob	interface	@spy4x/integrations/bluesky	An uploaded blob, as the protocol references it from a record.
 BlueskyBlobResult	type	@spy4x/integrations/bluesky	Outcome of uploadBlueskyBlob.
 BlueskyFindResult	type	@spy4x/integrations/bluesky	Outcome of findBlueskyPostByLink: `null` when none of the pages read has the link.
+BlueskyHandleResult	type	@spy4x/integrations/bluesky	Outcome of resolveBlueskyHandle: the account's DID.
 BlueskyLinkCard	interface	@spy4x/integrations/bluesky	The link card.
 BlueskyPostRef	interface	@spy4x/integrations/bluesky	A post: its `at://` address, content id and public page.
 BlueskyPostResult	type	@spy4x/integrations/bluesky	Outcome of postBlueskyLink.
@@ -517,6 +520,7 @@ createBlueskySession	function	@spy4x/integrations/bluesky	Signs in with an app p
 findBlueskyPostByLink	function	@spy4x/integrations/bluesky	Finds the author's own post that links to `uri`, among the latest `maxPages` pages of their feed.
 postBlueskyLink	function	@spy4x/integrations/bluesky	Posts `text` with a link card.
 readBlueskyPostResults	function	@spy4x/integrations/bluesky	Reads a post's likes, replies, reposts and quotes from the public AppView.
+resolveBlueskyHandle	function	@spy4x/integrations/bluesky	Resolves a handle, such as `name.bsky.social`, to the account's DID.
 uploadBlueskyBlob	function	@spy4x/integrations/bluesky	Uploads an image for a link card.
 CloudflarePurgeOptions	interface	@spy4x/integrations/cloudflare	Options for purgeUrls.
 CloudflarePurgeResult	interface	@spy4x/integrations/cloudflare	Outcome of a purge: `output` describes what happened on success, `error` on failure.
@@ -3238,4 +3242,4 @@ firstIssueMessage	function	@spy4x/validation/validate	First issue message in a v
 isArkErrors	function	@spy4x/validation/validate	Whether a value is an arktype rejection, without relying on `instanceof`.
 toValidationError	function	@spy4x/validation/validate	Build a ValidationError from arktype's issues.
 validate	function	@spy4x/validation/validate	Parse `value` with an arktype schema exactly once.
-# export surface: sha256 94b09c1c6aa81b12cebafe72919cf78c9c8f5d8eb06aa8af49f93e403a37c21f
+# export surface: sha256 483c6ae3755f04c8308bf8b6a0a643ffa2d93435607420fbd9c7dfe24466dae9

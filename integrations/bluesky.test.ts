@@ -6,6 +6,7 @@ import {
   findBlueskyPostByLink,
   postBlueskyLink,
   readBlueskyPostResults,
+  resolveBlueskyHandle,
   uploadBlueskyBlob,
 } from "./bluesky.ts"
 
@@ -412,4 +413,68 @@ Deno.test("retries a 5xx on a read", async () => {
   })
   assertEquals(result.output?.reactions, 1)
   assertEquals(calls.length, 2)
+})
+
+const HANDLE_URI = "at://Seed.Example.com/app.bsky.feed.post/3kq2rkey"
+const RESOLVE_URL =
+  "https://public.api.bsky.app/xrpc/com.atproto.identity.resolveHandle?handle=seed.example.com"
+const GET_POSTS_URL = `https://public.api.bsky.app/xrpc/app.bsky.feed.getPosts?uris=${
+  encodeURIComponent(POST_URI)
+}`
+
+Deno.test("reads the same numbers for a post addressed by handle as by DID", async () => {
+  const posts = json({ posts: [{ uri: POST_URI, likeCount: 9, replyCount: 4 }] })
+  const byDid = stub(() => posts.clone())
+  const byHandle = stub((_, url) =>
+    url.includes("resolveHandle") ? json({ did: DID }) : posts.clone()
+  )
+  const fromDid = await readBlueskyPostResults({ uri: POST_URI, fetch: byDid.fetcher })
+  const fromHandle = await readBlueskyPostResults({ uri: HANDLE_URI, fetch: byHandle.fetcher })
+  assertEquals(fromHandle, fromDid)
+  assertEquals(fromHandle.output?.reactions, 9)
+  assertEquals(byDid.calls.map((call) => call.url), [GET_POSTS_URL])
+  assertEquals(byHandle.calls.map((call) => call.url), [RESOLVE_URL, GET_POSTS_URL])
+  assertEquals(byHandle.calls[0].headers.get("authorization"), null)
+})
+
+Deno.test("fails the read without asking for posts when the handle does not resolve", async () => {
+  const { calls, fetcher } = stub(() =>
+    json({ error: "InvalidRequest", message: "Unable to resolve handle" }, 400)
+  )
+  const result = await readBlueskyPostResults({ uri: HANDLE_URI, fetch: fetcher })
+  assertEquals(result.success, false)
+  assertStringIncludes(result.error, "bluesky handle seed.example.com did not resolve")
+  assertStringIncludes(result.error, "400")
+  assertEquals(calls.map((call) => call.url), [RESOLVE_URL])
+})
+
+Deno.test("fails the read when the handle answer has no valid DID", async () => {
+  const { calls, fetcher } = stub(() => json({ did: "not-a-did" }))
+  const result = await readBlueskyPostResults({ uri: HANDLE_URI, fetch: fetcher })
+  assertEquals(result, {
+    success: false,
+    output: null,
+    error: "bluesky answer for seed.example.com has no did",
+  })
+  assertEquals(calls.length, 1)
+})
+
+Deno.test("refuses an address with an invalid handle, without a request", async () => {
+  const { calls, fetcher } = stub(() => json({ did: DID }))
+  const result = await readBlueskyPostResults({
+    uri: "at://bad_handle!/app.bsky.feed.post/3kq2rkey",
+    fetch: fetcher,
+  })
+  assertEquals(result.error, "invalid options: uri must be an at:// post address")
+  const direct = await resolveBlueskyHandle({ handle: "bad handle", fetch: fetcher })
+  assertStringIncludes(direct.error, "invalid options: handle")
+  assertEquals(calls.length, 0)
+})
+
+Deno.test("resolves a handle to its DID in lower case, without a token", async () => {
+  const { calls, fetcher } = stub(() => json({ did: DID }))
+  const result = await resolveBlueskyHandle({ handle: "Seed.Example.com", fetch: fetcher })
+  assertEquals(result, { success: true, output: DID, error: "" })
+  assertEquals(calls.map((call) => call.url), [RESOLVE_URL])
+  assertEquals(calls[0].headers.get("authorization"), null)
 })
