@@ -1,7 +1,11 @@
 {
-  "$comment": "Applied by `deno task jsr:metadata` (infra/scripts/jsr-metadata.ts) via JSR's PATCH package API. Each package gets its own description, its GitHub repository link, and the runtime flags this repo can back with evidence: `deno: true` everywhere (every package is type-checked and tested on Deno in CI), plus `browser: true` only for the packages with zero `Deno.*` usage anywhere in their sources (validation, time, caldav). See CONTRIBUTING.md 'Maintaining' for how to run this against the real API.",
+  "$comment": "Applied by `deno task jsr:metadata` (infra/scripts/jsr-metadata.ts) via JSR's PATCH package API. Each package gets its own description, its GitHub repository link, and the runtime flags this repo can back with evidence: `deno: true` everywhere (every package is type-checked and tested on Deno in CI), plus `browser: true` only for the packages with zero `Deno.*` usage anywhere in their sources (validation, time, caldav, bank-statements). See CONTRIBUTING.md 'Maintaining' for how to run this against the real API.",
   "repository": { "owner": "spy4x", "name": "ts-libs" },
   "packages": {
+    "bank-statements": {
+      "description": "Bank statements read into signed amounts in minor units: OFX, QIF, CAMT.053, MT940 and bank CSVs through profiles, with balance checks.",
+      "runtimeCompat": { "deno": true, "browser": true }
+    },
     "billing": {
       "description": "Provider-neutral payments: checkout, customer portal and verified webhook events, with a Stripe adapter.",
       "runtimeCompat": { "deno": true }

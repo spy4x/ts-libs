@@ -1,0 +1,18 @@
+!Type:Bank
+D01/02'26
+T1,250.00
+PExample Employer
+MJanuary salary
+N1001
+^
+D1/15'26
+T-75.25
+PExample Pharmacy
+LHealth
+^
+D1/31'26
+T-9.99
+PExample Streaming
+SEntertainment
+$-9.99
+^
