@@ -228,7 +228,7 @@ describe("createFrankfurterRates", () => {
 })
 
 describe("createFrankfurterRates timeSeries", () => {
-  /** 998 made-up codes after `first`, so each request covers only two days (2000 rows / 1000). */
+  /** `first`, then made-up codes up to 1000 quotes, so each request covers two days (2000 / 1000). */
   const thousandQuotes = (...first: string[]) => [
     ...first,
     ...Array.from(
