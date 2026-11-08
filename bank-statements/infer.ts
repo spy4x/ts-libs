@@ -1,7 +1,7 @@
 /**
  * A statement profile proposed by a language model, for a CSV file or PDF statement that no known
  * profile reads. The model sees only a masked sample: every letter becomes `x` or `X` and every
- * digit `9`, except the letters of the header row, so no name, amount or account number leaves the
+ * digit `9`, except the letters of a CSV file's header row, so no name, amount or account number leaves the
  * host. The model proposes the structure only; the date pattern and number format are detected
  * here from the real values, and the proposal is accepted only when it reads the whole file
  * without a row error and the file's balances add up.
@@ -268,10 +268,9 @@ async function inferPdf(
   const texts = lines.map((line) => line.text)
   const header = findHeader(texts)
   const start = sampleStart(header)
-  const masked = lines.slice(start, start + checkSampleRows(options.sampleRows)).map((
-    line,
-    index,
-  ) => maskPdfLine(line, start + index === header && !hasValue(line.text)))
+  // A PDF line has no cell count to confirm a header, so a name right above the first row could
+  // pass for one: every PDF line is masked whole, and the model reads the columns from positions.
+  const masked = lines.slice(start, start + checkSampleRows(options.sampleRows)).map(maskPdfLine)
   const reply = await ask(options.propose, profilePrompt(masked, { pdf: true }), pdfProposal)
   if (!reply.ok) return reply
   const proposal = reply.value
@@ -460,12 +459,12 @@ function maskText(text: string, keepLetters: boolean): string {
 }
 
 /** A PDF line for the prompt: each word's left and right edge in points, and its masked text. */
-function maskPdfLine(line: PdfLine, keepLetters: boolean): string {
+function maskPdfLine(line: PdfLine): string {
   return JSON.stringify(
     line.words.map((word) => [
       Math.round(word.x),
       Math.round(word.x + word.width),
-      maskText(word.text, keepLetters),
+      maskText(word.text, false),
     ]),
   )
 }

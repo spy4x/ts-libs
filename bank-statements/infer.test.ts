@@ -333,7 +333,7 @@ describe("inferProfile, PDF statements", () => {
     expect(port.calls).toHaveLength(1)
     expect(sampleOf(port.calls[0].prompt).lines).toEqual([
       `[[50,90,"Xxxx"],[80,120,"Xxxxxxxx"]]`,
-      `[[50,90,"Datum"],[120,160,"Text"],[300,340,"Betrag"],[400,440,"Saldo"]]`,
+      `[[50,90,"Xxxxx"],[120,160,"Xxxx"],[300,340,"Xxxxxx"],[400,440,"Xxxxx"]]`,
       `[[50,90,"99.99.9999"],[120,160,"Xxxxxxxxxxx"],[300,340,"9.999,99"],[400,440,"9.999,99"]]`,
       `[[50,90,"99.99.9999"],[120,160,"Xxxx"],[160,200,"Xxxxxx"],[300,340,"-9,99"],[400,440,"9.999,99"]]`,
     ])
@@ -343,6 +343,15 @@ describe("inferProfile, PDF statements", () => {
     expect(result.value.profile.pdf).toEqual(PDF_PROPOSAL.pdf)
     expect(result.value.profile.numberFormat).toEqual({ decimal: ",", group: "." })
     expect(result.value.statement.rows.map((row) => row.amount)).toEqual([200000, -480])
+  })
+
+  it("masks a name line right above the first pdf row, with no header between", async () => {
+    const port = recordingPort(PDF_PROPOSAL)
+    const pages = [{ page: 1, lines: PDF[0].lines.filter((line) => line.line !== 2) }]
+    await inferProfile(pages, { currency: "EUR", propose: port.propose })
+    expect(port.calls).toHaveLength(1)
+    expect(port.calls[0].prompt).not.toMatch(/Anna|Kowalska/)
+    expect(sampleOf(port.calls[0].prompt).lines[0]).toBe(`[[50,90,"Xxxx"],[80,120,"Xxxxxxxx"]]`)
   })
 
   it("never asks the model when a known pdf profile verifies", async () => {
