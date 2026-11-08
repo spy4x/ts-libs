@@ -192,9 +192,16 @@ describe("createLockout with devices", () => {
     return { clock, store, deviceStore, lockout }
   }
 
-  /** Wrong secrets for `subject` with no device token until its lock is set. */
-  const lockSubject = async (lockout: ReturnType<typeof setUp>["lockout"], subject: string) => {
-    while ((await lockout.begin(subject)) === 0) await lockout.fail(subject)
+  /** Wrong secrets for `subject`, with `check`, until the first lock is set. */
+  const guessPastBudget = async (
+    lockout: ReturnType<typeof setUp>["lockout"],
+    subject: string,
+    check?: { device: string },
+  ) => {
+    for (let guess = 0; guess <= freeFailures; guess++) {
+      expect(await lockout.begin(subject, check)).toBe(0)
+      await lockout.fail(subject, check)
+    }
   }
 
   /**
@@ -244,8 +251,8 @@ describe("createLockout with devices", () => {
   it("gives a token made for one subject no exemption on another", async () => {
     const { lockout } = setUp()
     const annToken = await lockout.rememberDevice("ann")
-    await lockSubject(lockout, "ann")
-    await lockSubject(lockout, "bob")
+    await guessPastBudget(lockout, "ann")
+    await guessPastBudget(lockout, "bob")
     expect(await lockout.begin("ann", { device: annToken })).toBe(0)
     expect(await lockout.begin("bob", { device: annToken })).toBe(firstLockMs)
   })
@@ -253,13 +260,16 @@ describe("createLockout with devices", () => {
   it("locks a device that guesses wrong on its own counter, apart from the subject's", async () => {
     const { clock, store, lockout } = setUp()
     const device = await lockout.rememberDevice("ann")
-    while ((await lockout.begin("ann", { device })) === 0) await lockout.fail("ann", { device })
+    await guessPastBudget(lockout, "ann", { device })
     expect(await lockout.begin("ann", { device })).toBe(firstLockMs)
     expect(store.get("ann")).toBeUndefined()
-    expect(await lockout.begin("ann")).toBe(0)
 
+    // A stranger still gets the subject's whole budget, and their lock does not reach the device.
+    await guessPastBudget(lockout, "ann")
     clock.at += firstLockMs
-    await lockSubject(lockout, "ann")
+    expect(await lockout.begin("ann")).toBe(0)
+    await lockout.fail("ann")
+    expect(await lockout.begin("ann")).toBe(2 * firstLockMs)
     expect(await lockout.begin("ann", { device })).toBe(0)
   })
 
@@ -269,7 +279,7 @@ describe("createLockout with devices", () => {
     // A character in the middle of the signature, where every bit counts.
     const at = token.length - 20
     const tampered = token.slice(0, at) + (token[at] === "A" ? "B" : "A") + token.slice(at + 1)
-    await lockSubject(lockout, "ann")
+    await guessPastBudget(lockout, "ann")
     for (const device of ["", "garbage", tampered, `${token}.extra`]) {
       expect(await lockout.begin("ann", { device })).toBe(firstLockMs)
     }
@@ -279,7 +289,7 @@ describe("createLockout with devices", () => {
     const { lockout } = setUp()
     const token = await lockout.rememberDevice("ann")
     const plain = createLockout({ store: new MemoryLockoutStore(), clock: { now: () => NOW } })
-    await lockSubject(plain, "ann")
+    await guessPastBudget(plain, "ann")
     expect(await plain.begin("ann", { device: token })).toBe(firstLockMs)
     await expect(plain.rememberDevice("ann")).rejects.toThrow("devices option")
   })
