@@ -234,6 +234,21 @@ describe("confirmSubscription", () => {
     expect(await store.count()).toBe(0)
   })
 
+  it("still refuses an old confirm link after another address unsubscribes a day later", async () => {
+    const { deps, mails, clock, store } = harness()
+    const token = await confirmTokenFor(deps, mails)
+    await confirmSubscription(token, deps)
+    const janeUnsubscribe = tokenOf((mails.at(-1) as { unsubscribeLink: string }).unsubscribeLink)
+    clock.at += 1000
+    expect(await unsubscribe(janeUnsubscribe, deps)).toEqual({ state: "done" })
+    clock.at += 24 * 60 * 60 * 1000
+    const bobUnsubscribe = await subscribe(deps, mails, "bob@example.com")
+    expect(await unsubscribe(bobUnsubscribe, deps)).toEqual({ state: "done" })
+    clock.at += 1000
+    expect(await confirmSubscription(token, deps)).toEqual({ state: "invalid" })
+    expect(await store.count()).toBe(0)
+  })
+
   it("accepts a link requested after the unsubscribe", async () => {
     const { deps, mails, clock } = harness()
     const unsubscribeToken = await subscribe(deps, mails)
