@@ -3,7 +3,7 @@
   "repository": { "owner": "spy4x", "name": "ts-libs" },
   "packages": {
     "bank-statements": {
-      "description": "Bank statements read into signed amounts in minor units: OFX, QIF, CAMT.053, MT940 and bank CSVs through profiles, with balance checks.",
+      "description": "Bank statements read into signed amounts in minor units: OFX, QIF, CAMT.053, MT940, and bank CSVs and PDFs through profiles, with balance checks.",
       "runtimeCompat": { "deno": true, "browser": true }
     },
     "billing": {
