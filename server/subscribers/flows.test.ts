@@ -1,5 +1,6 @@
 import { expect } from "@std/expect"
 import { describe, it } from "@std/testing/bdd"
+import type { RateLimiter } from "@spy4x/platform/rate-limit"
 import { createMemoryRateLimiter } from "@spy4x/platform/rate-limit/memory"
 import { CONFIRM_TTL_MS, createSubscriptionCrypto } from "./crypto.ts"
 import {
@@ -29,13 +30,18 @@ function harness(options: {
   sendMail?: (mail: SubscriberMail) => Promise<MailOutcome>
   store?: SubscriberStore
   limits?: FlowDeps["limits"]
+  legacyTokens?: boolean
 } = {}) {
   const clock = { at: NOW }
   const mails: SubscriberMail[] = []
   const logs: unknown[][] = []
   const store = options.store ?? createMemorySubscriberStore()
   const deps: FlowDeps = {
-    crypto: createSubscriptionCrypto({ secret: SECRET, now: () => clock.at }),
+    crypto: createSubscriptionCrypto({
+      secret: SECRET,
+      legacyTokens: options.legacyTokens,
+      now: () => clock.at,
+    }),
     store,
     links: {
       confirm: (token) => `https://example.com/confirm?token=${encodeURIComponent(token)}`,
@@ -157,6 +163,26 @@ describe("requestSubscription", () => {
     expect(mails).toHaveLength(3)
   })
 
+  it("counts a request with no client key under a shared key and warns", async () => {
+    const asked: string[] = []
+    const refuseAll: RateLimiter = {
+      check: (key) => {
+        asked.push(key)
+        return { allowed: false, remaining: 0, retryAfterMs: 1000, resetAfterMs: 1000, limit: 1 }
+      },
+      reset: () => {},
+    }
+    const { deps, mails, logs } = harness({ limits: { client: refuseAll } })
+    for (const request of [undefined, { clientKey: "" }]) {
+      const outcome = await requestSubscription(JANE, deps, request)
+      await outcome.mails
+      expect(outcome.status).toBe(429)
+    }
+    expect(mails).toHaveLength(0)
+    expect(asked).toEqual(["subscribers:no-client-key", "subscribers:no-client-key"])
+    expect(logs.filter(([level]) => level === "warn")).toHaveLength(2)
+  })
+
   it("stops many clients from flooding one inbox, without telling them", async () => {
     const recipient = createMemoryRateLimiter({ limit: 2, windowMs: 60_000, clock: () => NOW })
     const { deps, mails, logs } = harness({ limits: { recipient } })
@@ -203,6 +229,21 @@ describe("confirmSubscription", () => {
       ? tokenOf((mails.at(-1) as { unsubscribeLink: string }).unsubscribeLink)
       : ""
     expect(await unsubscribe(unsubscribeToken, deps)).toEqual({ state: "done" })
+    clock.at += 1000
+    expect(await confirmSubscription(token, deps)).toEqual({ state: "invalid" })
+    expect(await store.count()).toBe(0)
+  })
+
+  it("still refuses an old confirm link after another address unsubscribes a day later", async () => {
+    const { deps, mails, clock, store } = harness()
+    const token = await confirmTokenFor(deps, mails)
+    await confirmSubscription(token, deps)
+    const janeUnsubscribe = tokenOf((mails.at(-1) as { unsubscribeLink: string }).unsubscribeLink)
+    clock.at += 1000
+    expect(await unsubscribe(janeUnsubscribe, deps)).toEqual({ state: "done" })
+    clock.at += 24 * 60 * 60 * 1000
+    const bobUnsubscribe = await subscribe(deps, mails, "bob@example.com")
+    expect(await unsubscribe(bobUnsubscribe, deps)).toEqual({ state: "done" })
     clock.at += 1000
     expect(await confirmSubscription(token, deps)).toEqual({ state: "invalid" })
     expect(await store.count()).toBe(0)
@@ -269,8 +310,8 @@ describe("unsubscribe", () => {
     expect(await unsubscribe("forged.token", deps)).toEqual({ state: "not-recognised" })
   })
 
-  it("honours an unsubscribe link antonshubin.com mailed", async () => {
-    const { deps, store } = harness()
+  it("honours an unsubscribe link antonshubin.com mailed when legacy tokens are on", async () => {
+    const { deps, store } = harness({ legacyTokens: true })
     await store.add({ email: JANE, key: "legacy", mark: "m", issuedAt: NOW, at: new Date(NOW) })
     expect(await unsubscribe(SITE_UNSUBSCRIBE_TOKEN, deps)).toEqual({ state: "done" })
     expect(await store.count()).toBe(0)
@@ -295,7 +336,7 @@ describe("unsubscribe", () => {
 
   it("rate-limits the version 1 scan per client and leaves version 2 links alone", async () => {
     const client = createMemoryRateLimiter({ limit: 1, windowMs: 60_000, clock: () => NOW })
-    const { deps, mails } = harness({ limits: { client } })
+    const { deps, mails } = harness({ limits: { client }, legacyTokens: true })
     const token = await subscribe(deps, mails)
     const request = { clientKey: "192.0.2.1" }
     expect(await previewUnsubscribe(SITE_UNSUBSCRIBE_TOKEN, deps, request)).toEqual({

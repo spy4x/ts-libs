@@ -1,7 +1,13 @@
 import { expect } from "@std/expect"
 import { describe, it } from "@std/testing/bdd"
 import { decodeBase64Url, encodeBase64Url } from "@std/encoding/base64url"
-import { CONFIRM_TTL_MS, createSubscriptionCrypto, type UnsubscribeLookup } from "./crypto.ts"
+import { deriveSecret } from "@spy4x/platform/tokens"
+import {
+  CONFIRM_TTL_MS,
+  createListSubscriptionCrypto,
+  createSubscriptionCrypto,
+  type UnsubscribeLookup,
+} from "./crypto.ts"
 import type { Subscriber } from "./store.ts"
 
 // Produced by antonshubin.com's own `lib/unsubscribe.ts`, `lib/unsubscribed.ts`,
@@ -50,7 +56,18 @@ function envelopeText(token: string): string {
 }
 
 describe("createSubscriptionCrypto: antonshubin.com compatibility", () => {
-  const crypto = createSubscriptionCrypto({ secret: SITE.secret, now: () => NOW })
+  const crypto = createSubscriptionCrypto({
+    secret: SITE.secret,
+    legacyTokens: true,
+    now: () => NOW,
+  })
+
+  it("refuses a site link by default without reading the store", async () => {
+    const plain = createSubscriptionCrypto({ secret: SITE.secret })
+    const { lookup, calls } = await lookupOf(plain, [SITE.email])
+    expect(await plain.verifyUnsubscribeToken(SITE.unsubscribeToken, lookup)).toBeUndefined()
+    expect(calls).toEqual({ list: 0, findByKey: 0 })
+  })
 
   it("verifies an unsubscribe link the site mailed", async () => {
     const { lookup } = await lookupOf(crypto, ["ann@example.com", SITE.email, "bob@example.com"])
@@ -200,6 +217,7 @@ describe("createSubscriptionCrypto: secret rotation", () => {
     const legacy = createSubscriptionCrypto({
       secret: OTHER_SECRET,
       previousSecrets: [SITE.secret],
+      legacyTokens: true,
     })
     const { lookup } = await lookupOf(legacy, [SITE.email])
     expect((await legacy.verifyUnsubscribeToken(SITE.unsubscribeToken, lookup))?.email)
@@ -274,5 +292,70 @@ describe("createSubscriptionCrypto: keyed hashes", () => {
       (await crypto.sentMark(SITE.email, "b")).slice(0, 32),
     ]
     expect(new Set(values).size).toBe(values.length)
+  })
+})
+
+describe("createListSubscriptionCrypto", () => {
+  const listA = createListSubscriptionCrypto({ secret: SITE.secret, list: "a", now: () => NOW })
+  const listB = createListSubscriptionCrypto({ secret: SITE.secret, list: "b", now: () => NOW })
+
+  it("refuses a confirm link signed for another list over the same secret", async () => {
+    const token = await (await listA).confirmToken(SITE.email)
+    expect((await (await listA).verifyConfirmToken(token)).ok).toBe(true)
+    expect(await (await listB).verifyConfirmToken(token)).toEqual({ ok: false, reason: "invalid" })
+  })
+
+  it("refuses an unsubscribe link signed for another list over the same secret", async () => {
+    const a = await listA
+    const b = await listB
+    const token = await a.unsubscribeToken(SITE.email)
+    expect((await a.verifyUnsubscribeToken(token, (await lookupOf(a, [SITE.email])).lookup))?.email)
+      .toBe(SITE.email)
+    // Even a store of list B that holds list A's key for the address finds nothing.
+    const { lookup } = await lookupOf(a, [SITE.email])
+    expect(await b.verifyUnsubscribeToken(token, lookup)).toBeUndefined()
+  })
+
+  it("verifies a link signed before a rotation for its own list only", async () => {
+    const old = await createListSubscriptionCrypto({ secret: OTHER_SECRET, list: "a" })
+    const token = await old.unsubscribeToken(SITE.email)
+    const { lookup } = await lookupOf(old, [SITE.email])
+    const rotatedA = await createListSubscriptionCrypto({
+      secret: SITE.secret,
+      previousSecrets: [OTHER_SECRET],
+      list: "a",
+    })
+    const rotatedB = await createListSubscriptionCrypto({
+      secret: SITE.secret,
+      previousSecrets: [OTHER_SECRET],
+      list: "b",
+    })
+    expect((await rotatedA.verifyUnsubscribeToken(token, lookup))?.email).toBe(SITE.email)
+    expect(await rotatedB.verifyUnsubscribeToken(token, lookup)).toBeUndefined()
+  })
+
+  it("derives each secret as Seed does, under subscribers:list:<list>", async () => {
+    const derived = createSubscriptionCrypto({
+      secret: await deriveSecret(SITE.secret, "subscribers:list:a"),
+      previousSecrets: [await deriveSecret(OTHER_SECRET, "subscribers:list:a")],
+    })
+    const list = await createListSubscriptionCrypto({
+      secret: SITE.secret,
+      previousSecrets: [OTHER_SECRET],
+      list: "a",
+    })
+    expect(await list.subscriberKey(SITE.email)).toBe(await derived.subscriberKey(SITE.email))
+    expect(await list.unsubscribeMark(SITE.email)).toBe(await derived.unsubscribeMark(SITE.email))
+    expect(await list.sentMarks(SITE.email, "issue")).toEqual(
+      await derived.sentMarks(SITE.email, "issue"),
+    )
+    expect(await list.unsubscribeToken(SITE.email)).toBe(
+      await derived.unsubscribeToken(SITE.email),
+    )
+  })
+
+  it("throws on an empty list name", async () => {
+    await expect(createListSubscriptionCrypto({ secret: SITE.secret, list: "" })).rejects
+      .toThrow(TypeError)
   })
 })

@@ -29,7 +29,8 @@ export interface SubscriberLog {
 /** Optional rate limits, any `@spy4x/platform/rate-limit` limiter. */
 export interface SubscriberLimits {
   /** Keyed on {@link FlowRequest.clientKey}. Counts every subscribe request, and every unsubscribe
-   * request whose version 1 token makes the flow scan the list. */
+   * request whose version 1 token makes the flow scan the list. A request with no `clientKey` is
+   * counted under one shared key, and the flow logs a warning. */
   client?: RateLimiter
   /** Keyed on the address's `subscriberKey`, so requests from many clients cannot flood one inbox
    * with confirm mails. Over the limit, the request still answers 200 and no mail goes out. */
@@ -99,6 +100,8 @@ export type UnsubscribeOutcome =
   | { state: "limited"; retryAfterMs: number }
 
 const TAG = "[subscribers]"
+/** The client-limit key of every request that came with no `clientKey`. */
+const NO_CLIENT_KEY = "subscribers:no-client-key"
 const settled = Promise.resolve()
 
 /**
@@ -113,7 +116,7 @@ export async function requestSubscription(
 ): Promise<SubscribeRequestOutcome> {
   const log = deps.log ?? console
   try {
-    const client = await checkLimit(deps.limits?.client, request.clientKey)
+    const client = await checkClientLimit(deps, request, log)
     if (client !== 0) return { status: 429, retryAfterMs: client, mails: settled }
   } catch (error) {
     log.error(`${TAG} client rate limit failed:`, describe(error))
@@ -200,7 +203,7 @@ export async function previewUnsubscribe(
 ): Promise<UnsubscribePreview> {
   const log = deps.log ?? console
   try {
-    const limited = await limitScan(token, deps, request)
+    const limited = await limitScan(token, deps, request, log)
     if (limited !== 0) return { state: "limited", retryAfterMs: limited }
     const subscriber = await deps.crypto.verifyUnsubscribeToken(token, deps.store)
     return subscriber ? { state: "confirm", email: subscriber.email } : { state: "not-recognised" }
@@ -223,7 +226,7 @@ export async function unsubscribe(
   const log = deps.log ?? console
   let email: string | undefined
   try {
-    const limited = await limitScan(token, deps, request)
+    const limited = await limitScan(token, deps, request, log)
     if (limited !== 0) return { state: "limited", retryAfterMs: limited }
     const subscriber = await deps.crypto.verifyUnsubscribeToken(token, deps.store)
     if (subscriber === undefined) return { state: "not-recognised" }
@@ -249,10 +252,28 @@ async function checkLimit(limiter: RateLimiter | undefined, key: string | undefi
   return decision.allowed ? 0 : Math.max(1, decision.retryAfterMs)
 }
 
+/**
+ * The client limit for `request`. A missing or empty `clientKey` is counted under
+ * {@link NO_CLIENT_KEY}, shared by every such request, so a route that forgot to pass the key is
+ * limited as a whole instead of not at all.
+ */
+function checkClientLimit(deps: FlowDeps, request: FlowRequest, log: SubscriberLog) {
+  const limiter = deps.limits?.client
+  if (limiter === undefined) return Promise.resolve(0)
+  if (request.clientKey) return checkLimit(limiter, request.clientKey)
+  log.warn(`${TAG} no client key passed, counting the request under a shared key`)
+  return checkLimit(limiter, NO_CLIENT_KEY)
+}
+
 /** The client limit, applied only to a version 1 unsubscribe token: the one that scans the list. */
-function limitScan(token: string, deps: FlowDeps, request: FlowRequest): Promise<number> {
+function limitScan(
+  token: string,
+  deps: FlowDeps,
+  request: FlowRequest,
+  log: SubscriberLog,
+): Promise<number> {
   if (unsubscribeTokenVersion(token) !== 1) return Promise.resolve(0)
-  return checkLimit(deps.limits?.client, request.clientKey)
+  return checkClientLimit(deps, request, log)
 }
 
 /** Hands one mail to the app and logs a failure with the address redacted. Never rejects. */
