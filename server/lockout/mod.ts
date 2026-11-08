@@ -17,7 +17,11 @@
  * While a lock runs, every check is refused without looking at the secret, a correct one included:
  * a lock that let the right secret through would let a lucky guess through too. The price is that
  * someone who can reach the check can keep the owner out of it, up to
- * {@link LockoutPolicy.maxLockMs} at a time.
+ * {@link LockoutPolicy.maxLockMs} at a time, and the locks chain: when the subject is something a
+ * stranger can name (a sign-in name, or one subject for everyone), one wrong guess each time a lock
+ * ends keeps the owner out for as long as the stranger keeps guessing. Pass the `devices` option
+ * and the device cookie, and a browser that passed the check before is counted on its own counter
+ * instead (see "Known devices" below).
  *
  * `createLockout`, `lockDelayMs`, `beginCheck`, `resolveLockoutPolicy`, `DEFAULT_LOCKOUT_POLICY`,
  * `MAX_LOCK_LIMIT_MS` and the `LockoutStore` port; `createPostgresLockoutStore` in
@@ -57,6 +61,41 @@
  * guesser a fresh budget every time the owner signs in. While a lock runs, every check is refused, a
  * correct one included, so someone who can reach the check can keep the owner out of it for up to the
  * maximum lock.
+ *
+ * **Known devices.** A lock keyed by something a stranger can name, such as a sign-in name or one
+ * subject for everyone, can be held for as long as the stranger likes: one wrong guess each time a
+ * lock ends sets the next one. With the `devices` option, a correct secret earns the browser a
+ * device token from `rememberDevice`, which the app keeps in a long-lived `HttpOnly`, `Secure`,
+ * `SameSite=Lax` cookie. A later check that passes that cookie is counted only on the device's own
+ * counter, under the same policy, and the subject's lock is neither consulted nor counted. A
+ * stranger has no token, so their wrong guesses lock strangers only. The token is signed for one
+ * subject, so it is worthless for any other; a missing, forged or foreign token falls back to the
+ * subject's lock. It never expires: rotating `devices.secret` forgets every device. A person on a
+ * new device can still be held out.
+ *
+ * ```ts
+ * const lockout = createLockout({
+ *   store: createPostgresLockoutStore({ sql, table: "sign_in_lockouts" }),
+ *   devices: {
+ *     secret: env.LOCKOUT_DEVICE_SECRET,
+ *     store: createPostgresLockoutStore({ sql, table: "sign_in_device_lockouts" }),
+ *   },
+ * })
+ *
+ * const check = { device: getCookie(c, "known_device") }
+ * const waitMs = await lockout.begin(name, check)
+ * if (waitMs > 0) return tooManyAttempts(waitMs)
+ * if (await passwordIsValid(name, password)) {
+ *   await lockout.refund(name, check)
+ *   setCookie(c, "known_device", await lockout.rememberDevice(name), {
+ *     httpOnly: true, secure: true, sameSite: "Lax", maxAge: 400 * 24 * 60 * 60,
+ *   })
+ * } else await lockout.fail(name, check)
+ * ```
+ *
+ * The device store is a counters-only store that counts every subject it has not seen: in Postgres,
+ * a table of its own through `createPostgresLockoutStore` with `createMissing` left on, and the
+ * scheduled `DELETE` below applies to it too.
  *
  * **Pass the pool.** On a pool each update runs in its own transaction and is committed at once.
  * `createPostgresLockoutStore` also takes the `tx` of the app's own `sql.begin`; each update then runs
@@ -122,7 +161,9 @@
  */
 
 import { type } from "arktype"
+import { createSignedPayloadCodec } from "@spy4x/platform/signed-payload"
 import { type Clock, systemClock } from "@spy4x/platform/universal/time"
+import { uuidV7 } from "@spy4x/platform/universal/uuid"
 
 /** The numbers that decide when a subject is locked and for how long. */
 export interface LockoutPolicy {
@@ -227,16 +268,23 @@ export interface Lockout {
    * until {@link refund} runs. Returns the milliseconds left, without counting, while a lock runs.
    * A subject the store does not track has nothing to guess, so it gets 0.
    */
-  begin(subject: LockoutSubject): Promise<number>
+  begin(subject: LockoutSubject, options?: LockoutCheckOptions): Promise<number>
   /**
    * Gives back the slot {@link begin} took. Call it only after `begin` returned 0 and the secret
    * was right. Always clears the lock: one a concurrent wrong guess set in the meantime is cleared
    * too, which gives a guesser back one guess per correct entry by the owner. That race is
    * accepted; the count itself only goes down by one.
    */
-  refund(subject: LockoutSubject): Promise<void>
+  refund(subject: LockoutSubject, options?: LockoutCheckOptions): Promise<void>
   /** Records a wrong secret: the time the quiet reset counts from. */
-  fail(subject: LockoutSubject): Promise<void>
+  fail(subject: LockoutSubject, options?: LockoutCheckOptions): Promise<void>
+  /**
+   * Makes a fresh device token for `subject`, for the app to set in a long-lived `HttpOnly`,
+   * `Secure`, `SameSite=Lax` cookie after a correct secret. The token is signed for this subject
+   * only and never expires. {@link createLockout} always provides it, and it throws when the
+   * `devices` option is missing.
+   */
+  rememberDevice?(subject: LockoutSubject): Promise<string>
 }
 
 /** Options for {@link createLockout}. Every policy number defaults to {@link DEFAULT_LOCKOUT_POLICY}. */
@@ -244,6 +292,25 @@ export interface LockoutOptions extends Partial<LockoutPolicy> {
   store: LockoutStore
   /** Defaults to the host clock. */
   clock?: Clock
+  /**
+   * Counts a browser that passed the check before on its own counter, so a stranger's wrong
+   * guesses on the subject do not keep its owner out. `secret` signs the device tokens
+   * ({@link Lockout.rememberDevice}), at least 32 printable characters; rotating it forgets every
+   * device. `store` holds one counter per device under the same policy, and must count subjects
+   * it has not seen: a counters-only store, never one with `createMissing: false`.
+   */
+  devices?: { secret: string; store: LockoutStore }
+}
+
+/** Per-check options for {@link Lockout.begin}, {@link Lockout.refund} and {@link Lockout.fail}. */
+export interface LockoutCheckOptions {
+  /**
+   * The device token the browser sent back, as {@link Lockout.rememberDevice} made it. A token
+   * that verifies for this subject moves the check onto the device's own counter; a missing,
+   * forged or foreign one, or one passed without the `devices` option, leaves the check on the
+   * subject.
+   */
+  device?: string
 }
 
 const lockoutSubject = type(
@@ -282,15 +349,39 @@ export function beginCheck(
   }
 }
 
-/** Builds the {@link Lockout} flow. Throws a `TypeError` for an invalid policy. */
-export function createLockout(options: LockoutOptions): Lockout {
-  const { store, clock = systemClock, ...overrides } = options
+/**
+ * Builds the {@link Lockout} flow. Throws a `TypeError` for an invalid policy, and a `TokenError`
+ * for a `devices.secret` that is too short.
+ */
+export function createLockout(options: LockoutOptions): Required<Lockout> {
+  const { store, clock = systemClock, devices, ...overrides } = options
   const policy = resolveLockoutPolicy(overrides)
+  const tokens = devices && createSignedPayloadCodec({
+    secret: devices.secret,
+    purpose: "lockout.device",
+    version: 1,
+    schema: type({ device: "string.uuid", "+": "reject" }),
+  })
+
+  /** The counter a check is kept on: the device's when its token verifies, else the subject's. */
+  const counter = async (
+    subject: LockoutSubject,
+    check: LockoutCheckOptions | undefined,
+  ): Promise<[LockoutStore, LockoutSubject]> => {
+    checkSubject(subject)
+    const token = check?.device
+    if (devices && tokens && typeof token === "string") {
+      const verified = await tokens.verify(token, { context: String(subject) })
+      if (verified.ok) return [devices.store, verified.value.device]
+    }
+    return [store, subject]
+  }
+
   return {
-    begin: async (subject) => {
-      checkSubject(subject)
+    begin: async (subject, check) => {
+      const [on, key] = await counter(subject, check)
       let waitMs = 0
-      await store.update(subject, (current) => {
+      await on.update(key, (current) => {
         if (current === undefined) return undefined
         const step = beginCheck(current, clock.now(), policy)
         waitMs = step.waitMs
@@ -298,22 +389,27 @@ export function createLockout(options: LockoutOptions): Lockout {
       })
       return waitMs
     },
-    refund: async (subject) => {
-      checkSubject(subject)
-      await store.update(
-        subject,
+    refund: async (subject, check) => {
+      const [on, key] = await counter(subject, check)
+      await on.update(
+        key,
         (current) =>
           current === undefined
             ? undefined
             : { ...current, failures: Math.max(current.failures - 1, 0), lockedUntil: null },
       )
     },
-    fail: async (subject) => {
-      checkSubject(subject)
-      await store.update(
-        subject,
+    fail: async (subject, check) => {
+      const [on, key] = await counter(subject, check)
+      await on.update(
+        key,
         (current) => current === undefined ? undefined : { ...current, lastFailureAt: clock.now() },
       )
+    },
+    rememberDevice: async (subject) => {
+      checkSubject(subject)
+      if (!tokens) throw new Error("rememberDevice needs the lockout's devices option")
+      return await tokens.sign({ device: uuidV7() }, { context: String(subject) })
     },
   }
 }
