@@ -2580,6 +2580,7 @@ beginCheck	function	@spy4x/server/lockout	The state after Lockout.begin counted 
 createLockout	function	@spy4x/server/lockout	Builds the Lockout flow.
 lockDelayMs	function	@spy4x/server/lockout	How long a subject is locked after its `failures`-th wrong guess in a row: nothing up to LockoutPolicy.freeFailures, then LockoutPolicy.firstLockMs doubling per failure, capped at LockoutPolicy.maxLockMs.
 resolveLockoutPolicy	function	@spy4x/server/lockout	DEFAULT_LOCKOUT_POLICY with `overrides` applied.
+LockoutStoreFullError	class	@spy4x/server/lockout/memory-store	Thrown by MemoryLockoutStore.track, and rejected by `update`, when a new subject meets a full store (see MemoryLockoutStoreOptions.maxEntries).
 MemoryLockoutStore	class	@spy4x/server/lockout/memory-store	Counters in a `Map`.
 DEFAULT_LOCKOUT_COLUMNS	constant	@spy4x/server/lockout/postgres	`subject`, `failed_attempts`, `locked_until`, `last_failure_at`.
 LockoutColumns	interface	@spy4x/server/lockout/postgres	The column names the store reads and writes.
@@ -3243,4 +3244,4 @@ firstIssueMessage	function	@spy4x/validation/validate	First issue message in a v
 isArkErrors	function	@spy4x/validation/validate	Whether a value is an arktype rejection, without relying on `instanceof`.
 toValidationError	function	@spy4x/validation/validate	Build a ValidationError from arktype's issues.
 validate	function	@spy4x/validation/validate	Parse `value` with an arktype schema exactly once.
-# export surface: sha256 a5e5076130d957495ae779e4a4c09e633b9e4e646778185f4b51fea9b4897bb9
+# export surface: sha256 5c1d9cd6a585964b744c64f3030ce32547db96d38333e113d6e109d3ce69897e
