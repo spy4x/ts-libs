@@ -34,6 +34,15 @@ parseWithProfile	function	@spy4x/bank-statements	Read CSV text with a profile.
 readStatement	function	@spy4x/bank-statements	Read a statement file of any supported format.
 statementProfile	constant	@spy4x/bank-statements	The arktype schema of StatementProfile, for a profile read from storage or an AI.
 verifyStatement	function	@spy4x/bank-statements	Check a statement against its own balances.
+DEFAULT_SAMPLE_ROWS	constant	@spy4x/bank-statements/infer	How many lines a sample has by default.
+InferFailure	type	@spy4x/bank-statements/infer	Why no profile was found.
+InferredProfile	type	@spy4x/bank-statements/infer	A file that reads and verifies, and where the way to read it came from.
+ProfileProposal	type	@spy4x/bank-statements/infer	What the model proposes: the structure of a profile, without the date pattern and the number format, which are read from the real values.
+ProfileProposalRequest	interface	@spy4x/bank-statements/infer	What the port is asked: the prompt to send, and the schema the reply's JSON must satisfy.
+ProposeProfile	type	@spy4x/bank-statements/infer	The language model, as a port: resolves to the parsed JSON of the reply, or `null` when there is none.
+inferProfile	function	@spy4x/bank-statements/infer	Find a profile that reads a statement and makes its balances add up.
+maskSample	function	@spy4x/bank-statements/infer	The first `maxRows` of `lines`, masked so that no value leaves the host: every digit (any Unicode number) becomes `9`, every upper- or title-case letter `X`, every other letter, mark and other symbol (an emoji, a circled letter) `x`.
+profilePrompt	function	@spy4x/bank-statements/infer	The prompt that asks a model for a profile's structure from a masked sample: it says how the sample was masked, names each field of the reply, and contains the word "json" and an example reply, as DeepSeek's JSON mode requires.
 DEFAULT_MAX_PAGES	constant	@spy4x/bank-statements/pdf	The default `maxPages`.
 NO_TEXT_LAYER_MESSAGE	constant	@spy4x/bank-statements/pdf	What a `"no-text-layer"` refusal says.
 PdfLine	interface	@spy4x/bank-statements/pdf	The words of one PDF line, left to right.
@@ -3228,4 +3237,4 @@ firstIssueMessage	function	@spy4x/validation/validate	First issue message in a v
 isArkErrors	function	@spy4x/validation/validate	Whether a value is an arktype rejection, without relying on `instanceof`.
 toValidationError	function	@spy4x/validation/validate	Build a ValidationError from arktype's issues.
 validate	function	@spy4x/validation/validate	Parse `value` with an arktype schema exactly once.
-# export surface: sha256 94e9f77d0f0b6390744bda03dcfdca33f40d6580e234a12e1de572b5b200937d
+# export surface: sha256 f747d74b07a89cf3520a7fadce931aad85085fb70322f1b7802a4475cc0c1ccf

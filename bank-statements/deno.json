@@ -3,7 +3,8 @@
   "version": "1.119.0",
   "exports": {
     ".": "./mod.ts",
-    "./pdf": "./pdf.ts"
+    "./pdf": "./pdf.ts",
+    "./infer": "./infer.ts"
   },
   "publish": {
     "exclude": ["fixtures"]
