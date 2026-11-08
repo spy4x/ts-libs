@@ -379,6 +379,39 @@ describe("money with a blank currency code", () => {
   })
 })
 
+describe("money with a lowercase currency code", () => {
+  // `Intl` gives RSD 0 decimals on Deno, while ISO 4217 says 2: a lowercase code used to skip
+  // the table and read Intl's answer, so 1,000 dinars came out 100 times off.
+  it("reads the ISO table like the capital code", () => {
+    expect(currencyDecimals("rsd")).toBe(2)
+    expect(currencyDecimals("Rsd")).toBe(currencyDecimals("RSD"))
+    expect(currencyDecimals("jpy")).toBe(0)
+    expect(currencyDecimals("kwd")).toBe(3)
+  })
+
+  it("formats and parses like the capital code", () => {
+    expect(formatMoney(100000, "rsd")).toBe(formatMoney(100000, "RSD"))
+    expect(formatMoney(150, "usdt", "en", { decimals: 2 })).toBe(
+      formatMoney(150, "USDT", "en", { decimals: 2 }),
+    )
+    expect(parseMoney("1000.00", "rsd")).toEqual(parseMoney("1000.00", "RSD"))
+    expect(parseAmount("1000.00", "rsd", NUMBER_FORMATS[0]))
+      .toEqual(parseAmount("1000.00", "RSD", NUMBER_FORMATS[0]))
+  })
+
+  it("sums and converts like the capital code", () => {
+    expect(sumMoney([{ amount: 1250, currency: "eur" }, { amount: 50, currency: "EUR" }], "Eur"))
+      .toEqual({ ok: true, value: 1300 })
+    const upper = { base: "EUR", quote: "RSD", rate: "117.1", date: "2026-11-03", source: "ECB" }
+    const lower = { ...upper, base: "eur", quote: "rsd" }
+    expect(convertMoney(1000, "eur", "rsd", lower)).toEqual(convertMoney(1000, "EUR", "RSD", upper))
+    expect(convertMoney(117100, "RSD", "eur", lower)).toEqual({ ok: true, value: 1000 })
+    expect(convertMoney(1000, "eur", "EUR", null)).toEqual({ ok: true, value: 1000 })
+    const usd = { base: "usd", quote: "EUR", rate: "0.9", date: "2026-11-03", source: "ECB" }
+    expect(crossRate(lower, usd)).toEqual(crossRate(upper, { ...usd, base: "USD" }))
+  })
+})
+
 describe("the ISO 4217 currency table", () => {
   it("gives currencyDecimals the table's value for every code, without a decimals option", () => {
     const codes = Object.keys(currencies)

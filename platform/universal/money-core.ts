@@ -90,15 +90,17 @@ function checkedDecimals(decimals: number): number {
 }
 
 /**
- * Refuse a blank currency code with the same `RangeError` `Intl.NumberFormat` throws for it. Without
- * this, a caller-given `decimals` skips `Intl`'s own check, and `formatMoney(1, "", "en", {
- * decimals: 2 })` printed `" 0.01"` — a number with a stray space where the currency should be.
+ * `currency` in capitals, so `"rsd"` (as Stripe and many bank exports write it) reads the ISO 4217
+ * table like `"RSD"` instead of falling through to `Intl`, which gives some codes other decimals.
+ * A blank code throws the same `RangeError` `Intl.NumberFormat` throws for it. Without this, a
+ * caller-given `decimals` skips `Intl`'s own check, and `formatMoney(1, "", "en", { decimals: 2 })`
+ * printed `" 0.01"` — a number with a stray space where the currency should be.
  */
 function checkedCurrency(currency: string): string {
   if (currency.trim() === "") {
     throw new RangeError(`money currency code must not be empty, got ${JSON.stringify(currency)}`)
   }
-  return currency
+  return currency.toUpperCase()
 }
 
 /**
@@ -110,19 +112,20 @@ function checkedCurrency(currency: string): string {
  * code the table lacks asks `Intl`, so a code this module has never seen still works.
  *
  * An empty or whitespace-only `currency` throws a `RangeError`, with or without `options.decimals`,
- * and so does every other helper here that takes a code.
+ * and so does every other helper here that takes a code. Every helper here reads a code
+ * case-insensitively: `"rsd"` is `"RSD"`.
  */
 export function currencyDecimals(
   currency: string,
   locale = "en",
   options: MoneyOptions = {},
 ): number {
-  checkedCurrency(currency)
+  const code = checkedCurrency(currency)
   if (options.decimals !== undefined) return checkedDecimals(options.decimals)
-  if (Object.hasOwn(currencies, currency)) return currencies[currency]
+  if (Object.hasOwn(currencies, code)) return currencies[code]
   const { maximumFractionDigits } = new Intl.NumberFormat(locale, {
     style: "currency",
-    currency,
+    currency: code,
   }).resolvedOptions()
   // The spec guarantees this field for `style: "currency"` (ECMA-402 `Intl.NumberFormat` §5.5.10);
   // the type is `number | undefined` only because the same interface also covers plain-number and
@@ -190,13 +193,14 @@ export function formatMoneyParts(
   locale = "en",
   options: MoneyOptions = {},
 ): Intl.NumberFormatPart[] {
-  const decimals = currencyDecimals(currency, locale, options)
+  const code = checkedCurrency(currency)
+  const decimals = currencyDecimals(code, locale, options)
   const digits = moneyDecimalString(amount, decimals) as unknown as number
   const { signDisplay, trailingZeroDisplay } = options
-  const formatter = moneyFormatter(currency, locale, decimals, signDisplay, trailingZeroDisplay)
+  const formatter = moneyFormatter(code, locale, decimals, signDisplay, trailingZeroDisplay)
   if (formatter) return formatter.formatToParts(digits)
   // `Intl` rejects the code (`USDT`). Format with the placeholder code `XXX`, so the locale still
-  // decides where the currency goes, then print the caller's code in its place.
+  // decides where the currency goes, then print the caller's code, in capitals, in its place.
   // `XXX` is always a valid code, so a throw here is the locale's own error: let it reach the caller.
   const placeholder = new Intl.NumberFormat(locale, {
     style: "currency",
@@ -207,7 +211,7 @@ export function formatMoneyParts(
     trailingZeroDisplay,
   })
   return placeholder.formatToParts(digits).map((part) =>
-    part.type === "currency" ? { type: part.type, value: currency } : part
+    part.type === "currency" ? { type: part.type, value: code } : part
   )
 }
 
@@ -718,10 +722,10 @@ export type SumMoneyError = `mixed-currencies` | `unsafe-sum`
  * @throws {Error} When an item's amount is not a safe integer, a programming error.
  */
 export function sumMoney(items: readonly Money[], currency: string): Result<number, SumMoneyError> {
-  checkedCurrency(currency)
+  const code = checkedCurrency(currency)
   let total = 0n
   for (const item of items) {
-    if (item.currency !== currency) return err(`mixed-currencies`)
+    if (item.currency.toUpperCase() !== code) return err(`mixed-currencies`)
     total += BigInt(safeAmount(item.amount))
   }
   return isSafeBigInt(total) ? ok(Number(total)) : err(`unsafe-sum`)
@@ -810,19 +814,21 @@ export function convertMoney(
   if (!Number.isSafeInteger(amount)) {
     throw new RangeError(`money amount must be a safe integer, got ${amount}`)
   }
-  const fromDecimals = currencyDecimals(from, `en`, { decimals: options.fromDecimals })
-  const toDecimals = currencyDecimals(to, `en`, { decimals: options.toDecimals })
-  if (from === to) return ok(amount)
+  const fromCode = checkedCurrency(from)
+  const toCode = checkedCurrency(to)
+  const fromDecimals = currencyDecimals(fromCode, `en`, { decimals: options.fromDecimals })
+  const toDecimals = currencyDecimals(toCode, `en`, { decimals: options.toDecimals })
+  if (fromCode === toCode) return ok(amount)
   if (!rate) return err(`no-rate`)
-  const [rateUnits, rateScale] = rateFraction(rate)
+  const { base, quote, units, scale } = readRate(rate)
   let numerator = BigInt(amount) * 10n ** BigInt(toDecimals)
   let denominator = 10n ** BigInt(fromDecimals)
-  if (rate.base === from && rate.quote === to) {
-    numerator *= rateUnits
-    denominator *= rateScale
-  } else if (rate.base === to && rate.quote === from) {
-    numerator *= rateScale
-    denominator *= rateUnits
+  if (base === fromCode && quote === toCode) {
+    numerator *= units
+    denominator *= scale
+  } else if (base === toCode && quote === fromCode) {
+    numerator *= scale
+    denominator *= units
   } else {
     return err(`wrong-pair`)
   }
@@ -848,21 +854,17 @@ export function crossRate(
   left: ExchangeRate,
   right: ExchangeRate,
 ): Result<ExchangeRate, `wrong-pair`> {
-  const [leftUnits, leftScale] = rateFraction(left)
-  const [rightUnits, rightScale] = rateFraction(right)
-  const shared = [left.base, left.quote].filter((code) =>
-    code === right.base || code === right.quote
-  )
+  const l = readRate(left)
+  const r = readRate(right)
+  const shared = [l.base, l.quote].filter((code) => code === r.base || code === r.quote)
   if (shared.length !== 1) return err(`wrong-pair`)
   const [common] = shared
   // Each side as "one `common` buys this much of the other currency", a fraction of two integers.
-  const [aUnits, aScale] = left.base === common ? [leftUnits, leftScale] : [leftScale, leftUnits]
-  const [bUnits, bScale] = right.base === common
-    ? [rightUnits, rightScale]
-    : [rightScale, rightUnits]
+  const [aUnits, aScale] = l.base === common ? [l.units, l.scale] : [l.scale, l.units]
+  const [bUnits, bScale] = r.base === common ? [r.units, r.scale] : [r.scale, r.units]
   return ok({
-    base: left.base === common ? left.quote : left.base,
-    quote: right.base === common ? right.quote : right.base,
+    base: l.base === common ? l.quote : l.base,
+    quote: r.base === common ? r.quote : r.base,
     rate: significantDecimal(bUnits * aScale, bScale * aUnits, CROSS_RATE_DIGITS),
     date: left.date < right.date ? left.date : right.date,
     source: left.source === right.source ? left.source : `${left.source}, ${right.source}`,
@@ -872,10 +874,15 @@ export function crossRate(
 const RATE_PATTERN = /^(\d+)(?:\.(\d+))?$/
 const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/
 
-/** `rate.rate` as the integer fraction `[units, scale]`, after checking the whole rate. */
-function rateFraction(rate: ExchangeRate): [bigint, bigint] {
-  checkedCurrency(rate.base)
-  checkedCurrency(rate.quote)
+/**
+ * `rate`'s codes in capitals and `rate.rate` as the integer fraction `units / scale`, after
+ * checking the whole rate.
+ */
+function readRate(
+  rate: ExchangeRate,
+): { base: string; quote: string; units: bigint; scale: bigint } {
+  const base = checkedCurrency(rate.base)
+  const quote = checkedCurrency(rate.quote)
   const match = RATE_PATTERN.exec(rate.rate)
   const units = match ? BigInt(match[1] + (match[2] ?? ``)) : 0n
   if (!match || units === 0n) {
@@ -884,7 +891,7 @@ function rateFraction(rate: ExchangeRate): [bigint, bigint] {
   if (!DATE_PATTERN.test(rate.date)) {
     throw new RangeError(`an exchange rate date is YYYY-MM-DD, got ${rate.date}`)
   }
-  return [units, 10n ** BigInt(match[2]?.length ?? 0)]
+  return { base, quote, units, scale: 10n ** BigInt(match[2]?.length ?? 0) }
 }
 
 function isSafeBigInt(value: bigint): boolean {
