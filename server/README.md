@@ -44,7 +44,7 @@ Each module's usage is in its module doc, shown by `deno doc` and on JSR.
 - [`@spy4x/server/kv`](kv/mod.ts): A Redis-backed key-value store, scoped to a caller-supplied key prefix.
 - [`@spy4x/server/outbox`](outbox/mod.ts): Transactional outbox drain.
 - [`@spy4x/server/idempotency`](idempotency/mod.ts): Commands that are safe to send twice.
-- [`@spy4x/server/lockout`](lockout/mod.ts): An escalating lockout for any secret a person can guess.
+- [`@spy4x/server/lockout`](lockout/mod.ts): An escalating lockout for any secret a person can guess. A lock keyed by something a stranger can name (a sign-in name) can be held for as long as the stranger keeps guessing; pass the `devices` option so a browser that passed the check before is counted on its own.
 - [`@spy4x/server/lockout/memory-store`](lockout/memory-store.ts): The in-memory `LockoutStore`, held to the same contract as the Postgres one.
 - [`@spy4x/server/lockout/postgres`](lockout/postgres.ts): The Postgres `LockoutStore`, over a table and columns the caller names.
 - [`@spy4x/server/mcp-oauth`](mcp-oauth/mod.ts): Single-user OAuth 2.1 for remote MCP connectors.

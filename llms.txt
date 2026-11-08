@@ -2571,6 +2571,7 @@ createRedisRateLimitStore	function	@spy4x/server/kv	Build an atomic `RateLimitSt
 redisRateLimitKv	function	@spy4x/server/kv	Turn a Redis store into the `RateLimitKv` port that `createKvStore` from `@spy4x/platform/rate-limit/kv` takes.
 DEFAULT_LOCKOUT_POLICY	constant	@spy4x/server/lockout	5 free failures, then 15 minutes doubling up to one day; 7 quiet days reset the count.
 Lockout	interface	@spy4x/server/lockout	The begin, fail and refund flow over one store and one policy.
+LockoutCheckOptions	interface	@spy4x/server/lockout	Per-check options for Lockout.begin, Lockout.refund and Lockout.fail.
 LockoutPolicy	interface	@spy4x/server/lockout	The numbers that decide when a subject is locked and for how long.
 LockoutState	interface	@spy4x/server/lockout	One subject's counter, as a store holds it.
 LockoutStore	interface	@spy4x/server/lockout	Where counters live: `@spy4x/server/lockout/memory-store` and `@spy4x/server/lockout/postgres`.
@@ -3243,4 +3244,4 @@ firstIssueMessage	function	@spy4x/validation/validate	First issue message in a v
 isArkErrors	function	@spy4x/validation/validate	Whether a value is an arktype rejection, without relying on `instanceof`.
 toValidationError	function	@spy4x/validation/validate	Build a ValidationError from arktype's issues.
 validate	function	@spy4x/validation/validate	Parse `value` with an arktype schema exactly once.
-# export surface: sha256 a5e5076130d957495ae779e4a4c09e633b9e4e646778185f4b51fea9b4897bb9
+# export surface: sha256 36e25b6f357aa3c5e75b8d4ad07f76a850015fd86fee531fb8fb6328cbb3a87d

@@ -178,3 +178,109 @@ describe("createLockout", () => {
     expect(await lockout.begin(7)).toBe(1000)
   })
 })
+
+describe("createLockout with devices", () => {
+  const SECRET = "test-device-secret-at-least-32-characters"
+  const DAY = 24 * HOUR
+
+  /** A lockout keyed by names, with a device store, over a clock the test moves. */
+  const setUp = () => {
+    const clock = { at: NOW, now: () => clock.at }
+    const store = new MemoryLockoutStore()
+    const deviceStore = new MemoryLockoutStore()
+    const lockout = createLockout({ store, clock, devices: { secret: SECRET, store: deviceStore } })
+    return { clock, store, deviceStore, lockout }
+  }
+
+  /** Wrong secrets for `subject` with no device token until its lock is set. */
+  const lockSubject = async (lockout: ReturnType<typeof setUp>["lockout"], subject: string) => {
+    while ((await lockout.begin(subject)) === 0) await lockout.fail(subject)
+  }
+
+  /**
+   * 30 days of a stranger sending one wrong secret for `ann` the moment each lock ends. When
+   * `ownerToken` is given, the owner tries the right secret with it one minute after each stranger
+   * request. Returns the stranger's wrong guesses and how often the owner was let in and refused.
+   */
+  const playAttack = async (
+    ownerToken?: (lockout: ReturnType<typeof setUp>["lockout"]) => Promise<string>,
+  ) => {
+    const { clock, store, lockout } = setUp()
+    const device = ownerToken && await ownerToken(lockout)
+    let guesses = 0
+    let ownerIn = 0
+    let ownerRefused = 0
+    while (clock.at < NOW + 30 * DAY) {
+      const started = clock.at
+      expect(await lockout.begin("ann")).toBe(0)
+      await lockout.fail("ann")
+      guesses += 1
+      if (device !== undefined) {
+        clock.at = started + MINUTE
+        if ((await lockout.begin("ann", { device })) === 0) {
+          await lockout.refund("ann", { device })
+          ownerIn += 1
+        } else ownerRefused += 1
+      }
+      clock.at = Math.max(store.get("ann")?.lockedUntil ?? 0, started + 2 * MINUTE)
+    }
+    return { guesses, ownerIn, ownerRefused }
+  }
+
+  it("lets the owner's known device in all 30 days of a stranger re-locking the name", async () => {
+    const withOwner = await playAttack(async (lockout) => {
+      expect(await lockout.begin("ann")).toBe(0)
+      await lockout.refund("ann")
+      return await lockout.rememberDevice("ann")
+    })
+    const strangerAlone = await playAttack()
+    expect(withOwner.ownerRefused).toBe(0)
+    expect(withOwner.ownerIn).toBe(withOwner.guesses)
+    expect(withOwner.guesses).toBe(strangerAlone.guesses)
+    expect(withOwner.guesses).toBeGreaterThan(30)
+    expect(withOwner.guesses).toBeLessThan(45)
+  })
+
+  it("gives a token made for one subject no exemption on another", async () => {
+    const { lockout } = setUp()
+    const annToken = await lockout.rememberDevice("ann")
+    await lockSubject(lockout, "ann")
+    await lockSubject(lockout, "bob")
+    expect(await lockout.begin("ann", { device: annToken })).toBe(0)
+    expect(await lockout.begin("bob", { device: annToken })).toBe(firstLockMs)
+  })
+
+  it("locks a device that guesses wrong on its own counter, apart from the subject's", async () => {
+    const { clock, store, lockout } = setUp()
+    const device = await lockout.rememberDevice("ann")
+    while ((await lockout.begin("ann", { device })) === 0) await lockout.fail("ann", { device })
+    expect(await lockout.begin("ann", { device })).toBe(firstLockMs)
+    expect(store.get("ann")).toBeUndefined()
+    expect(await lockout.begin("ann")).toBe(0)
+
+    clock.at += firstLockMs
+    await lockSubject(lockout, "ann")
+    expect(await lockout.begin("ann", { device })).toBe(0)
+  })
+
+  it("keeps a check with a garbage or tampered token on the subject's lock", async () => {
+    const { lockout } = setUp()
+    const token = await lockout.rememberDevice("ann")
+    // A character in the middle of the signature, where every bit counts.
+    const at = token.length - 20
+    const tampered = token.slice(0, at) + (token[at] === "A" ? "B" : "A") + token.slice(at + 1)
+    await lockSubject(lockout, "ann")
+    for (const device of ["", "garbage", tampered, `${token}.extra`]) {
+      expect(await lockout.begin("ann", { device })).toBe(firstLockMs)
+    }
+  })
+
+  it("ignores a device token when the devices option is missing, and refuses to make one", async () => {
+    const { lockout } = setUp()
+    const token = await lockout.rememberDevice("ann")
+    const plain = createLockout({ store: new MemoryLockoutStore(), clock: { now: () => NOW } })
+    await lockSubject(plain, "ann")
+    expect(await plain.begin("ann", { device: token })).toBe(firstLockMs)
+    await expect(plain.rememberDevice("ann")).rejects.toThrow("devices option")
+  })
+})
