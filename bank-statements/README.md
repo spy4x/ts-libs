@@ -25,6 +25,9 @@ Usage is in the module doc, shown by `deno doc` and on JSR.
 - [`@spy4x/bank-statements/pdf`](pdf.ts): `extractPdfLines`, which reads a PDF's text into lines
   of positioned words, and `parsePdfStatement`, which reads those lines with a profile's `pdf`
   layout. A separate entry, so pdf.js stays out of apps that do not read PDF.
+- [`@spy4x/bank-statements/infer`](infer.ts): `inferProfile`, which asks a language model for a
+  profile when no known one reads a file, `maskSample` and `profilePrompt`. The model is a port the
+  app passes in, so this package sends nothing by itself.
 
 ## Safety
 
@@ -39,5 +42,16 @@ page's text is read; the text read and the lines are capped too. pdf.js loads wi
 `"no-text-layer"` and a password-protected file as `"encrypted"`. A profile's line pattern is a list
 of typed tokens (`date`, `amount`, `text`, a literal), never a regular expression, because a
 profile can come from an AI reply.
+
+`inferProfile` sends a model only a masked sample: at most 20 lines, every digit turned into `9`
+and every letter into `x` or `X`, with spacing and separators kept. Invisible characters that can
+spell text (format and tag characters, lone surrogates, private-use and unassigned code points,
+line and paragraph separators) become `x` too. In the row taken for the header, only words from a
+fixed vocabulary of column names ("Datum", "Betrag", "Saldo", "Дата") keep their letters, and only
+when no piece of the row reads as a date or an amount; a wrong guess of the header row therefore
+shows no name. The date pattern and number format are read here from the real values; a reply
+that is not a valid profile is refused as `"invalid-reply"`, and a proposal is accepted only when
+it reads every row and the file's balances add up; a file without balances is refused as
+`"unverifiable"`.
 
 The test fixtures in `fixtures/` are all synthetic.

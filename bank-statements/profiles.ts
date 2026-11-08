@@ -14,6 +14,7 @@ import {
 } from "@spy4x/platform/universal/money-core"
 import { uuidV7 } from "@spy4x/platform/universal/uuid"
 import { detectDatePatterns } from "@spy4x/time/date"
+import { HEADER_WORDS } from "./header-words.ts"
 import { csvRecords, foldHeader, type StatementProfile } from "./profile.ts"
 import { quote } from "./statement.ts"
 
@@ -134,14 +135,6 @@ export function matchProfile(
 
 /** How many lines {@link guessProfile} looks at. */
 const GUESS_LINES = 60
-
-/** Header words that name a column, in the languages of the first users. */
-const HEADER_WORDS = {
-  balance: /balance|saldo|solde|остаток/,
-  payee: /payee|recipient|beneficiary|counterparty|empfänger|получатель|bénéficiaire/,
-  description: /description|memo|details|purpose|verwendungszweck|назначение|libellé/,
-  reference: /reference|^ref/,
-}
 
 /**
  * Build a candidate profile for a CSV file from the file alone, for a person to confirm: the
