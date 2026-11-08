@@ -251,6 +251,12 @@ function groupLines(words: (PdfWord & { y: number })[], page: number, before: nu
 const MAX_TOKEN_WORDS = 3
 
 /**
+ * Most words a line may have for a pattern to match it. A statement row holds far fewer; the
+ * limit keeps a crafted line of millions of words from holding the reader for seconds.
+ */
+const MAX_PATTERN_LINE_WORDS = 500
+
+/**
  * Read the lines of a PDF statement with a profile that has a `pdf` layout. Each line becomes
  * the profile's columns, and those go through the same row reader as a CSV row, so the result
  * is the {@link ParsedStatement} that `verifyStatement` checks.
@@ -363,13 +369,15 @@ function tokenLengths(
  * takes the first run after which the rest of the pattern still matches, so `Invoice 2024 paid`
  * stays one description although `2024` reads as an amount. Whether the rest matches comes from a
  * table filled from the end of the line, so the work is tokens times words times
- * {@link MAX_TOKEN_WORDS}, and each date or amount run is tested once.
+ * {@link MAX_TOKEN_WORDS}, and each date or amount run is tested once. A line longer than
+ * {@link MAX_PATTERN_LINE_WORDS} does not match.
  */
 function patternCells(
   words: readonly PdfWord[],
   pattern: readonly PdfToken[],
   accepts: TokenTest,
 ): string[] | null {
+  if (words.length > MAX_PATTERN_LINE_WORDS) return null
   const width = words.length + 1
   // reaches[index * width + at]: tokens from `index` on match the words from `at` to the end.
   const reaches = new Uint8Array((pattern.length + 1) * width)

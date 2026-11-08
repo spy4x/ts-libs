@@ -277,20 +277,33 @@ describe("parsePdfStatement", () => {
 
   it("gives up on a long line of numbers that matches no way within a second", () => {
     // The longest pattern a profile allows: a date, 31 text-and-amount pairs and an amount.
-    const numbers = Array.from({ length: 20000 }, (_, index) => String(index + 1))
-    const page = handPage(["02.01.2026", ...numbers, "end"])
     const pairs = Array.from({ length: 31 }, () => [{ type: "text" }, { type: "amount" }] as const)
     const profile: StatementProfile = {
       ...base,
       pdf: { pattern: [{ type: "date" }, ...pairs.flat(), { type: "amount" }] },
     }
-    const started = performance.now()
-    const parsed = parsePdfStatement([page], profile)
-    const took = performance.now() - started
-    expect(parsed.rows).toEqual([])
-    expect(parsed.rowErrors).toHaveLength(1)
-    expect(parsed.rowErrors[0].reason).toContain("does not match the pattern")
-    expect(took).toBeLessThan(1000)
+    for (const count of [497, 200_000]) {
+      const numbers = Array.from({ length: count }, (_, index) => String(index + 1))
+      const page = handPage(["02.01.2026", ...numbers, "end"])
+      const started = performance.now()
+      const parsed = parsePdfStatement([page], profile)
+      const took = performance.now() - started
+      expect(parsed.rows).toEqual([])
+      expect(parsed.rowErrors).toHaveLength(1)
+      expect(parsed.rowErrors[0].reason).toContain("does not match the pattern")
+      expect(took).toBeLessThan(1000)
+    }
+  })
+
+  it("reads a row of 500 words and rejects one of 501", () => {
+    const profile: StatementProfile = {
+      ...base,
+      pdf: { pattern: [{ type: "date" }, { type: "text" }, { type: "amount" }] },
+    }
+    const line = (count: number) =>
+      handPage(["02.01.2026", ...Array.from({ length: count - 2 }, () => "word"), "-5.00"])
+    expect(parsePdfStatement([line(500)], profile).rows).toHaveLength(1)
+    expect(parsePdfStatement([line(501)], profile).rowErrors).toHaveLength(1)
   })
 
   it("throws for a profile without a pdf layout", () => {
