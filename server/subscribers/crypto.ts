@@ -6,6 +6,7 @@ import {
   MAX_SIGNED_PAYLOAD_LENGTH,
   SignedPayloadErrorCode,
 } from "@spy4x/platform/signed-payload"
+import { deriveSecret } from "@spy4x/platform/tokens"
 import type { Subscriber, SubscriberStore } from "./store.ts"
 
 /** How long a confirm link works: three days. */
@@ -46,6 +47,12 @@ export interface SubscriptionCryptoOptions {
   legacyTokens?: boolean
   /** Clock in Unix milliseconds. Defaults to `Date.now`. */
   now?: () => number
+}
+
+/** Options of {@link createListSubscriptionCrypto}. */
+export interface ListSubscriptionCryptoOptions extends SubscriptionCryptoOptions {
+  /** The list's name, not empty. Every secret is derived under the label `subscribers:list:<list>`. */
+  list: string
 }
 
 /** What {@link SubscriptionCrypto.verifyConfirmToken} found. `issuedAt` is in Unix milliseconds. */
@@ -110,8 +117,12 @@ interface Peeked {
  * apart by a signed-payload purpose or an HMAC message prefix, so a token for one purpose never
  * verifies for another and no mark equals another. Addresses are trimmed and lowercased first.
  *
- * Compatible with antonshubin.com: its unsubscribe links (version 1), unsubscribe marks and sent
- * marks verify and match byte for byte under the same secret.
+ * One secret serves one list. The tokens name no list, so with two lists over one secret a confirm
+ * link for one list joins the other, and an unsubscribe link for one leaves the other: an app with
+ * more than one list over one secret uses {@link createListSubscriptionCrypto} instead.
+ *
+ * Compatible with antonshubin.com: its unsubscribe marks and sent marks match byte for byte under
+ * the same secret, and its unsubscribe links (version 1) verify when `legacyTokens` is `true`.
  *
  * @throws {TokenError} `InvalidSecret` when `secret` or any of `previousSecrets` is unusable.
  */
@@ -237,6 +248,37 @@ export function createSubscriptionCrypto(options: SubscriptionCryptoOptions): Su
       )
     },
   }
+}
+
+/**
+ * {@link createSubscriptionCrypto} for one of several lists over one secret. `secret` and each of
+ * `previousSecrets` are replaced by `deriveSecret(secret, "subscribers:list:<list>")` from
+ * `@spy4x/platform/tokens`, so a token, key or mark of one list never verifies or matches on
+ * another. Seed and the template derive their list keys the same way, so their mailed links keep
+ * working when they switch to this.
+ *
+ * Switching an existing list from {@link createSubscriptionCrypto} changes its subscriber keys,
+ * unsubscribe marks and sent marks, and every link already mailed stops working. It fits a list
+ * before its first subscriber, or an app that already derives its keys this way.
+ *
+ * @throws {TypeError} when `list` is empty.
+ * @throws {TokenError} `InvalidSecret` when `secret` or any of `previousSecrets` is unusable.
+ */
+export async function createListSubscriptionCrypto(
+  options: ListSubscriptionCryptoOptions,
+): Promise<SubscriptionCrypto> {
+  const { list, ...rest } = options
+  if (typeof list !== "string" || list === "") {
+    throw new TypeError("list must be a non-empty string")
+  }
+  const label = `subscribers:list:${list}`
+  return createSubscriptionCrypto({
+    ...rest,
+    secret: await deriveSecret(options.secret, label),
+    previousSecrets: await Promise.all(
+      (options.previousSecrets ?? []).map((previous) => deriveSecret(previous, label)),
+    ),
+  })
 }
 
 /** The unsubscribe-token version, read without verifying: 1, 2, or `undefined` when the token is

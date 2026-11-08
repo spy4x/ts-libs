@@ -3,7 +3,7 @@
  * the URL, a store port with the replay rule, and the subscribe, confirm and unsubscribe flows. The
  * app keeps its wording, pages and routes.
  *
- * `createSubscriptionCrypto`, `CONFIRM_TTL_MS`, the `SubscriberStore` port, the flows
+ * `createSubscriptionCrypto`, `createListSubscriptionCrypto`, `CONFIRM_TTL_MS`, the `SubscriberStore` port, the flows
  * `requestSubscription`, `previewConfirmation`, `confirmSubscription`, `previewUnsubscribe` and
  * `unsubscribe`, `unsubscribeTokenFrom`, `UNSUBSCRIBE_FORM_MAX_BYTES` and `TOKEN_PAGE_HEADERS`;
  * `sendIssue` and the `SendLog` port; `createMemorySubscriberStore` and `createMemorySendLog` in
@@ -57,6 +57,13 @@
  * row's 16-byte keyed `subscriberKey` and binds the address as context, so it costs one store lookup
  * and one HMAC, and the URL holds no address. Both are `@spy4x/platform/signed-payload` tokens. One
  * secret serves every purpose, kept apart by purpose labels and HMAC message prefixes.
+ *
+ * **Several lists.** The tokens name no list, so two lists over one secret would accept each other's
+ * links: a confirm link for one list would join the other. An app with more than one list over one
+ * secret builds each list's crypto with `await createListSubscriptionCrypto({ secret, list })`, which
+ * derives a key per list (`deriveSecret(secret, "subscribers:list:<list>")`, as Seed does). Switching
+ * an existing list to it changes its keys and marks, so do it before the list's first subscriber, or
+ * in an app that already derives its keys the same way.
  *
  * **Rotating the secret.** Put the new secret in `secret` and the old one first in `previousSecrets`.
  *
@@ -216,7 +223,9 @@
 export {
   CONFIRM_TTL_MS,
   type ConfirmTokenResult,
+  createListSubscriptionCrypto,
   createSubscriptionCrypto,
+  type ListSubscriptionCryptoOptions,
   type SubscriptionCrypto,
   type SubscriptionCryptoOptions,
   type UnsubscribeLookup,

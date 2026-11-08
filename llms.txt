@@ -2823,6 +2823,7 @@ UnsubscribeOutcome	type	@spy4x/server/subscribers	What unsubscribing led to.
 UnsubscribePreview	type	@spy4x/server/subscribers	What an unsubscribe link leads to, before anything is removed.
 UnsubscribeTokenOptions	interface	@spy4x/server/subscribers	Options of unsubscribeTokenFrom.
 confirmSubscription	function	@spy4x/server/subscribers	Adds the address a confirm token carries, then asks for the welcome mail.
+createListSubscriptionCrypto	function	@spy4x/server/subscribers	createSubscriptionCrypto for one of several lists over one secret.
 createSubscriptionCrypto	function	@spy4x/server/subscribers	Creates the tokens and keyed hashes of one mailing list over one secret.
 previewConfirmation	function	@spy4x/server/subscribers	Checks a confirm token without storing anything: the page a link opens shows this and asks for a click, so a mail scanner that follows links subscribes no one.
 previewUnsubscribe	function	@spy4x/server/subscribers	Finds whom an unsubscribe token names without removing anything: the page a link opens shows this and asks for a click.
@@ -3242,4 +3243,4 @@ firstIssueMessage	function	@spy4x/validation/validate	First issue message in a v
 isArkErrors	function	@spy4x/validation/validate	Whether a value is an arktype rejection, without relying on `instanceof`.
 toValidationError	function	@spy4x/validation/validate	Build a ValidationError from arktype's issues.
 validate	function	@spy4x/validation/validate	Parse `value` with an arktype schema exactly once.
-# export surface: sha256 483c6ae3755f04c8308bf8b6a0a643ffa2d93435607420fbd9c7dfe24466dae9
+# export surface: sha256 a5e5076130d957495ae779e4a4c09e633b9e4e646778185f4b51fea9b4897bb9
