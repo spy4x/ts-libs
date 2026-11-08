@@ -665,6 +665,17 @@ describe("signDisplay", () => {
   })
 })
 
+describe("trailingZeroDisplay", () => {
+  it("drops the zero fraction of a whole amount and keeps any other", () => {
+    const strip = { trailingZeroDisplay: "stripIfInteger" } as const
+    expect(formatMoney(400, "USD", "en", strip)).toBe("$4")
+    expect(formatMoney(450, "USD", "en", strip)).toBe("$4.50")
+    expect(formatMoney(400, "USD", "de", strip)).toBe("4 $")
+    expect(formatMoney(2_000_000, "USDT", "en", { ...strip, decimals: 6 })).toBe("USDT 2")
+    expect(formatMoney(400, "USD", "en")).toBe("$4.00")
+  })
+})
+
 describe("parseAmount", () => {
   const german = { decimal: ",", group: "." } as const
   const english = { decimal: ".", group: "," } as const
