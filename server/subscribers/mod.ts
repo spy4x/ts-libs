@@ -100,10 +100,11 @@
  * limited: a mail provider's one-click POSTs share a few addresses. `limits.recipient` is keyed on the
  * `subscriberKey`, so many clients cannot flood one inbox with confirm mails.
  *
- * **Compatibility with antonshubin.com.** Under the same secret, the site's unsubscribe links
- * (version 1) verify by a scan of the list, and its unsubscribe and sent marks match byte for byte, so
- * its data files and the links in old mails keep working. Its version 1 confirm links stop working at
- * the switch; they expire within three days anyway.
+ * **Compatibility with antonshubin.com.** Under the same secret, the site's unsubscribe and sent marks
+ * match byte for byte, so its data files keep working. Its unsubscribe links (version 1) verify, by a
+ * scan of the list, only with `legacyTokens: true`; without it they are not recognised and never read
+ * the store. Its version 1 confirm links stop working at the switch; they expire within three days
+ * anyway.
  *
  * **Stores.** `SubscriberStore` offers one method per intent, so each adapter can make it atomic.
  * `describeSubscriberStoreContract` in `store-contract.test.ts` is the contract every adapter runs.
@@ -200,8 +201,8 @@
  * - Relay-error redaction is case-insensitive, so a mail server that echoes `JANE@EXAMPLE.COM` for
  *   `jane@example.com` does not put the address in the log; store and link-building errors are
  *   redacted too. `sendIssue` logs the row number, never the address.
- * - A version 2 unsubscribe link costs one lookup; the version 1 scan, one HMAC per subscriber, is
- *   rate-limited per client.
+ * - A version 2 unsubscribe link costs one lookup; the version 1 scan, one HMAC per subscriber, runs
+ *   only with `legacyTokens: true` and is rate-limited per client.
  * - Version 2 links carry their issue time, so shortening the TTL cannot make an older link look
  *   newer and let a replay through.
  * - A per-recipient limit stops many clients flooding one address with subscribe requests.

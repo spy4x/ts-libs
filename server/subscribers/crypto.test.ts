@@ -50,7 +50,18 @@ function envelopeText(token: string): string {
 }
 
 describe("createSubscriptionCrypto: antonshubin.com compatibility", () => {
-  const crypto = createSubscriptionCrypto({ secret: SITE.secret, now: () => NOW })
+  const crypto = createSubscriptionCrypto({
+    secret: SITE.secret,
+    legacyTokens: true,
+    now: () => NOW,
+  })
+
+  it("refuses a site link by default without reading the store", async () => {
+    const plain = createSubscriptionCrypto({ secret: SITE.secret })
+    const { lookup, calls } = await lookupOf(plain, [SITE.email])
+    expect(await plain.verifyUnsubscribeToken(SITE.unsubscribeToken, lookup)).toBeUndefined()
+    expect(calls).toEqual({ list: 0, findByKey: 0 })
+  })
 
   it("verifies an unsubscribe link the site mailed", async () => {
     const { lookup } = await lookupOf(crypto, ["ann@example.com", SITE.email, "bob@example.com"])
@@ -200,6 +211,7 @@ describe("createSubscriptionCrypto: secret rotation", () => {
     const legacy = createSubscriptionCrypto({
       secret: OTHER_SECRET,
       previousSecrets: [SITE.secret],
+      legacyTokens: true,
     })
     const { lookup } = await lookupOf(legacy, [SITE.email])
     expect((await legacy.verifyUnsubscribeToken(SITE.unsubscribeToken, lookup))?.email)

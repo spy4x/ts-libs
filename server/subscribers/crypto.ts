@@ -38,6 +38,12 @@ export interface SubscriptionCryptoOptions {
    * link minted after the rotation carries the row's stored key (see `unsubscribeToken`).
    */
   previousSecrets?: readonly string[]
+  /**
+   * Verify version 1 unsubscribe tokens, the format antonshubin.com mailed. Off by default: a
+   * version 1 token names no subscriber, so checking one reads every row of the list. Turn it on
+   * only while old mails with such links are still in inboxes. Defaults to `false`.
+   */
+  legacyTokens?: boolean
   /** Clock in Unix milliseconds. Defaults to `Date.now`. */
   now?: () => number
 }
@@ -72,9 +78,11 @@ export interface SubscriptionCrypto {
   /**
    * The subscriber an unsubscribe token was issued for, or `undefined` for a forged token and for
    * an address no longer on the list alike. A version 2 token costs one `findByKey` and one HMAC
-   * per secret. A version 1 token carries nothing to look up, so it is checked against every
-   * listed address: rate-limit the callers that can reach it (the flows in this module do). Never
-   * throws for a malformed token; a failing store rejects.
+   * per secret. A version 1 token is `undefined` without touching the store, unless
+   * `legacyTokens` is on: then it is checked against every listed address, since it carries
+   * nothing to look up, so rate-limit the callers that can reach it (the flows in this module
+   * count them under `limits.client`). Never throws for a malformed token; a failing store
+   * rejects.
    */
   verifyUnsubscribeToken(token: string, lookup: UnsubscribeLookup): Promise<Subscriber | undefined>
   /** The 16-byte keyed hash of `email`, in hex: the store's lookup key. */
@@ -110,6 +118,7 @@ interface Peeked {
 export function createSubscriptionCrypto(options: SubscriptionCryptoOptions): SubscriptionCrypto {
   const secrets = [options.secret, ...(options.previousSecrets ?? [])]
   const now = options.now ?? Date.now
+  const legacy = options.legacyTokens === true
   const confirm = createSignedPayloadCodec({
     secret: options.secret,
     purpose: CONFIRM_PURPOSE,
@@ -199,7 +208,7 @@ export function createSubscriptionCrypto(options: SubscriptionCryptoOptions): Su
         }
         return undefined
       }
-      if (peeked?.version !== 1) return undefined
+      if (peeked?.version !== 1 || !legacy) return undefined
       for (const subscriber of await lookup.list()) {
         for (const codec of codecs) {
           const result = await codec.legacyUnsubscribe.verify(token, {

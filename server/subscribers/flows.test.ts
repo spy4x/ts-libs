@@ -29,13 +29,18 @@ function harness(options: {
   sendMail?: (mail: SubscriberMail) => Promise<MailOutcome>
   store?: SubscriberStore
   limits?: FlowDeps["limits"]
+  legacyTokens?: boolean
 } = {}) {
   const clock = { at: NOW }
   const mails: SubscriberMail[] = []
   const logs: unknown[][] = []
   const store = options.store ?? createMemorySubscriberStore()
   const deps: FlowDeps = {
-    crypto: createSubscriptionCrypto({ secret: SECRET, now: () => clock.at }),
+    crypto: createSubscriptionCrypto({
+      secret: SECRET,
+      legacyTokens: options.legacyTokens,
+      now: () => clock.at,
+    }),
     store,
     links: {
       confirm: (token) => `https://example.com/confirm?token=${encodeURIComponent(token)}`,
@@ -269,8 +274,8 @@ describe("unsubscribe", () => {
     expect(await unsubscribe("forged.token", deps)).toEqual({ state: "not-recognised" })
   })
 
-  it("honours an unsubscribe link antonshubin.com mailed", async () => {
-    const { deps, store } = harness()
+  it("honours an unsubscribe link antonshubin.com mailed when legacy tokens are on", async () => {
+    const { deps, store } = harness({ legacyTokens: true })
     await store.add({ email: JANE, key: "legacy", mark: "m", issuedAt: NOW, at: new Date(NOW) })
     expect(await unsubscribe(SITE_UNSUBSCRIBE_TOKEN, deps)).toEqual({ state: "done" })
     expect(await store.count()).toBe(0)
@@ -295,7 +300,7 @@ describe("unsubscribe", () => {
 
   it("rate-limits the version 1 scan per client and leaves version 2 links alone", async () => {
     const client = createMemoryRateLimiter({ limit: 1, windowMs: 60_000, clock: () => NOW })
-    const { deps, mails } = harness({ limits: { client } })
+    const { deps, mails } = harness({ limits: { client }, legacyTokens: true })
     const token = await subscribe(deps, mails)
     const request = { clientKey: "192.0.2.1" }
     expect(await previewUnsubscribe(SITE_UNSUBSCRIBE_TOKEN, deps, request)).toEqual({
