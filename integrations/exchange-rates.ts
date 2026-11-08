@@ -5,8 +5,9 @@
  *
  * Behaviour:
  *
- *  - `daily` and Frankfurter's `timeSeries` never throw. It returns `{ success, output, error }`: the rates it found and the
- *    quotes it has no rate for, or the source's id and the reason it failed.
+ *  - `daily` and Frankfurter's `timeSeries` never throw. Each returns `{ success, output, error }`:
+ *    the rates it found and the quotes it has no rate for, or the source's id and the reason it
+ *    failed.
  *  - A quote with no rate is listed in `missing`, never given a rate of `0`.
  *  - Each rate carries the date it is really for, which can be earlier than the date asked: on a
  *    weekend or a holiday Frankfurter answers with the last business day. A range starting on one
