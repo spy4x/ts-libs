@@ -48,8 +48,9 @@ describe("maskSample", () => {
   it("keeps the header row's letters only when no cell reads as a date or an amount", () => {
     expect(maskSample(["Date,Payee,Amount", "2026-01-05,Coffee,-3.50"], { headerRow: 0 }))
       .toEqual(["Date,Payee,Amount", "9999-99-99,Xxxxxx,-9.99"])
-    expect(maskSample(["2026-01-05,Coffee,-3.50"], { headerRow: 0 }))
-      .toEqual(["9999-99-99,Xxxxxx,-9.99"])
+    expect(maskSample(["2026-01-05,Saldo,-3.50"], { headerRow: 0 }))
+      .toEqual(["9999-99-99,Xxxxx,-9.99"])
+    expect(maskSample(["Иванов С. В.,Saldo"], { headerRow: 0 })).toEqual(["Xxxxxx X. X.,Saldo"])
     expect(maskSample(["Anna Kowalska,1 200,00"], { headerRow: 0 }))
       .toEqual(["Xxxx Xxxxxxxx,9 999,99"])
   })

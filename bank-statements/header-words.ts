@@ -37,8 +37,9 @@ const MORE_HEADER_WORDS = [
   "описание|комментарий|type|typ|art|category|kategorie|catégorie|категория|status|iban|bic",
   "card|karte|carte|карта|number|nummer|nr|no|numéro|номер|bank|banque|банк",
   // The small words between them.
+  // No one-letter words, so a name's initials stay masked.
   "the|of|in|out|and|or|to|from|by|der|die|das|des|und|im|für|von|nach|de|du|la|le|les|et|en",
-  "à|и|в|по|на|от|для|с",
+  "по|на|от|для",
 ].join("|")
 
 const WHOLE_HEADER_WORD = new RegExp(
