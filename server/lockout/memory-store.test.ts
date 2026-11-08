@@ -1,6 +1,6 @@
 import { expect } from "@std/expect"
 import { describe, it } from "@std/testing/bdd"
-import { MemoryLockoutStore } from "./memory-store.ts"
+import { LockoutStoreFullError, MemoryLockoutStore } from "./memory-store.ts"
 import { createLockout, type LockoutPolicy } from "./mod.ts"
 import { describeLockoutStoreContract } from "./store-contract.test.ts"
 
@@ -278,6 +278,84 @@ describe("MemoryLockoutStore maxEntries", () => {
     expect(await guessWrong("d")).toBe(0)
     expect(store.get("b")).toBeUndefined()
     expect(store.size).toBe(2)
+  })
+})
+
+describe("MemoryLockoutStore full store", () => {
+  it("lets a new subject in when every held counter is a refunded check", async () => {
+    const { store, lockout } = open({ maxEntries: 100 })
+    // Correct secrets only, so no wrong guess was ever made: these counters decide nothing.
+    for (let i = 0; i < 100; i++) {
+      expect(await lockout.begin(`stranger${i}`)).toBe(0)
+      await lockout.refund(`stranger${i}`)
+    }
+    expect(store.size).toBe(100)
+    expect(await lockout.begin("owner")).toBe(0)
+    expect(store.get("owner")?.failures).toBe(1)
+    expect(store.size).toBe(100)
+  })
+
+  it("refuses with LockoutStoreFullError and drops no lock or recent failure", async () => {
+    const { clock, store, lockout, guessWrong } = open({ maxEntries: 2 })
+    for (let i = 0; i < 3; i++) await guessWrong("locked")
+    await guessWrong("counting")
+    clock.at += 1_000
+    const rejected = await lockout.begin("new").then(() => undefined, (error: unknown) => error)
+    expect(rejected).toBeInstanceOf(LockoutStoreFullError)
+    expect((rejected as Error).name).toBe("LockoutStoreFullError")
+    expect(() => store.track("new")).toThrow(LockoutStoreFullError)
+    expect(store.get("new")).toBeUndefined()
+    expect(store.get("locked")).toEqual({
+      failures: 3,
+      lockedUntil: T0 + 30_000,
+      lastFailureAt: T0,
+    })
+    expect(store.get("counting")?.failures).toBe(1)
+    expect(store.size).toBe(2)
+  })
+
+  it("keeps a zero-count counter while its lock still runs", async () => {
+    const { store, lockout } = open({ maxEntries: 1 })
+    // Not a state the lockout writes, since a refund lifts the lock; a store must not rely on that.
+    const state = { failures: 0, lockedUntil: T0 + 30_000, lastFailureAt: null }
+    await store.update("locked", () => state)
+    await expect(lockout.begin("new")).rejects.toThrow(LockoutStoreFullError)
+    expect(store.get("locked")).toEqual(state)
+  })
+
+  it("refuses a flood on a full store without walking every counter each time", async () => {
+    const { store, lockout, guessWrong } = open({ maxEntries: 50 })
+    for (let i = 0; i < 50; i++) await guessWrong(`s${i}`)
+    // Count every walk over a Map as big as the store: only the store's own counters are.
+    const iterate = Map.prototype[Symbol.iterator]
+    let walks = 0
+    Map.prototype[Symbol.iterator] = function (this: Map<unknown, unknown>) {
+      if (this.size === 50) walks += 1
+      return iterate.call(this)
+    }
+    let refused = 0
+    try {
+      for (let i = 0; i < 200; i++) await lockout.begin(`flood${i}`).catch(() => refused++)
+    } finally {
+      Map.prototype[Symbol.iterator] = iterate
+    }
+    expect(refused).toBe(200)
+    expect(walks).toBe(1)
+    expect(store.size).toBe(50)
+  })
+
+  it("lets a new subject in before the remembered wait ends once a held check is refunded", async () => {
+    const { clock, store, lockout } = open({ maxEntries: 2 })
+    // Two checks in flight: counted, the secret not yet judged.
+    expect(await lockout.begin("a")).toBe(0)
+    expect(await lockout.begin("b")).toBe(0)
+    await expect(lockout.begin("c")).rejects.toThrow(LockoutStoreFullError)
+    // The full store now waits until T0 + QUIET_MS before it walks its counters again.
+    clock.at += 1
+    await lockout.refund("a")
+    expect(await lockout.begin("c")).toBe(0)
+    expect(store.get("a")).toBeUndefined()
+    expect(store.get("b")?.failures).toBe(1)
   })
 })
 

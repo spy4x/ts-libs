@@ -25,7 +25,8 @@
  *
  * `createLockout`, `lockDelayMs`, `beginCheck`, `resolveLockoutPolicy`, `DEFAULT_LOCKOUT_POLICY`,
  * `MAX_LOCK_LIMIT_MS` and the `LockoutStore` port; `createPostgresLockoutStore` in
- * `server/lockout/postgres`; `MemoryLockoutStore` in `server/lockout/memory-store`.
+ * `server/lockout/postgres`; `MemoryLockoutStore` and `LockoutStoreFullError` in
+ * `server/lockout/memory-store`.
  *
  * An escalating lockout for any secret a person can guess: a one-time code, an e-mail code, a PIN, a
  * recovery code. Counters are kept per subject, a key the caller chooses (a user id, an address), in a
@@ -135,13 +136,17 @@
  * const store = new MemoryLockoutStore({ quietResetMs: 7 * 24 * 60 * 60_000, maxEntries: 100_000 })
  * ```
  *
- * A full store first drops what a sweep would drop. If nothing can go, a new subject is refused:
- * `begin` rejects, and no counter is created. A counter with a running lock, or with a failure inside
- * the quiet period, is never evicted to make room, so filling the store clears nobody's lock or
- * count. The cost is that checks for new subjects fail for as long as the held counters keep being
- * written, and for up to `quietResetMs` after the last write. One request per held subject per quiet
- * period keeps the store full, and an ordinary successful check holds its slot for `quietResetMs`
- * too, so size the cap well above the subjects you expect in one quiet period. There is no timer:
+ * A full store first drops a counter with a zero count and no lock (one whose check was refunded
+ * decides nothing), then what a sweep would drop. If nothing can go, a new subject is refused:
+ * `begin` rejects with `LockoutStoreFullError`, and no counter is created. Answer it exactly like a
+ * lock ("too many attempts", such as a 429) and never go on to check the secret. A counter with a
+ * running lock, or with a failure inside the quiet period, is never evicted to make room, so filling
+ * the store clears nobody's lock or count. The cost is that checks for new subjects fail while every
+ * held counter keeps one, for up to `quietResetMs` after its last write. Each held counter costs a
+ * stranger one wrong secret, so a store keyed by something they choose freely (a typed name) can
+ * still be filled at one wrong guess per subject: size the cap well above the subjects you expect to
+ * fail in one quiet period. The store suits a server that runs as one process, at a price: a restart
+ * ends every lock and gives every guesser its free tries back. There is no timer:
  * sweeps run inside `update`, at most once per `quietResetMs` or every 512 calls. Neither option works
  * with `createMissing: false`, where a dropped subject would stop being counted.
  *
