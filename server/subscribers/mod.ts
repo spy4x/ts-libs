@@ -103,8 +103,10 @@
  * logged, never its stack.
  *
  * **Rate limits.** `limits.client` counts every subscribe request and every unsubscribe request that
- * carries a version 1 link, the only one that scans the list. Version 2 unsubscribe links are never
- * limited: a mail provider's one-click POSTs share a few addresses. `limits.recipient` is keyed on the
+ * carries a version 1 link, the only one that scans the list. A request with no `clientKey` is
+ * counted under one shared key and logged as a warning, so a route that forgot the key is limited as
+ * a whole instead of not at all. Version 2 unsubscribe links are never limited: a mail provider's
+ * one-click POSTs share a few addresses. `limits.recipient` is keyed on the
  * `subscriberKey`, so many clients cannot flood one inbox with confirm mails.
  *
  * **Compatibility with antonshubin.com.** Under the same secret, the site's unsubscribe and sent marks

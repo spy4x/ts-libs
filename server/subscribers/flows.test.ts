@@ -1,5 +1,6 @@
 import { expect } from "@std/expect"
 import { describe, it } from "@std/testing/bdd"
+import type { RateLimiter } from "@spy4x/platform/rate-limit"
 import { createMemoryRateLimiter } from "@spy4x/platform/rate-limit/memory"
 import { CONFIRM_TTL_MS, createSubscriptionCrypto } from "./crypto.ts"
 import {
@@ -160,6 +161,26 @@ describe("requestSubscription", () => {
     expect((await requestSubscription("d@example.com", deps, { clientKey: "192.0.2.2" })).status)
       .toBe(200)
     expect(mails).toHaveLength(3)
+  })
+
+  it("counts a request with no client key under a shared key and warns", async () => {
+    const asked: string[] = []
+    const refuseAll: RateLimiter = {
+      check: (key) => {
+        asked.push(key)
+        return { allowed: false, remaining: 0, retryAfterMs: 1000, resetAfterMs: 1000, limit: 1 }
+      },
+      reset: () => {},
+    }
+    const { deps, mails, logs } = harness({ limits: { client: refuseAll } })
+    for (const request of [undefined, { clientKey: "" }]) {
+      const outcome = await requestSubscription(JANE, deps, request)
+      await outcome.mails
+      expect(outcome.status).toBe(429)
+    }
+    expect(mails).toHaveLength(0)
+    expect(asked).toEqual(["subscribers:no-client-key", "subscribers:no-client-key"])
+    expect(logs.filter(([level]) => level === "warn")).toHaveLength(2)
   })
 
   it("stops many clients from flooding one inbox, without telling them", async () => {
