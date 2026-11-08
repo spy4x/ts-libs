@@ -21,11 +21,16 @@
  *   and answers the author's own post whose card or link facet points at `uri`, or `null`.
  *   `actor` is a DID or handle; pass `session.did`.
  * - **`readBlueskyPostResults({ uri, … })`** reads `app.bsky.feed.getPosts` and answers
- *   `{ views: null, reactions: likes, comments: replies, score: null, reposts, quotes }`.
+ *   `{ views: null, reactions: likes, comments: replies, score: null, reposts, quotes }`. `uri`
+ *   names the author by DID (`at://did:plc:…/app.bsky.feed.post/<rkey>`) or by handle
+ *   (`at://name.bsky.social/app.bsky.feed.post/<rkey>`, the form a `bsky.app` link gives); a
+ *   handle is resolved to its DID first.
+ * - **`resolveBlueskyHandle({ handle, … })`** calls `com.atproto.identity.resolveHandle` and
+ *   answers the account's DID. Handles are case-insensitive, so it asks in lower case.
  * - **Look up before posting.** Creating a record is not idempotent: only `429` is retried, and
  *   after a `5xx`, a timeout or a dropped connection the error says the post may exist. The
  *   lookup only sees posts the AppView has indexed, which takes a few seconds after a post.
- * - **Reading needs no token.** The lookup and the results go to the public AppView
+ * - **Reading needs no token.** The lookup, the handle and the results go to the public AppView
  *   (`https://public.api.bsky.app` by default), with no `Authorization` header.
  * - **Secrets stay secret.** The app password goes only into the sign-in body and the access
  *   token only into its header; a redirect is refused rather than followed, transport errors carry
@@ -179,8 +184,20 @@ export interface FindBlueskyPostByLinkOptions extends JsonClientOptions {
 
 /** Options for {@link readBlueskyPostResults}. */
 export interface ReadBlueskyPostResultsOptions extends JsonClientOptions {
-  /** The post's `at://` address. */
+  /**
+   * The post's `at://` address, with the author's DID or handle:
+   * `at://did:plc:…/app.bsky.feed.post/<rkey>` or `at://name.bsky.social/app.bsky.feed.post/<rkey>`.
+   * A handle costs one more request, to resolve it.
+   */
   uri: string
+  /** A bare `https` origin; {@link BLUESKY_PUBLIC_APPVIEW} by default. */
+  appView?: string
+}
+
+/** Options for {@link resolveBlueskyHandle}. */
+export interface ResolveBlueskyHandleOptions extends JsonClientOptions {
+  /** A handle such as `name.bsky.social`, in any case. */
+  handle: string
   /** A bare `https` origin; {@link BLUESKY_PUBLIC_APPVIEW} by default. */
   appView?: string
 }
@@ -205,13 +222,22 @@ export type BlueskyFindResult =
   | { success: true; output: BlueskyPostRef | null; error: "" }
   | { success: false; output: null; error: string }
 
+/** Outcome of {@link resolveBlueskyHandle}: the account's DID. */
+export type BlueskyHandleResult =
+  | { success: true; output: string; error: "" }
+  | { success: false; output: null; error: string }
+
 /** Outcome of {@link readBlueskyPostResults}. */
 export type BlueskyResultsResult =
   | { success: true; output: BlueskyPostResults; error: "" }
   | { success: false; output: null; error: string }
 
-const POST_URI =
-  /^at:\/\/(did:[a-z]+:[A-Za-z0-9._:%-]+)\/app\.bsky\.feed\.post\/([A-Za-z0-9._:~-]{1,512})$/
+const RKEY = "([A-Za-z0-9._:~-]{1,512})"
+const POST_URI = new RegExp(
+  `^at://(did:[a-z]+:[A-Za-z0-9._:%-]+)/app\\.bsky\\.feed\\.post/${RKEY}$`,
+)
+/** A post address whose authority is a DID or a handle, checked against both below. */
+const POST_ADDRESS = new RegExp(`^at://([^/]+)/app\\.bsky\\.feed\\.post/${RKEY}$`)
 const DID = /^did:[a-z]+:[A-Za-z0-9._:%-]+$/
 const HANDLE = /^[A-Za-z0-9.-]{1,253}$/
 const LANG = /^[A-Za-z]{2,3}(-[A-Za-z0-9]{1,8})*$/
@@ -256,6 +282,8 @@ const FeedPage = type({
     },
   }).array(),
 })
+
+const Resolved = type({ did: DID })
 
 const Count = "number.integer >= 0"
 const Posts = type({
@@ -533,7 +561,43 @@ export const findBlueskyPostByLink = async (
   return { success: true, output: null, error: "" }
 }
 
-/** Reads a post's likes, replies, reposts and quotes from the public AppView. Never throws. */
+/** Resolves a lower-cased handle to its DID; answers the DID or why it failed. */
+const resolveHandle = async (
+  transport: PostTransport,
+  appView: string,
+  handle: string,
+): Promise<{ did: string } | { error: string }> => {
+  const query = new URLSearchParams({ handle })
+  const outcome = await readFrom(
+    transport,
+    `${appView}/xrpc/com.atproto.identity.resolveHandle?${query}`,
+  )
+  if (!outcome.ok) return { error: `bluesky handle ${handle} did not resolve: ${outcome.message}` }
+  const parsed = Resolved(outcome.body)
+  if (parsed instanceof type.errors) return { error: `bluesky answer for ${handle} has no did` }
+  return { did: parsed.did }
+}
+
+/** Resolves a handle, such as `name.bsky.social`, to the account's DID. Never throws. */
+export const resolveBlueskyHandle = async (
+  options: ResolveBlueskyHandleOptions,
+): Promise<BlueskyHandleResult> => {
+  const transport = transportOf(options)
+  if (typeof transport === "string") return failure(transport)
+  const appView = httpsOrigin(options.appView ?? BLUESKY_PUBLIC_APPVIEW)
+  if (appView === undefined) return failure("invalid options: appView must be an https origin")
+  if (typeof options.handle !== "string" || !HANDLE.test(options.handle)) {
+    return failure("invalid options: handle must be a handle such as name.bsky.social")
+  }
+  const resolved = await resolveHandle(transport, appView, options.handle.toLowerCase())
+  if ("error" in resolved) return failure(resolved.error)
+  return { success: true, output: resolved.did, error: "" }
+}
+
+/**
+ * Reads a post's likes, replies, reposts and quotes from the public AppView. A handle in the
+ * address is resolved to its DID first. Never throws.
+ */
 export const readBlueskyPostResults = async (
   options: ReadBlueskyPostResultsOptions,
 ): Promise<BlueskyResultsResult> => {
@@ -541,15 +605,24 @@ export const readBlueskyPostResults = async (
   if (typeof transport === "string") return failure(transport)
   const appView = httpsOrigin(options.appView ?? BLUESKY_PUBLIC_APPVIEW)
   if (appView === undefined) return failure("invalid options: appView must be an https origin")
-  if (typeof options.uri !== "string" || !POST_URI.test(options.uri)) {
+  const address = typeof options.uri === "string" ? POST_ADDRESS.exec(options.uri) : null
+  const [, authority = "", rkey = ""] = address ?? []
+  if (!DID.test(authority) && !HANDLE.test(authority)) {
     return failure("invalid options: uri must be an at:// post address")
   }
-  const query = new URLSearchParams({ uris: options.uri })
+  let did = authority
+  if (!DID.test(authority)) {
+    const resolved = await resolveHandle(transport, appView, authority.toLowerCase())
+    if ("error" in resolved) return failure(resolved.error)
+    did = resolved.did
+  }
+  const uri = `at://${did}/app.bsky.feed.post/${rkey}`
+  const query = new URLSearchParams({ uris: uri })
   const outcome = await readFrom(transport, `${appView}/xrpc/app.bsky.feed.getPosts?${query}`)
   if (!outcome.ok) return failure(outcome.message)
   const parsed = Posts(outcome.body)
   if (parsed instanceof type.errors) return failure("bluesky answer is not a list of posts")
-  const post = parsed.posts.find((entry) => entry.uri === options.uri)
+  const post = parsed.posts.find((entry) => entry.uri === uri)
   if (post === undefined) return failure("bluesky post not found; it may have been deleted")
   return {
     success: true,
