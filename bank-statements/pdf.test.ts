@@ -276,12 +276,13 @@ describe("parsePdfStatement", () => {
   })
 
   it("gives up on a long line of numbers that matches no way within a second", () => {
-    const numbers = Array.from({ length: 300 }, (_, index) => String(index + 1))
+    // The longest pattern a profile allows: a date, 31 text-and-amount pairs and an amount.
+    const numbers = Array.from({ length: 20000 }, (_, index) => String(index + 1))
     const page = handPage(["02.01.2026", ...numbers, "end"])
-    const pairs = Array.from({ length: 3 }, () => [{ type: "text" }, { type: "amount" }] as const)
+    const pairs = Array.from({ length: 31 }, () => [{ type: "text" }, { type: "amount" }] as const)
     const profile: StatementProfile = {
       ...base,
-      pdf: { pattern: [{ type: "date" }, ...pairs.flat()] },
+      pdf: { pattern: [{ type: "date" }, ...pairs.flat(), { type: "amount" }] },
     }
     const started = performance.now()
     const parsed = parsePdfStatement([page], profile)

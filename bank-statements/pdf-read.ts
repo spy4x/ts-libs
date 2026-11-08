@@ -359,29 +359,59 @@ function tokenLengths(
 
 /**
  * The cells a pattern fills from `words`, or `null` when the line does not match it whole. A
- * search with backtracking: when a later token fails, an earlier one tries its next length, so
- * `Invoice 2024 paid` stays one description although `2024` reads as an amount. Each failed
- * (token, word) state is remembered, so the work stays below tokens times words squared.
+ * `text` token tries the shortest run first and a date or amount the longest first, and a token
+ * takes the first run after which the rest of the pattern still matches, so `Invoice 2024 paid`
+ * stays one description although `2024` reads as an amount. Whether the rest matches comes from a
+ * table filled from the end of the line, so the work is tokens times words times
+ * {@link MAX_TOKEN_WORDS}, and each date or amount run is tested once.
  */
 function patternCells(
   words: readonly PdfWord[],
   pattern: readonly PdfToken[],
   accepts: TokenTest,
 ): string[] | null {
-  const failed = new Set<number>()
-  const match = (index: number, at: number): string[] | null => {
-    if (index === pattern.length) return at === words.length ? [] : null
-    const state = index * (words.length + 1) + at
-    if (failed.has(state)) return null
-    const token = pattern[index]
-    for (const length of tokenLengths(words, at, token, accepts)) {
-      const rest = match(index + 1, at + length)
-      if (rest) return "literal" in token ? rest : [joined(words, at, at + length), ...rest]
-    }
-    failed.add(state)
-    return null
+  const width = words.length + 1
+  // reaches[index * width + at]: tokens from `index` on match the words from `at` to the end.
+  const reaches = new Uint8Array((pattern.length + 1) * width)
+  reaches[pattern.length * width + words.length] = 1
+  const runs = new Map<string, number[]>()
+  const lengths = (token: PdfToken, at: number): number[] => {
+    if ("literal" in token || token.type === "text") return tokenLengths(words, at, token, accepts)
+    const key = `${token.type} ${at}`
+    let found = runs.get(key)
+    if (!found) runs.set(key, found = tokenLengths(words, at, token, accepts))
+    return found
   }
-  return match(0, 0)
+  const fits = (index: number, at: number, length: number) =>
+    reaches[(index + 1) * width + at + length] === 1
+  for (let index = pattern.length - 1; index >= 0; index--) {
+    const token = pattern[index]
+    let later = false // whether the next token reaches the end from some position after `at`
+    for (let at = words.length; at >= 0; at--) {
+      if (!("literal" in token) && token.type === "text") {
+        if (at < words.length && reaches[(index + 1) * width + at + 1]) later = true
+        reaches[index * width + at] = later ? 1 : 0
+      } else {
+        reaches[index * width + at] = lengths(token, at).some((length) => fits(index, at, length))
+          ? 1
+          : 0
+      }
+    }
+  }
+  if (!reaches[0]) return null
+  const cells: string[] = []
+  let at = 0
+  for (let index = 0; index < pattern.length; index++) {
+    const token = pattern[index]
+    let length = 0
+    if (!("literal" in token) && token.type === "text") {
+      length = 1
+      while (!fits(index, at, length)) length++
+    } else length = lengths(token, at).find((run) => fits(index, at, run)) ?? 0
+    if (!("literal" in token)) cells.push(joined(words, at, at + length))
+    at += length
+  }
+  return cells
 }
 
 const joined = (words: readonly PdfWord[], from: number, to: number) =>
