@@ -61,6 +61,34 @@ describe("maskSample", () => {
     expect(codePoints(masked)).toBe(codePoints(lines[0]))
   })
 
+  it("keeps only the header row's column-name words and masks every other word in it", () => {
+    expect(maskSample(["Datum der Buchung;Anna Kowalska;Betrag"], { headerRow: 0 }))
+      .toEqual(["Datum der Buchung;Xxxx Xxxxxxxx;Betrag"])
+  })
+
+  it("keeps the letters of a real German and a real Russian header row", () => {
+    const german = "Buchungstag;Valutadatum;Auftraggeber/Empfänger;Buchungstext;Verwendungszweck;" +
+      "Betrag;Währung;Kontostand"
+    const russian = "Дата операции;Описание;Сумма;Валюта;Остаток"
+    expect(maskSample([german], { headerRow: 0 })).toEqual([german])
+    expect(maskSample([russian], { headerRow: 0 })).toEqual([russian])
+  })
+
+  it("masks invisible tag characters, format characters, lone surrogates and line separators", () => {
+    const tags = [..."Anna 42"].map((char) => String.fromCodePoint(0xE0000 + char.codePointAt(0)!))
+      .join("")
+    const line = `Saldo${tags};\u00AD\u200D\uFEFF;\uD800;\u2028\u2029`
+    for (const headerRow of [0, undefined]) {
+      const [masked] = maskSample([line], { headerRow })
+      expect(masked).toBe(`${headerRow === 0 ? "Saldo" : "Xxxxx"}xxxxxxx;xxx;x;xx`)
+      expect(codePoints(masked)).toBe(codePoints(line))
+    }
+  })
+
+  it("masks private-use and unassigned code points", () => {
+    expect(maskSample(["\uE000\u{F0000};\u0378\u{10FFFF}"])).toEqual(["xx;xx"])
+  })
+
   it("returns at most maxRows lines, 20 by default", () => {
     const lines = Array.from({ length: 30 }, (_, index) => `line ${index}`)
     expect(maskSample(lines)).toHaveLength(20)
@@ -177,6 +205,30 @@ describe("inferProfile, what the model sees", () => {
   })
 })
 
+describe("inferProfile, a wrong header guess", () => {
+  const rows = "05.01.2026;Coffee;-3,50\n06.01.2026;Rent;-450,00\n"
+  const files = {
+    "a name line in a file without a header": `Anna Kowalska;Main account;Berlin\n${rows}`,
+    "a quoted name with the delimiter in it": `Holder;"Kowalska; Anna";X\n${rows}`,
+    "a name line between the header and the first row":
+      `Datum;Text;Betrag\nVorgemerkt;Anna Kowalska;offen\n${rows}`,
+  }
+  for (const [name, text] of Object.entries(files)) {
+    it(`never sends the model a name from ${name}`, async () => {
+      const port = recordingPort()
+      await inferProfile(encode(text), { currency: "EUR", propose: port.propose })
+      expect(port.calls).toHaveLength(1)
+      expect(port.calls[0].prompt).not.toMatch(/anna|kowalska/i)
+    })
+  }
+
+  it("masks a line above the first row with another cell count, even its column names", async () => {
+    const port = recordingPort()
+    await inferProfile(encode(`Datum;Betrag\n${rows}`), { currency: "EUR", propose: port.propose })
+    expect(sampleOf(port.calls[0].prompt).lines[0]).toBe("Xxxxx;Xxxxxx")
+  })
+})
+
 /** A file no built-in profile reads and whose balance column `guessProfile` cannot name. */
 const UNKNOWN = [
   "Kontoauszug;Anna Kowalska",
@@ -249,6 +301,15 @@ describe("inferProfile, the model's proposal", () => {
       expect(port.calls).toHaveLength(1)
       expect(result.ok ? "verified" : result.error.code).toBe("invalid-reply")
     }
+  })
+
+  it("ignores a currency code the model proposes and applies the account's", async () => {
+    const port = recordingPort({ ...PROPOSAL, currency: { code: "XXX" } })
+    const result = await inferProfile(encode(UNKNOWN), { currency: "EUR", propose: port.propose })
+    if (!result.ok || result.value.source !== "model") {
+      throw new Error(`expected a model profile, got ${JSON.stringify(result)}`)
+    }
+    expect(result.value.profile.currency).toEqual({ code: "EUR" })
   })
 
   it("refuses a proposal whose date column holds no dates as invalid-reply", async () => {
@@ -352,6 +413,16 @@ describe("inferProfile, PDF statements", () => {
     expect(port.calls).toHaveLength(1)
     expect(port.calls[0].prompt).not.toMatch(/Anna|Kowalska/)
     expect(sampleOf(port.calls[0].prompt).lines[0]).toBe(`[[50,90,"Xxxx"],[80,120,"Xxxxxxxx"]]`)
+  })
+
+  it("refuses a pdf pattern of literals only, which fills no column, as invalid-reply", async () => {
+    const port = recordingPort({
+      pdf: { pattern: [{ literal: "Saldo" }] },
+      date: { column: 0 },
+      amount: { column: 0 },
+    })
+    const result = await inferProfile(PDF, { currency: "EUR", propose: port.propose })
+    expect(result.ok ? "verified" : result.error.code).toBe("invalid-reply")
   })
 
   it("never asks the model when a known pdf profile verifies", async () => {

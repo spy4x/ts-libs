@@ -1,8 +1,8 @@
 /**
  * A statement profile proposed by a language model, for a CSV file or PDF statement that no known
- * profile reads. The model sees only a masked sample: every letter becomes `x` or `X` and every
- * digit `9`, except the letters of a CSV file's header row, so no name, amount or account number leaves the
- * host. The model proposes the structure only; the date pattern and number format are detected
+ * profile reads. The model sees only a masked sample: every digit becomes `9` and every letter `x`
+ * or `X`, except the header row's words that are column names from a fixed vocabulary ("Datum",
+ * "Betrag", "Saldo"), so no name, amount or account number leaves the host. The model proposes the structure only; the date pattern and number format are detected
  * here from the real values, and the proposal is accepted only when it reads the whole file
  * without a row error and the file's balances add up.
  *
@@ -53,6 +53,7 @@ import { DATE_PATTERNS, type DatePattern, detectDatePatterns } from "@spy4x/time
 import { detectFormat, readStatement } from "./detect.ts"
 import { parsePdfStatement, type PdfLine, type PdfPage } from "./pdf-read.ts"
 import { csvRecords, foldHeader, type StatementProfile, statementProfile } from "./profile.ts"
+import { isHeaderWord } from "./header-words.ts"
 import { builtInProfiles, guessProfile, matchProfile } from "./profiles.ts"
 import {
   type ParsedStatement,
@@ -90,6 +91,9 @@ export type ProfileProposal =
   & Partial<Pick<StatementProfile, "currency" | "delimiter" | "headerLine" | "pdf">>
   & { date: { column: number } }
 
+/** A currency in a reply: a column, or any code, which is ignored since the model saw it masked. */
+const proposedCurrency = statementProfile.get("currency").or({ code: "string" })
+
 const proposalBase = statementProfile
   .pick(
     "amount",
@@ -101,7 +105,7 @@ const proposalBase = statementProfile
     "originalCurrency",
   )
   .merge({
-    "currency?": statementProfile.get("currency"),
+    "currency?": proposedCurrency,
     date: statementProfile.get("date").pick("column"),
   })
 
@@ -358,6 +362,12 @@ function tryFormats(
   if (formats.length === 0) {
     return err({ code: "invalid-reply", message: "the proposed amount columns hold no numbers" })
   }
+  // The reply passed its own schema, but the whole profile can still be invalid (a PDF pattern of
+  // literals only fills no column), and the readers throw on an invalid profile.
+  const checked = statementProfile(profile)
+  if (checked instanceof type.errors) {
+    return err({ code: "invalid-reply", message: `not a profile: ${checked.summary}` })
+  }
   let first: InferFailure | undefined
   for (const pattern of patterns) {
     for (const format of formats) {
@@ -412,8 +422,8 @@ const sampleStart = (header: number | undefined) => Math.max(0, (header ?? 0) - 
 /** Settings for {@link maskSample}. */
 export interface MaskSampleOptions {
   /**
-   * The 0-based index in `lines` of the header row, whose letters are kept. A header whose cells
-   * read as dates or amounts is masked like a data row.
+   * The 0-based index in `lines` of the header row, whose column-name words keep their letters.
+   * A header with a piece that reads as a date or an amount is masked like a data row.
    */
   headerRow?: number
   /** Most lines returned. Default {@link DEFAULT_SAMPLE_ROWS}, 20. */
@@ -422,10 +432,13 @@ export interface MaskSampleOptions {
 
 /**
  * The first `maxRows` of `lines`, masked so that no value leaves the host: every digit (any
- * Unicode number) becomes `9`, every upper- or title-case letter `X`, every other letter, mark and
- * other symbol (an emoji, a circled letter) `x`. Spaces, punctuation, separators and currency
- * signs stay, and every line keeps its length in code points. The header row keeps its letters,
- * never its digits.
+ * Unicode number) becomes `9`, every upper- or title-case letter `X`, and every other letter, mark,
+ * other symbol (an emoji, a circled letter), format character (invisible tag characters can spell
+ * text), lone surrogate, private-use or unassigned code point, and line or paragraph separator `x`.
+ * Spaces, punctuation, separators, control characters and currency signs stay, and every line
+ * keeps its length in code points. In the header row, a word that is a column name from a fixed
+ * vocabulary ("Datum", "Betrag", "Saldo", "Дата") keeps its letters; every other word, and every
+ * digit, is masked.
  */
 export function maskSample(lines: readonly string[], options: MaskSampleOptions = {}): string[] {
   const { headerRow } = options
@@ -441,21 +454,22 @@ function checkSampleRows(rows = DEFAULT_SAMPLE_ROWS): number {
   return rows
 }
 
-/** What is masked: numbers, letters, marks, other symbols, private-use and unassigned points. */
-const MASKED = /[\p{N}\p{L}\p{M}\p{So}\p{Co}\p{Cn}]/gu
+/**
+ * What is masked: numbers, letters, marks, other symbols, format characters, lone surrogates,
+ * private-use and unassigned code points, and line and paragraph separators.
+ */
+const MASKED = /[\p{N}\p{L}\p{M}\p{So}\p{Cf}\p{Cs}\p{Co}\p{Cn}\p{Zl}\p{Zp}]/gu
 
-function maskText(text: string, keepLetters: boolean): string {
-  return text.replace(
-    MASKED,
-    (char) =>
-      /\p{N}/u.test(char)
-        ? "9"
-        : keepLetters && /[\p{L}\p{M}]/u.test(char)
-        ? char
-        : /[\p{Lu}\p{Lt}]/u.test(char)
-        ? "X"
-        : "x",
-  )
+/** A run of letters and marks, or a run of anything else. */
+const RUNS = /[\p{L}\p{M}]+|[^\p{L}\p{M}]+/gu
+
+/** `text` masked; with `keepHeaderWords`, a word that {@link isHeaderWord} accepts stays. */
+function maskText(text: string, keepHeaderWords: boolean): string {
+  return text.replace(RUNS, (run) =>
+    keepHeaderWords && isHeaderWord(run) ? run : run.replace(
+      MASKED,
+      (char) => /\p{N}/u.test(char) ? "9" : /[\p{Lu}\p{Lt}]/u.test(char) ? "X" : "x",
+    ))
 }
 
 /** A PDF line for the prompt: each word's left and right edge in points, and its masked text. */
@@ -502,7 +516,8 @@ function isDataLine(line: string): boolean {
 /**
  * The index of the header row: the line right above the first transaction, when it holds at least
  * two cells or words and no value, and, with `cellCount`, as many cells as that transaction.
- * `undefined` when there is none, and then every line is masked whole.
+ * `undefined` when there is none, and then every line is masked whole. The guess can be wrong (a
+ * name line between the header and the first row), so only column-name words of it stay.
  */
 function findHeader(
   lines: readonly string[],
@@ -551,8 +566,8 @@ words as [left, right, text], with the edges in points from the left of the page
     : `{"delimiter": ";", "headerLine": 1, "date": {"column": 0}, "payee": 1, "description": 2, "amount": {"debit": 3, "credit": 4}, "balance": 5}`
   return `You read the layout of bank statements and answer with one json object.
 
-${intro} To keep it private, every letter became x or X and every digit 9, except the letters of
-the header row; spaces, separators and quotes are as in the file.
+${intro} To keep it private, every letter became x or X and every digit 9, except the column-name
+words of the header row; spaces, separators and quotes are as in the file.
 
 <sample>
 ${masked.join("\n")}

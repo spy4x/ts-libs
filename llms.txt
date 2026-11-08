@@ -41,7 +41,7 @@ ProfileProposal	type	@spy4x/bank-statements/infer	What the model proposes: the s
 ProfileProposalRequest	interface	@spy4x/bank-statements/infer	What the port is asked: the prompt to send, and the schema the reply's JSON must satisfy.
 ProposeProfile	type	@spy4x/bank-statements/infer	The language model, as a port: resolves to the parsed JSON of the reply, or `null` when there is none.
 inferProfile	function	@spy4x/bank-statements/infer	Find a profile that reads a statement and makes its balances add up.
-maskSample	function	@spy4x/bank-statements/infer	The first `maxRows` of `lines`, masked so that no value leaves the host: every digit (any Unicode number) becomes `9`, every upper- or title-case letter `X`, every other letter, mark and other symbol (an emoji, a circled letter) `x`.
+maskSample	function	@spy4x/bank-statements/infer	The first `maxRows` of `lines`, masked so that no value leaves the host: every digit (any Unicode number) becomes `9`, every upper- or title-case letter `X`, and every other letter, mark, other symbol (an emoji, a circled letter), format character (invisible tag characters can spell text), lone surrogate, private-use or unassigned code point, and line or paragraph separator `x`.
 profilePrompt	function	@spy4x/bank-statements/infer	The prompt that asks a model for a profile's structure from a masked sample: it says how the sample was masked, names each field of the reply, and contains the word "json" and an example reply, as DeepSeek's JSON mode requires.
 DEFAULT_MAX_PAGES	constant	@spy4x/bank-statements/pdf	The default `maxPages`.
 NO_TEXT_LAYER_MESSAGE	constant	@spy4x/bank-statements/pdf	What a `"no-text-layer"` refusal says.
@@ -3237,4 +3237,4 @@ firstIssueMessage	function	@spy4x/validation/validate	First issue message in a v
 isArkErrors	function	@spy4x/validation/validate	Whether a value is an arktype rejection, without relying on `instanceof`.
 toValidationError	function	@spy4x/validation/validate	Build a ValidationError from arktype's issues.
 validate	function	@spy4x/validation/validate	Parse `value` with an arktype schema exactly once.
-# export surface: sha256 f747d74b07a89cf3520a7fadce931aad85085fb70322f1b7802a4475cc0c1ccf
+# export surface: sha256 a0e4cec9243af38f111ab22fbaeab5f2e93cbb346cc1684dc7cbd2b8e9868089

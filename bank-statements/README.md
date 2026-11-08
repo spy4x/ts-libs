@@ -44,10 +44,14 @@ of typed tokens (`date`, `amount`, `text`, a literal), never a regular expressio
 profile can come from an AI reply.
 
 `inferProfile` sends a model only a masked sample: at most 20 lines, every digit turned into `9`
-and every letter into `x` or `X`, with spacing and separators kept. Only the header row keeps its
-letters, and only when none of its cells reads as a date or an amount. Nothing else from the file
-leaves the host. The date pattern and number format are read here from the real values, and a
-proposal is accepted only when it reads every row and the file's balances add up; a file without
-balances is refused as `"unverifiable"`.
+and every letter into `x` or `X`, with spacing and separators kept. Invisible characters that can
+spell text (format and tag characters, lone surrogates, private-use and unassigned code points,
+line and paragraph separators) become `x` too. In the row taken for the header, only words from a
+fixed vocabulary of column names ("Datum", "Betrag", "Saldo", "Дата") keep their letters, and only
+when no piece of the row reads as a date or an amount; a wrong guess of the header row therefore
+shows no name. The date pattern and number format are read here from the real values; a reply
+that is not a valid profile is refused as `"invalid-reply"`, and a proposal is accepted only when
+it reads every row and the file's balances add up; a file without balances is refused as
+`"unverifiable"`.
 
 The test fixtures in `fixtures/` are all synthetic.
