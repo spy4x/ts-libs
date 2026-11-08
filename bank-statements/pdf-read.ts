@@ -327,59 +327,61 @@ function columnCells(
 
 /** Whether `token` accepts the first words of `words`. */
 function startsPattern(words: readonly PdfWord[], token: PdfToken, accepts: TokenTest): boolean {
-  return tokenLength(words, 0, token, accepts) > 0
+  return tokenLengths(words, 0, token, accepts).length > 0
 }
 
 /**
- * How many words from `at` on `token` takes, 0 when it does not match there. A `text` token
- * takes one word here; {@link patternCells} extends it.
+ * How many words from `at` on `token` may take, in the order to try them; empty when it does not
+ * match there. A `text` token tries the shortest run first, so the tokens after it get the
+ * numbers in a description's tail; a date or amount tries the longest run first, so `1 234,56` is
+ * one amount and not `1`.
  */
-function tokenLength(
+function tokenLengths(
   words: readonly PdfWord[],
   at: number,
   token: PdfToken,
   accepts: TokenTest,
-): number {
+): number[] {
   if ("literal" in token) {
     const expected = token.literal.split(" ")
-    return expected.every((word, index) => words[at + index]?.text === word) ? expected.length : 0
+    return expected.every((word, index) => words[at + index]?.text === word)
+      ? [expected.length]
+      : []
   }
-  if (at >= words.length) return 0
-  if (token.type === "text") return 1
-  // The longest run that reads, so `1 234,56` is one amount and not `1`.
-  for (let length = Math.min(MAX_TOKEN_WORDS, words.length - at); length > 0; length--) {
-    if (accepts(token.type, joined(words, at, at + length))) return length
+  const left = words.length - at
+  if (token.type === "text") return Array.from({ length: left }, (_, index) => index + 1)
+  const lengths: number[] = []
+  for (let length = Math.min(MAX_TOKEN_WORDS, left); length > 0; length--) {
+    if (accepts(token.type, joined(words, at, at + length))) lengths.push(length)
   }
-  return 0
+  return lengths
 }
 
 /**
- * The cells a pattern fills from `words`, or `null` when the line does not match it whole. One
- * pass without backtracking: a `text` token takes words until the next token accepts one, so the
- * work is at most words times tokens times {@link MAX_TOKEN_WORDS}.
+ * The cells a pattern fills from `words`, or `null` when the line does not match it whole. A
+ * search with backtracking: when a later token fails, an earlier one tries its next length, so
+ * `Invoice 2024 paid` stays one description although `2024` reads as an amount. Each failed
+ * (token, word) state is remembered, so the work stays below tokens times words squared.
  */
 function patternCells(
   words: readonly PdfWord[],
   pattern: readonly PdfToken[],
   accepts: TokenTest,
 ): string[] | null {
-  const cells: string[] = []
-  let at = 0
-  for (let index = 0; index < pattern.length; index++) {
+  const failed = new Set<number>()
+  const match = (index: number, at: number): string[] | null => {
+    if (index === pattern.length) return at === words.length ? [] : null
+    const state = index * (words.length + 1) + at
+    if (failed.has(state)) return null
     const token = pattern[index]
-    let length = tokenLength(words, at, token, accepts)
-    if (length === 0) return null
-    if (!("literal" in token) && token.type === "text") {
-      const next = pattern[index + 1]
-      while (
-        at + length < words.length &&
-        (next === undefined || tokenLength(words, at + length, next, accepts) === 0)
-      ) length++
+    for (const length of tokenLengths(words, at, token, accepts)) {
+      const rest = match(index + 1, at + length)
+      if (rest) return "literal" in token ? rest : [joined(words, at, at + length), ...rest]
     }
-    if (!("literal" in token)) cells.push(joined(words, at, at + length))
-    at += length
+    failed.add(state)
+    return null
   }
-  return at === words.length ? cells : null
+  return match(0, 0)
 }
 
 const joined = (words: readonly PdfWord[], from: number, to: number) =>

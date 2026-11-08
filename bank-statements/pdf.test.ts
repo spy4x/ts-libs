@@ -87,6 +87,18 @@ const item = (str: string, x: number, y: number) => ({
   width: str.length * 5,
 })
 
+/** One page with one line of `words`, 50 points apart, as `extractPdfLines` would group it. */
+const handPage = (words: string[]): PdfPage => ({
+  page: 1,
+  lines: [{
+    line: 1,
+    page: 1,
+    y: 700,
+    text: words.join(" "),
+    words: words.map((text, index) => ({ text, x: index * 50, width: 40 })),
+  }],
+})
+
 describe("extractPdfLines", () => {
   it("groups the text fixture's words into numbered lines, left to right, with their x", async () => {
     const read = await pages("statement.pdf")
@@ -236,17 +248,7 @@ describe("parsePdfStatement", () => {
   })
 
   it("matches a literal token and an amount written over two words", () => {
-    const words = ["02.01.2026", "Salary", "EUR", "2", "500,00", "3", "500,00"]
-    const page: PdfPage = {
-      page: 1,
-      lines: [{
-        line: 1,
-        page: 1,
-        y: 700,
-        text: words.join(" "),
-        words: words.map((text, index) => ({ text, x: index * 50, width: 40 })),
-      }],
-    }
+    const page = handPage(["02.01.2026", "Salary", "EUR", "2", "500,00", "3", "500,00"])
     const profile: StatementProfile = {
       ...base,
       numberFormat: { decimal: ",", group: " " },
@@ -263,6 +265,31 @@ describe("parsePdfStatement", () => {
     expect(parsePdfStatement([page], profile).rows).toMatchObject([
       { line: 1, amount: 250000, memo: "Salary", balance: 350000 },
     ])
+  })
+
+  it("keeps a number inside the description when the amounts come after it", () => {
+    const page = handPage(["02.01.2026", "Invoice", "2024", "paid", "-5.00", "95.00"])
+    expect(parsePdfStatement([page], byPattern)).toMatchObject({
+      rows: [{ line: 1, memo: "Invoice 2024 paid", amount: -500, balance: 9500 }],
+      rowErrors: [],
+    })
+  })
+
+  it("gives up on a long line of numbers that matches no way within a second", () => {
+    const numbers = Array.from({ length: 300 }, (_, index) => String(index + 1))
+    const page = handPage(["02.01.2026", ...numbers, "end"])
+    const pairs = Array.from({ length: 3 }, () => [{ type: "text" }, { type: "amount" }] as const)
+    const profile: StatementProfile = {
+      ...base,
+      pdf: { pattern: [{ type: "date" }, ...pairs.flat()] },
+    }
+    const started = performance.now()
+    const parsed = parsePdfStatement([page], profile)
+    const took = performance.now() - started
+    expect(parsed.rows).toEqual([])
+    expect(parsed.rowErrors).toHaveLength(1)
+    expect(parsed.rowErrors[0].reason).toContain("does not match the pattern")
+    expect(took).toBeLessThan(1000)
   })
 
   it("throws for a profile without a pdf layout", () => {
