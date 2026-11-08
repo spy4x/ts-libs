@@ -4,6 +4,7 @@ import { describe, it } from "@std/testing/bdd"
 import { type StatementProfile, statementProfile, verifyStatement } from "./mod.ts"
 import { extractPdfLines, NO_TEXT_LAYER_MESSAGE, parsePdfStatement, type PdfPage } from "./pdf.ts"
 import { type OpenPdf, type PdfDocument, readPdfLines } from "./pdf-read.ts"
+import { definePDFJSModule } from "unpdf"
 
 const FIXTURES = new URL("./fixtures/", import.meta.url)
 const bytes = (name: string) => Deno.readFile(new URL(name, FIXTURES))
@@ -56,10 +57,9 @@ function fakeOpener(
   numPages: number,
   items: { str: string; transform: number[]; width: number }[] = [],
 ) {
-  const seen = { options: [] as unknown[], pagesRead: 0, opened: 0, destroyed: 0 }
-  const open: OpenPdf = (_data, options) => {
+  const seen = { pagesRead: 0, opened: 0, destroyed: 0 }
+  const open: OpenPdf = () => {
     seen.opened++
-    seen.options.push(options)
     const document: PdfDocument = {
       numPages,
       getPage: () => {
@@ -139,13 +139,24 @@ describe("extractPdfLines", () => {
   })
 
   it("passes isEvalSupported: false to pdf.js on every load", async () => {
-    const { open, seen } = fakeOpener(1, [item("text", 50, 700)])
-    await readPdfLines(new Uint8Array(8), {}, open)
-    await readPdfLines(new Uint8Array(8), { maxPages: 1 }, open)
-    expect(seen.options).toHaveLength(2)
-    for (const options of seen.options) {
-      expect(options).toMatchObject({ isEvalSupported: false })
+    const seen: unknown[] = []
+    definePDFJSModule(() =>
+      Promise.resolve({
+        getDocument: (params: unknown) => {
+          seen.push(params)
+          return { promise: Promise.reject(new Error("fake pdf.js opens nothing")) }
+        },
+      })
+    )
+    try {
+      await extractPdfLines(new Uint8Array(8))
+      await extractPdfLines(new Uint8Array(8), { maxPages: 1, maxBytes: 100 })
+    } finally {
+      // No loader: unpdf goes back to its bundled pdf.js.
+      definePDFJSModule(undefined as unknown as () => Promise<unknown>)
     }
+    expect(seen).toHaveLength(2)
+    for (const options of seen) expect(options).toMatchObject({ isEvalSupported: false })
   })
 
   it("refuses a file over maxBytes before pdf.js opens it", async () => {
