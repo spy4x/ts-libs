@@ -538,6 +538,7 @@ CoinGeckoPlan	type	@spy4x/integrations/exchange-rates	CoinGecko's plans differ i
 ExchangeRateClientOptions	interface	@spy4x/integrations/exchange-rates	Options every client takes.
 ExchangeRateSource	interface	@spy4x/integrations/exchange-rates	A provider of daily exchange rates.
 FRANKFURTER_URL	constant	@spy4x/integrations/exchange-rates	Frankfurter's public instance.
+FrankfurterSource	interface	@spy4x/integrations/exchange-rates	Frankfurter's rates: a day, or every day of a range.
 Rates	interface	@spy4x/integrations/exchange-rates	What a source found for one day.
 RatesError	interface	@spy4x/integrations/exchange-rates	A failed call: which source, and why.
 RatesErrorCode	type	@spy4x/integrations/exchange-rates	Why a call failed.
@@ -3237,4 +3238,4 @@ firstIssueMessage	function	@spy4x/validation/validate	First issue message in a v
 isArkErrors	function	@spy4x/validation/validate	Whether a value is an arktype rejection, without relying on `instanceof`.
 toValidationError	function	@spy4x/validation/validate	Build a ValidationError from arktype's issues.
 validate	function	@spy4x/validation/validate	Parse `value` with an arktype schema exactly once.
-# export surface: sha256 a0e4cec9243af38f111ab22fbaeab5f2e93cbb346cc1684dc7cbd2b8e9868089
+# export surface: sha256 c85c582f887808feb8f20d7999ef4c8abe0b6ba23109eef71475d80afb161d77
