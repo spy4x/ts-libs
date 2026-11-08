@@ -8,6 +8,8 @@ BalanceFailure	type	@spy4x/bank-statements	One reason a statement did not verify
 DEFAULT_MAX_BYTES	constant	@spy4x/bank-statements	The default `maxBytes`: 10 MiB.
 DEFAULT_MAX_ROWS	constant	@spy4x/bank-statements	The default `maxRows`.
 ParsedStatement	interface	@spy4x/bank-statements	What a parser read from one file.
+PdfColumnRange	interface	@spy4x/bank-statements	The x range of one column on a PDF page, in PDF points from the left edge.
+PdfToken	type	@spy4x/bank-statements	One step of a PDF line pattern.
 ProfileMatch	interface	@spy4x/bank-statements	A profile and how well a file fits it, from 0 (not at all) to 1 (every header name).
 RowError	interface	@spy4x/bank-statements	A row the parser could not read, and why.
 StatementBalance	interface	@spy4x/bank-statements	A balance the file states, with the line it is written on.
@@ -15,6 +17,7 @@ StatementError	class	@spy4x/bank-statements	Thrown when a whole file is refused.
 StatementErrorCode	type	@spy4x/bank-statements	Why a whole file was refused.
 StatementFormat	type	@spy4x/bank-statements	A file format detectFormat can name.
 StatementLimits	interface	@spy4x/bank-statements	Size limits for a file from a stranger.
+StatementPdfLayout	type	@spy4x/bank-statements	How a PDF statement's lines become the columns the rest of the profile names.
 StatementProfile	interface	@spy4x/bank-statements	One bank's CSV export format.
 StatementRow	interface	@spy4x/bank-statements	One transaction read from a statement.
 Verification	type	@spy4x/bank-statements	What verifyStatement found.
@@ -31,6 +34,15 @@ parseWithProfile	function	@spy4x/bank-statements	Read CSV text with a profile.
 readStatement	function	@spy4x/bank-statements	Read a statement file of any supported format.
 statementProfile	constant	@spy4x/bank-statements	The arktype schema of StatementProfile, for a profile read from storage or an AI.
 verifyStatement	function	@spy4x/bank-statements	Check a statement against its own balances.
+DEFAULT_MAX_PAGES	constant	@spy4x/bank-statements/pdf	The default `maxPages`.
+NO_TEXT_LAYER_MESSAGE	constant	@spy4x/bank-statements/pdf	What a `"no-text-layer"` refusal says.
+PdfLine	interface	@spy4x/bank-statements/pdf	The words of one PDF line, left to right.
+PdfPage	interface	@spy4x/bank-statements/pdf	One page's lines, top to bottom.
+PdfRefusal	interface	@spy4x/bank-statements/pdf	A refused file, with a message a person can act on.
+PdfRefusalCode	type	@spy4x/bank-statements/pdf	Why extractPdfLines refused a file.
+PdfWord	interface	@spy4x/bank-statements/pdf	A word on a PDF line.
+extractPdfLines	function	@spy4x/bank-statements/pdf	The lines of every page of a PDF, top to bottom, each line's words left to right with their x.
+parsePdfStatement	function	@spy4x/bank-statements/pdf	Read the lines of a PDF statement with a profile that has a `pdf` layout.
 BillingError	interface	@spy4x/billing	A failed request, safe to log: it never carries the secret key.
 BillingErrorCode	type	@spy4x/billing	Why a request to the provider failed.
 BillingEvent	type	@spy4x/billing	A verified webhook delivery, in provider-neutral terms.
@@ -3216,4 +3228,4 @@ firstIssueMessage	function	@spy4x/validation/validate	First issue message in a v
 isArkErrors	function	@spy4x/validation/validate	Whether a value is an arktype rejection, without relying on `instanceof`.
 toValidationError	function	@spy4x/validation/validate	Build a ValidationError from arktype's issues.
 validate	function	@spy4x/validation/validate	Parse `value` with an arktype schema exactly once.
-# export surface: sha256 d35a2c28e560de9c2b86f07521964b411a7d47d516aad069d647ded072fc864e
+# export surface: sha256 94e9f77d0f0b6390744bda03dcfdca33f40d6580e234a12e1de572b5b200937d

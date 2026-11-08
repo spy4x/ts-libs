@@ -1,6 +1,6 @@
 /**
- * A statement profile: one bank's CSV format, described as data so a household's own mapping, a
- * built-in bank and an AI proposal all go through the same tested parser.
+ * A statement profile: one bank's CSV or PDF format, described as data so a household's own
+ * mapping, a built-in bank and an AI proposal all go through the same tested parser.
  *
  * @module
  */
@@ -36,9 +36,41 @@ import {
 /** A 0-based column index. */
 type Column = number
 
+/** The x range of one column on a PDF page, in PDF points from the left edge. */
+export interface PdfColumnRange {
+  /** Where the column starts. A word belongs to the column its left edge falls in. */
+  from: number
+  /** Where the column ends, exclusive. */
+  to: number
+}
+
+/**
+ * One step of a PDF line pattern. Typed tokens instead of a regular expression, because a profile
+ * can come from an AI reply and a crafted expression could hang the server.
+ *
+ * - `{ type: "date" }`: one to three words that read with the profile's date pattern.
+ * - `{ type: "amount" }`: one to three words that read as an amount in the profile's format.
+ * - `{ type: "text" }`: one or more words, up to the first word the next token accepts.
+ * - `{ literal: "EUR" }`: these words exactly, which fill no column.
+ */
+export type PdfToken =
+  | { type: "date" | "amount" | "text" }
+  | { literal: string }
+
+/**
+ * How a PDF statement's lines become the columns the rest of the profile names.
+ *
+ * - `columns`: `columns[i]` is the x range of column `i`.
+ * - `pattern`: each token but a literal fills the next column, in order.
+ */
+export type StatementPdfLayout =
+  | { columns: PdfColumnRange[] }
+  | { pattern: PdfToken[] }
+
 /**
  * One bank's CSV export format. Columns are 0-based indexes into a row, so a file with two columns
- * of the same name stays unambiguous.
+ * of the same name stays unambiguous. A profile with a `pdf` layout reads the bank's PDF
+ * statements too: the layout turns each PDF line into the same columns.
  */
 export interface StatementProfile {
   id: string
@@ -73,9 +105,32 @@ export interface StatementProfile {
     columns: number
     delimiter: CsvDelimiter
   }
+  /** How the bank's PDF statement lays out its rows, read by `parsePdfStatement`. */
+  pdf?: StatementPdfLayout
 }
 
 const column = "0 <= number.integer < 1000"
+
+/** Most columns or tokens a PDF layout may have, so a profile cannot drive unbounded work. */
+const MAX_PDF_LAYOUT = 64
+
+/** Words joined by single spaces, at most 100 characters. Linear: a space ends every `\S+`. */
+const literalWords = type("string <= 100").and(/^\S+( \S+)*$/)
+
+const pdfToken = type({ "+": "reject", type: "'date' | 'amount' | 'text'" })
+  .or({ "+": "reject", literal: literalWords })
+
+const pdfLayout = type({
+  "+": "reject",
+  columns: type({ "+": "reject", from: "number >= 0", to: "number >= 0" })
+    .narrow((range, ctx) => range.from < range.to || ctx.mustBe("a range whose from is below to"))
+    .array()
+    .moreThanLength(0)
+    .atMostLength(MAX_PDF_LAYOUT),
+}).or({
+  "+": "reject",
+  pattern: pdfToken.array().moreThanLength(0).atMostLength(MAX_PDF_LAYOUT),
+})
 
 /** The arktype schema of {@link StatementProfile}, for a profile read from storage or an AI. */
 export const statementProfile: Type<StatementProfile> = type({
@@ -108,6 +163,7 @@ export const statementProfile: Type<StatementProfile> = type({
     columns: "number.integer >= 1",
     delimiter: type.enumerated(...CSV_DELIMITERS),
   },
+  "pdf?": pdfLayout,
 }) as Type<StatementProfile>
 
 /** A header name as profiles compare it: Unicode-normalised, trimmed, lower case, one space. */
@@ -153,8 +209,8 @@ export function parseWithProfile(
   return { format: "csv", rows, rowErrors }
 }
 
-/** One row read with `profile`, or the reason it does not read. */
-function readRow(
+/** One row read with `profile` from its cells, or the reason it does not read. */
+export function readRow(
   fields: string[],
   line: number,
   profile: StatementProfile,

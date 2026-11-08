@@ -187,7 +187,12 @@
 
     // WebSocket server for `platform/server/serve` on Node (#833): Node has none built in. Loaded
     // only on Node, and a literal specifier so a `deno bundle` of the app carries it.
-    "ws": "npm:ws@8.22.1"
+    "ws": "npm:ws@8.22.1",
+
+    // PDF text with positions for `bank-statements/pdf` (#820): a serverless build of Mozilla's
+    // pdf.js with the worker inlined, no dependencies of its own. Only the text layer is read;
+    // every load passes `isEvalSupported: false`.
+    "unpdf": "npm:unpdf@2.1.0"
   },
   "compilerOptions": {
     // An explicit "lib" replaces Deno's default lib set, so "deno.ns" has to be

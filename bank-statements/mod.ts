@@ -4,7 +4,9 @@
  *
  * Standard formats need nothing else: OFX and QFX ({@link parseOfx}), QIF ({@link parseQif}),
  * CAMT.053 ({@link parseCamt053}) and MT940 ({@link parseMt940}). A bank's own CSV is read through
- * a {@link StatementProfile}, which describes its format as data ({@link parseWithProfile}).
+ * a {@link StatementProfile}, which describes its format as data ({@link parseWithProfile}). A
+ * PDF statement is read by the `@spy4x/bank-statements/pdf` entry, through a profile's `pdf`
+ * layout; it is a separate entry so that pdf.js stays out of apps that do not read PDF.
  * {@link readStatement} takes the uploaded bytes, checks the size limits, tells the format by
  * content ({@link detectFormat}) and calls the right parser. {@link verifyStatement} then checks
  * the result, and a failure names the lines that do not add up.
@@ -38,7 +40,15 @@ export { parseCamt053 } from "./camt053.ts"
 export { detectFormat, readStatement, type ReadStatementOptions } from "./detect.ts"
 export { parseMt940 } from "./mt940.ts"
 export { parseOfx } from "./ofx.ts"
-export { foldHeader, parseWithProfile, type StatementProfile, statementProfile } from "./profile.ts"
+export {
+  foldHeader,
+  parseWithProfile,
+  type PdfColumnRange,
+  type PdfToken,
+  type StatementPdfLayout,
+  type StatementProfile,
+  statementProfile,
+} from "./profile.ts"
 export { builtInProfiles, guessProfile, matchProfile, type ProfileMatch } from "./profiles.ts"
 export { parseQif, type ParseQifOptions } from "./qif.ts"
 export {
