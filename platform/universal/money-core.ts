@@ -74,6 +74,12 @@ export interface MoneyOptions {
    * {@link formatMoneyParts}.
    */
   signDisplay?: `auto` | `exceptZero`
+  /**
+   * Whether a whole amount drops its zero fraction: `"stripIfInteger"` prints `"$4"` for `400`
+   * `USD` in `en` and still `"$4.50"` for `450`, for a price on a page. `"auto"`, the default, always
+   * prints every decimal. Read by {@link formatMoney} and {@link formatMoneyParts}.
+   */
+  trailingZeroDisplay?: `auto` | `stripIfInteger`
 }
 
 function checkedDecimals(decimals: number): number {
@@ -186,8 +192,8 @@ export function formatMoneyParts(
 ): Intl.NumberFormatPart[] {
   const decimals = currencyDecimals(currency, locale, options)
   const digits = moneyDecimalString(amount, decimals) as unknown as number
-  const { signDisplay } = options
-  const formatter = moneyFormatter(currency, locale, decimals, signDisplay)
+  const { signDisplay, trailingZeroDisplay } = options
+  const formatter = moneyFormatter(currency, locale, decimals, signDisplay, trailingZeroDisplay)
   if (formatter) return formatter.formatToParts(digits)
   // `Intl` rejects the code (`USDT`). Format with the placeholder code `XXX`, so the locale still
   // decides where the currency goes, then print the caller's code in its place.
@@ -198,6 +204,7 @@ export function formatMoneyParts(
     minimumFractionDigits: decimals,
     maximumFractionDigits: decimals,
     signDisplay,
+    trailingZeroDisplay,
   })
   return placeholder.formatToParts(digits).map((part) =>
     part.type === "currency" ? { type: part.type, value: currency } : part
@@ -210,6 +217,7 @@ function moneyFormatter(
   locale: string,
   decimals: number,
   signDisplay: MoneyOptions[`signDisplay`],
+  trailingZeroDisplay: MoneyOptions[`trailingZeroDisplay`],
 ): Intl.NumberFormat | undefined {
   try {
     return new Intl.NumberFormat(locale, {
@@ -218,6 +226,7 @@ function moneyFormatter(
       minimumFractionDigits: decimals,
       maximumFractionDigits: decimals,
       signDisplay,
+      trailingZeroDisplay,
     })
   } catch {
     return undefined
