@@ -166,6 +166,31 @@ describe("readingMinutes", () => {
     expect(readingMinutes("word ".repeat(1000), 100)).toBe(10)
   })
 
+  it("counts Japanese by its characters, 650 for 230 words", () => {
+    expect(readingMinutes("あ".repeat(1950))).toBe(3)
+    // 20 characters, the full stop included: 2000 characters, not 100 words
+    expect(readingMinutes("日本語の文章は単語の間に空白を入れない。".repeat(100))).toBe(3)
+  })
+
+  it("counts Chinese by its characters, 450 for 230 words", () => {
+    expect(readingMinutes("字".repeat(1350))).toBe(3)
+    // 15 characters, the full stop included: 1500 characters, not 100 words
+    expect(readingMinutes("中文的句子在词语之间不加空格。".repeat(100))).toBe(3)
+  })
+
+  it("adds the words around Chinese or Japanese characters", () => {
+    expect(readingMinutes(`${"Deno ".repeat(230)}${"あ".repeat(650)}`)).toBe(2)
+    expect(readingMinutes(`${"Deno ".repeat(230)}${"字".repeat(450)}`)).toBe(2)
+  })
+
+  it("counts Korean by its words, which are spaced", () => {
+    expect(readingMinutes("안녕하세요 세계 ".repeat(345))).toBe(3)
+  })
+
+  it("scales the character rates with the reading speed", () => {
+    expect(readingMinutes("あ".repeat(6500), 100)).toBe(23)
+  })
+
   it("refuses a speed that is not a positive number", () => {
     expect(() => readingMinutes("x", 0)).toThrow("wordsPerMinute must be a positive number")
     expect(() => readingMinutes("x", Number.NaN)).toThrow(
