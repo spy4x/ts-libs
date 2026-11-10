@@ -191,4 +191,8 @@ describe("cyrillicToLatin", () => {
   it("passes Latin letters and digits through unchanged", () => {
     expect(cyrillicToLatin("gosuslugi 2024")).toBe("gosuslugi 2024")
   })
+
+  it("passes unfolded й and ё through unchanged", () => {
+    expect(cyrillicToLatin("йод ёж")).toBe("йod ёzh")
+  })
 })

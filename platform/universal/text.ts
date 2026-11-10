@@ -5,10 +5,10 @@
  * (`levenshtein`, `similarity`), a forgiving ranked search over labels and aliases that allows
  * any word order, prefixes, one typo, the wrong keyboard layout and Cyrillic or Latin spelling
  * (`searchEntries`, `matchEntry`), its two building blocks on their own, the wrong-layout swap
- * (`swapLayout`) and Cyrillic spelled in Latin letters (`cyrillicToLatin`), a UTF-8 byte-length count (`utf8ByteLength`), a name's
- * initials in any script (`initials`), a check for control and invisible characters in typed
- * text (`hasUnsafeTextCharacters`), and a check for the characters no database text column can
- * store (`hasUnstorableTextCharacters`).
+ * (`swapLayout`) and Cyrillic spelled in Latin letters (`cyrillicToLatin`), a UTF-8 byte-length
+ * count (`utf8ByteLength`), a name's initials in any script (`initials`), a check for control and
+ * invisible characters in typed text (`hasUnsafeTextCharacters`), and a check for the characters
+ * no database text column can store (`hasUnstorableTextCharacters`).
  *
  * @module
  */
@@ -586,7 +586,7 @@ const CYRILLIC_LETTER = /[а-яґєі]/g
 export function cyrillicToLatin(value: string): string {
   return value.replace(
     CYRILLIC_LETTER,
-    (letter) => LATIN_SPELLINGS[CYRILLIC_LETTERS.indexOf(letter)],
+    (letter) => LATIN_SPELLINGS[CYRILLIC_LETTERS.indexOf(letter)] ?? letter,
   )
 }
 
