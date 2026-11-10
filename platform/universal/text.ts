@@ -4,10 +4,11 @@
  * kebab-case converter (`convertToKebabCase`), edit distance and a normalised similarity score
  * (`levenshtein`, `similarity`), a forgiving ranked search over labels and aliases that allows
  * any word order, prefixes, one typo, the wrong keyboard layout and Cyrillic or Latin spelling
- * (`searchEntries`, `matchEntry`), a UTF-8 byte-length count (`utf8ByteLength`), a name's
- * initials in any script (`initials`), a check for control and invisible characters in typed
- * text (`hasUnsafeTextCharacters`), and a check for the characters no database text column can
- * store (`hasUnstorableTextCharacters`).
+ * (`searchEntries`, `matchEntry`), its two building blocks on their own, the wrong-layout swap
+ * (`swapLayout`) and Cyrillic spelled in Latin letters (`cyrillicToLatin`), a UTF-8 byte-length
+ * count (`utf8ByteLength`), a name's initials in any script (`initials`), a check for control and
+ * invisible characters in typed text (`hasUnsafeTextCharacters`), and a check for the characters
+ * no database text column can store (`hasUnstorableTextCharacters`).
  *
  * @module
  */
@@ -539,8 +540,18 @@ const LATIN_KEYS = "qwertyuiop[]asdfghjkl;'zxcvbnm,.`"
 const CYRILLIC_KEYS = "йцукенгшщзхъфывапролджэячсмитьбюё"
 let layoutSwap: Map<string, string> | undefined
 
-/** The text a person meant when they typed `value` in the other keyboard layout. */
-function swapLayout(value: string): string {
+/**
+ * The text a person meant when they typed `value` in the other keyboard layout, QWERTY and
+ * ЙЦУКЕН both ways. Each key's character becomes the character on the same key in the other
+ * layout; characters on no swapped key stay. The result is lower case.
+ *
+ * @example
+ * ```ts
+ * swapLayout("ujceckeub") // "госуслуги"
+ * swapLayout("госуслуги") // "ujceckeub"
+ * ```
+ */
+export function swapLayout(value: string): string {
   if (!layoutSwap) {
     layoutSwap = new Map()
     for (let i = 0; i < LATIN_KEYS.length; i++) {
@@ -560,6 +571,25 @@ const LATIN_SPELLINGS =
     .replaceAll("_", "").split(" ")
 const CYRILLIC_LETTER = /[а-яґєі]/g
 
+/**
+ * Folded text with each Cyrillic letter spelled in Latin letters: `ж` becomes `zh`, `щ` becomes
+ * `shch`, and `ь` and `ъ` disappear. Everything else stays as it is.
+ *
+ * It expects text that {@link fold} has already folded: lower case, with `й` and `ё` turned into
+ * `и` and `е`. Capital and unfolded letters pass through unchanged.
+ *
+ * @example
+ * ```ts
+ * cyrillicToLatin(fold("ГосУслуги")) // "gosuslugi"
+ * ```
+ */
+export function cyrillicToLatin(value: string): string {
+  return value.replace(
+    CYRILLIC_LETTER,
+    (letter) => LATIN_SPELLINGS[CYRILLIC_LETTERS.indexOf(letter)] ?? letter,
+  )
+}
+
 /** A query or a name, folded and split into words. */
 interface Prepared {
   words: string[]
@@ -578,9 +608,7 @@ function prepare(folded: string, maxWords = Infinity): Prepared {
 function latinOf(prepared: Prepared): Prepared | undefined {
   if (!/[а-яґєі]/.test(prepared.compact)) return undefined
   // `ь` and `ъ` have no Latin spelling, so a word of only those letters disappears.
-  const words = prepared.words.map((word) =>
-    word.replace(CYRILLIC_LETTER, (letter) => LATIN_SPELLINGS[CYRILLIC_LETTERS.indexOf(letter)])
-  ).filter(Boolean)
+  const words = prepared.words.map(cyrillicToLatin).filter(Boolean)
   return { words, compact: words.join("") }
 }
 
