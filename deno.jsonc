@@ -186,6 +186,10 @@
     "marked": "npm:marked@18.1.1",
 
     // WebSocket server for `platform/server/serve` on Node (#833): Node has none built in. Loaded
+    // Full-text index of `@spy4x/search` (#731): the smallest library that indexes body text, with
+    // prefix, fuzzy and field-boosted search and a serialisable index. No dependencies.
+    "minisearch": "npm:minisearch@7.2.0",
+
     // only on Node, and a literal specifier so a `deno bundle` of the app carries it.
     "ws": "npm:ws@8.22.1",
 
