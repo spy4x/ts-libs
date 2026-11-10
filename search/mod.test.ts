@@ -43,6 +43,30 @@ describe("search finds the cases of the issue's spike", () => {
   }
 })
 
+describe("search folds every spelling into one, so the first pass finds it", () => {
+  const words = createIndex([{ label: "Хабаровск" }, { label: "Йога" }, { label: "Café" }])
+  /** The labels found as typed; a typo or layout pass answering would fail the test. */
+  const asTyped = (query: string) => {
+    const results = words.search(query)
+    expect(results.correction).toBeUndefined()
+    return results.hits.map((hit) => hit.entry.label)
+  }
+
+  it("reads kh as h, so Khabarovsk and Habarovsk both find Хабаровск", () => {
+    expect(asTyped("khabarovsk")).toEqual(["Хабаровск"])
+    expect(asTyped("habarovsk")).toEqual(["Хабаровск"])
+  })
+
+  it("reads y and j as i, so yoga and joga find Йога", () => {
+    expect(asTyped("yoga")).toEqual(["Йога"])
+    expect(asTyped("joga")).toEqual(["Йога"])
+  })
+
+  it("drops accents, so cafe finds Café", () => {
+    expect(asTyped("cafe")).toEqual(["Café"])
+  })
+})
+
 describe("search passes", () => {
   it("every word of the query must match, each as a word prefix", () => {
     const rooms = createIndex([{ label: "Dark theme" }, { label: "Dark room" }, { label: "Room" }])
