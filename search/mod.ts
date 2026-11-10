@@ -215,19 +215,18 @@ class Index<E extends SearchEntry> implements SearchIndex<E> {
       .map((result) => {
         const entry = this.entries[result.id]
         const terms = new Set(result.terms)
-        const fields = new Set(Object.values(result.match).flat())
         const hit: SearchHit<E> = {
           entry,
           score: result.score,
           labelParts: markWords(entry.label, terms),
           detailParts: entry.detail ? markWords(entry.detail, terms) : [],
         }
-        if (fields.has("text") && entry.text) hit.snippet = snippetOf(entry.text, terms)
-        if (fields.has("aliases")) {
-          hit.alias = entry.aliases?.find((alias) =>
-            wordsOf(alias).some((word) => terms.has(foldWord(word)))
-          )
-        }
+        const snippet = entry.text && snippetOf(entry.text, terms)
+        if (snippet) hit.snippet = snippet
+        const alias = entry.aliases?.find((alias) =>
+          wordsOf(alias).some((word) => terms.has(foldWord(word)))
+        )
+        if (alias) hit.alias = alias
         return hit
       })
   }
