@@ -1,7 +1,14 @@
 import { describe, it } from "@std/testing/bdd"
 import { expect } from "@std/expect"
 
-import { matchEntry, searchEntries, type SearchEntry } from "./text.ts"
+import {
+  cyrillicToLatin,
+  fold,
+  matchEntry,
+  searchEntries,
+  type SearchEntry,
+  swapLayout,
+} from "./text.ts"
 
 const entries: SearchEntry[] = [
   { label: "Combobox" },
@@ -155,5 +162,33 @@ describe("searchEntries", () => {
 
   it("returns nothing for an unrelated query", () => {
     expect(searchEntries("xylophone", entries)).toEqual([])
+  })
+})
+
+describe("swapLayout", () => {
+  it("reads QWERTY keys as the ЙЦУКЕН text meant", () => {
+    expect(swapLayout("ujceckeub")).toBe("госуслуги")
+  })
+
+  it("reads ЙЦУКЕН keys as the QWERTY text meant", () => {
+    expect(swapLayout("госуслуги")).toBe("ujceckeub")
+  })
+
+  it("leaves digits and spaces on no swapped key as they are", () => {
+    expect(swapLayout("2 ujceckeub 24")).toBe("2 госуслуги 24")
+  })
+})
+
+describe("cyrillicToLatin", () => {
+  it("spells folded Cyrillic in Latin letters", () => {
+    expect(cyrillicToLatin(fold("ГосУслуги"))).toBe("gosuslugi")
+  })
+
+  it("spells one letter as several and drops the soft and hard signs", () => {
+    expect(cyrillicToLatin("щука жизнь объезд")).toBe("shchuka zhizn obezd")
+  })
+
+  it("passes Latin letters and digits through unchanged", () => {
+    expect(cyrillicToLatin("gosuslugi 2024")).toBe("gosuslugi 2024")
   })
 })
