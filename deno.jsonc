@@ -17,6 +17,7 @@
     "./net",
     "./platform",
     "./realtime",
+    "./search",
     "./server",
     "./tasks",
     "./time",
@@ -184,6 +185,10 @@
     // solved, so the parser stays. What reaches the page is decided by our own renderer overrides,
     // which escape raw HTML and allow only safe link and image addresses.
     "marked": "npm:marked@18.1.1",
+
+    // Full-text index of `@spy4x/search` (#731): the smallest library that indexes body text, with
+    // prefix, fuzzy and field-boosted search and a serialisable index. No dependencies.
+    "minisearch": "npm:minisearch@7.2.0",
 
     // WebSocket server for `platform/server/serve` on Node (#833): Node has none built in. Loaded
     // only on Node, and a literal specifier so a `deno bundle` of the app carries it.

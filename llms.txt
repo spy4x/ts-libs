@@ -2190,6 +2190,15 @@ NativeSocketLike	interface	@spy4x/realtime/web-socket	The subset of the platform
 adaptWebSocket	function	@spy4x/realtime/web-socket	Wraps a platform `WebSocket` (or anything shaped like one) so it satisfies ManagedSocket.
 createWebSocketFactory	function	@spy4x/realtime/web-socket	SocketFactory over the platform `WebSocket` constructor.
 mapReadyState	function	@spy4x/realtime/web-socket	Maps one native `readyState` value to this package's SocketState.
+SearchEntry	interface	@spy4x/search	One thing a person can find: a page, a section, a setting, an action.
+SearchHit	interface	@spy4x/search	One entry the query found, with its text ready to draw.
+SearchIndex	interface	@spy4x/search	A built or loaded index.
+SearchIndexJSON	interface	@spy4x/search	The plain object SearchIndex.toJSON returns and loadIndex reads.
+SearchOptions	interface	@spy4x/search	Options of SearchIndex.search.
+SearchResults	interface	@spy4x/search	What SearchIndex.search returns.
+TextPart	interface	@spy4x/search	A run of text, marked when it is a word the query matched.
+createIndex	function	@spy4x/search	Builds an index over `entries`.
+loadIndex	function	@spy4x/search	Loads an index that createIndex built, from its JSON text or the parsed object.
 AUTH_STORE_METHODS	constant	@spy4x/server/auth	Deprecated: No app needs it: the `AuthStore` interface is the list, and TypeScript checks a store against it. The names of the required methods of AuthStore, sorted.
 AttemptChallengeInput	interface	@spy4x/server/auth	Input of AuthStore.attemptChallenge.
 AuthConflictError	class	@spy4x/server/auth	Thrown by the store when a write would break a uniqueness rule.
@@ -3249,4 +3258,4 @@ firstIssueMessage	function	@spy4x/validation/validate	First issue message in a v
 isArkErrors	function	@spy4x/validation/validate	Whether a value is an arktype rejection, without relying on `instanceof`.
 toValidationError	function	@spy4x/validation/validate	Build a ValidationError from arktype's issues.
 validate	function	@spy4x/validation/validate	Parse `value` with an arktype schema exactly once.
-# export surface: sha256 445d0fbfd24a3ce499ac6ed624d471c164412a63222f5100771e9ea2ac9ac1d0
+# export surface: sha256 9580476e3595926882f577c2b739f0c2cbb94b547cd3713f648a31be13b5ad55

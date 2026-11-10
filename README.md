@@ -62,6 +62,7 @@ Deno.serve(async (request) => {
 | [`@spy4x/caldav`](https://jsr.io/@spy4x/caldav)                   | CalDAV client, sync engine and write transport, WebDAV multistatus reader, URL rules   | shared                 |
 | [`@spy4x/tasks`](https://jsr.io/@spy4x/tasks)                     | the to-do model of the CalDAV task apps: task, list views, quick-add, reminder runner  | shared                 |
 | [`@spy4x/bank-statements`](https://jsr.io/@spy4x/bank-statements) | bank statements: OFX, QIF, CAMT.053, MT940, CSV and PDF profiles, balance checks       | shared                 |
+| [`@spy4x/search`](https://jsr.io/@spy4x/search)                   | forgiving full-text search: aliases, typos, wrong keyboard layout, prebuilt index      | shared                 |
 
 Each package's README, shown on its JSR page, has the install line, entry points and examples.
 

@@ -34,6 +34,10 @@
       "description": "Hint-only WebSocket transport: connection registry, heartbeat, reconnect, and cursor-based sync.",
       "runtimeCompat": { "deno": true }
     },
+    "search": {
+      "description": "Forgiving full-text search on MiniSearch: aliases, typos, wrong keyboard layout, Cyrillic in Latin letters, and a prebuilt index.",
+      "runtimeCompat": { "deno": true, "browser": true }
+    },
     "server": {
       "description": "Deno-server primitives for a small SaaS backend: sign-in, Postgres, S3-compatible storage, Redis, outbox, request logging.",
       "runtimeCompat": { "deno": true }
