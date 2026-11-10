@@ -964,6 +964,7 @@ commandOk	function	@spy4x/platform	Build the success arm of a CommandEnvelope.
 connectionError	function	@spy4x/platform	Wrap a message the caller already has into a ConnectionError.
 convertToKebabCase	function	@spy4x/platform	Convert a free-form identifier to kebab-case.
 createErrorReporter	function	@spy4x/platform	Creates the reporter.
+cyrillicToLatin	function	@spy4x/platform	Folded text with each Cyrillic letter spelled in Latin letters: `ж` becomes `zh`, `щ` becomes `shch`, and `ь` and `ъ` disappear.
 debounce	function	@spy4x/platform	Wrap `fn` in a trailing-edge debounce.
 err	function	@spy4x/platform	Wrap a failure.
 faqPageJsonLd	function	@spy4x/platform	The `FAQPage` node for the questions a page shows, in the order it shows them.
@@ -1017,6 +1018,7 @@ sleep	function	@spy4x/platform	Wait `ms` milliseconds.
 slugify	function	@spy4x/platform	A URL- and `id`-safe slug of a title or heading, in any script.
 sortRows	function	@spy4x/platform	Sort rows by every rule in order.
 stepAxis	function	@spy4x/platform	Round `[min, max]` outward to multiples of `step` and return the new bounds with the ticks between them.
+swapLayout	function	@spy4x/platform	The text a person meant when they typed `value` in the other keyboard layout, QWERTY and ЙЦУКЕН both ways.
 systemClock	constant	@spy4x/platform	The host clock.
 systemNow	function	@spy4x/platform	The host clock, function-shaped.
 ticks	function	@spy4x/platform	Tick values at multiples of a nice step, kept within half a step of `[min, max]`.
@@ -1817,6 +1819,7 @@ SearchMatch	interface	@spy4x/platform/universal/text	One result of searchEntries
 SearchMatchKind	type	@spy4x/platform/universal/text	How a query matched an entry, from the strongest to the weakest:
 UnsafeTextOptions	interface	@spy4x/platform/universal/text	Options of hasUnsafeTextCharacters.
 convertToKebabCase	function	@spy4x/platform/universal/text	Convert a free-form identifier to kebab-case.
+cyrillicToLatin	function	@spy4x/platform/universal/text	Folded text with each Cyrillic letter spelled in Latin letters: `ж` becomes `zh`, `щ` becomes `shch`, and `ь` and `ъ` disappear.
 filterRows	function	@spy4x/platform/universal/text	Keep the rows that every word of the query matches.
 fold	function	@spy4x/platform/universal/text	Fold text for matching: accents removed and lower-cased.
 hasUnsafeTextCharacters	function	@spy4x/platform/universal/text	Whether text a person typed holds one of a fixed list of characters that a display name must not: control characters, which a database may refuse, and the common invisible and text-direction characters.
@@ -1832,6 +1835,7 @@ searchEntries	function	@spy4x/platform/universal/text	The entries that `query` m
 searchWords	function	@spy4x/platform/universal/text	Split a search box's value into words.
 similarity	function	@spy4x/platform/universal/text	Similarity of two strings in `[0, 1]`, derived from levenshtein.
 slugify	function	@spy4x/platform/universal/text	A URL- and `id`-safe slug of a title or heading, in any script.
+swapLayout	function	@spy4x/platform/universal/text	The text a person meant when they typed `value` in the other keyboard layout, QWERTY and ЙЦУКЕН both ways.
 utf8ByteLength	function	@spy4x/platform/universal/text	UTF-8 byte length, i.e. what a `Content-Length` or a storage quota counts.
 Clock	interface	@spy4x/platform/universal/time	Injectable time source, so formatting and relative times are testable without a frozen host.
 DAYS_OF_WEEK	constant	@spy4x/platform/universal/time	Weekday names indexed Monday-first, matching getDaysOfWeek's bitmask order.
@@ -3245,4 +3249,4 @@ firstIssueMessage	function	@spy4x/validation/validate	First issue message in a v
 isArkErrors	function	@spy4x/validation/validate	Whether a value is an arktype rejection, without relying on `instanceof`.
 toValidationError	function	@spy4x/validation/validate	Build a ValidationError from arktype's issues.
 validate	function	@spy4x/validation/validate	Parse `value` with an arktype schema exactly once.
-# export surface: sha256 49de70f1be3b0c91a9f90e0e8b47e23dd2d8f334cdbc96fc1ace5d4e43afab55
+# export surface: sha256 445d0fbfd24a3ce499ac6ed624d471c164412a63222f5100771e9ea2ac9ac1d0
