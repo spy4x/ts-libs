@@ -305,6 +305,46 @@ export function negotiateLanguage<Supported extends string>(
   return fallback
 }
 
+/**
+ * The locale an "Automatic" region format means for a person who reads `language`: the first of
+ * `deviceLocales` (`navigator.languages`) in that language, else `fallback`, which defaults to the
+ * language with its likely region (`de` → `de-DE`). Only a device tag with a region counts, so a
+ * bare `de` never hides the `de-AT` listed after it.
+ *
+ * ```ts
+ * automaticLocale("de", ["en-US", "de-AT"]) // "de-AT"
+ * automaticLocale("de", ["en-US"]) // "de-DE"
+ * automaticLocale("en", ["ru-RU"], "en-GB") // "en-GB"
+ * ```
+ */
+export function automaticLocale(
+  language: string,
+  deviceLocales: readonly string[],
+  fallback: string = withRegion(language),
+): string {
+  const regional = deviceLocales.slice(0, MAX_REQUESTED).filter((tag) => regionOf(tag) !== null)
+  return negotiateLanguage(language, regional, fallback)
+}
+
+/** The region subtag of `tag`, or `null` when it has none or is no valid tag. */
+function regionOf(tag: string): string | null {
+  try {
+    return new Intl.Locale(tag).region ?? null
+  } catch {
+    return null
+  }
+}
+
+/** `language` with its likely region: `de` → `de-DE`. An invalid tag stays as it is. */
+function withRegion(language: string): string {
+  try {
+    const likely = new Intl.Locale(language).maximize()
+    return likely.region ? `${likely.language}-${likely.region}` : language
+  } catch {
+    return language
+  }
+}
+
 const PSEUDO_LETTERS: Record<string, string> = {
   a: "á",
   c: "ç",

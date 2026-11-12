@@ -1634,6 +1634,7 @@ PluralCategory	type	@spy4x/platform/universal/i18n	A CLDR plural category, as `I
 PluralMessage	type	@spy4x/platform/universal/i18n	A message with one text per plural category the language uses.
 TextDirection	type	@spy4x/platform/universal/i18n	Text direction of a language.
 Translator	interface	@spy4x/platform/universal/i18n	What createTranslator returns.
+automaticLocale	function	@spy4x/platform/universal/i18n	The locale an "Automatic" region format means for a person who reads `language`: the first of `deviceLocales` (`navigator.languages`) in that language, else `fallback`, which defaults to the language with its likely region (`de` → `de-DE`).
 checkCatalogs	function	@spy4x/platform/universal/i18n	Check translated catalogs against the English source and its locks.
 createTranslator	function	@spy4x/platform/universal/i18n	Make a translator for one interface language.
 findUnusedKeys	function	@spy4x/platform/universal/i18n	The keys of `catalog` that appear in none of `sourceTexts` as a quoted literal (`"key"`, `'key'` or a backtick string).
@@ -3258,4 +3259,4 @@ firstIssueMessage	function	@spy4x/validation/validate	First issue message in a v
 isArkErrors	function	@spy4x/validation/validate	Whether a value is an arktype rejection, without relying on `instanceof`.
 toValidationError	function	@spy4x/validation/validate	Build a ValidationError from arktype's issues.
 validate	function	@spy4x/validation/validate	Parse `value` with an arktype schema exactly once.
-# export surface: sha256 9580476e3595926882f577c2b739f0c2cbb94b547cd3713f648a31be13b5ad55
+# export surface: sha256 69dd845ad1283dc5ea6f14b4580db9c32745619c189dbb77d9188c13bd0e0d49
