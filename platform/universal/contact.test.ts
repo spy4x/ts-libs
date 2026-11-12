@@ -6,9 +6,9 @@ import {
   CONTACT_KINDS,
   contactHref,
   contactJsonLd,
-  contactText,
   type ContactKind,
   contactKind,
+  contactText,
   contactValueProblem,
   normalizeContactValue,
 } from "./contact.ts"
