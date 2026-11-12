@@ -1568,6 +1568,7 @@ ContactPointJsonLd	interface	@spy4x/platform/universal/contact	A schema.org `Con
 contactHref	function	@spy4x/platform/universal/contact	The link that opens the channel: `https://t.me/<username>`, `https://zalo.me/<digits>`, `https://wa.me/<digits>`, the Instagram or Facebook profile, `tel:`, `mailto:`, or the web page itself.
 contactJsonLd	function	@spy4x/platform/universal/contact	The properties of a schema.org `Organization` that `links` describe, to spread into the node.
 contactKind	constant	@spy4x/platform/universal/contact	The arktype type of a ContactKind, for a request body.
+contactText	function	@spy4x/platform/universal/contact	The words a link shows: its label, else its channel and value.
 contactValueProblem	function	@spy4x/platform/universal/contact	Why `value` is no ContactKind `kind`, as one sentence for the form field, or `null` when it is one.
 normalizeContactValue	function	@spy4x/platform/universal/contact	What an operator typed, in the form contactValueProblem checks and a store keeps: trimmed; a profile link such as `https://t.me/my_shop` reduced to `my_shop`; a leading `@` dropped; a phone number without spaces, dashes, dots and brackets (and, for Zalo and WhatsApp, without its `+`); an e-mail address lowercased.
 CSV_BYTE_ORDER_MARK	constant	@spy4x/platform/universal/csv	UTF-8 byte-order mark.
@@ -3259,4 +3260,4 @@ firstIssueMessage	function	@spy4x/validation/validate	First issue message in a v
 isArkErrors	function	@spy4x/validation/validate	Whether a value is an arktype rejection, without relying on `instanceof`.
 toValidationError	function	@spy4x/validation/validate	Build a ValidationError from arktype's issues.
 validate	function	@spy4x/validation/validate	Parse `value` with an arktype schema exactly once.
-# export surface: sha256 69dd845ad1283dc5ea6f14b4580db9c32745619c189dbb77d9188c13bd0e0d49
+# export surface: sha256 697b0cc54714cfab4c4c14b0f5f475a24e6391c34844bdda990d8344a3bcba89
