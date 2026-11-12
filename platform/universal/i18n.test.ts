@@ -2,6 +2,7 @@ import { describe, it } from "@std/testing/bdd"
 import { expect } from "@std/expect"
 
 import {
+  automaticLocale,
   type CatalogPair,
   createTranslator,
   negotiateLanguage,
@@ -320,5 +321,31 @@ describe("pseudoLocalize", () => {
       catalogs: [{ source: en, translation: pseudoLocalize(en) }],
     })
     expect(t("notes.by", { name: "Ana" })).toBe("⟦Wríttéñ bý Ana~~~~~⟧")
+  })
+})
+
+describe("automaticLocale", () => {
+  it("takes the first device locale in the chosen language", () => {
+    expect(automaticLocale("de", ["en-US", "de-AT", "de-DE"])).toBe("de-AT")
+    expect(automaticLocale("en", ["ru-RU", "en-US"])).toBe("en-US")
+  })
+
+  it("skips a device locale without a region, and an invalid one", () => {
+    expect(automaticLocale("de", ["en-US", "de", "not a tag", "de-CH"])).toBe("de-CH")
+  })
+
+  it("falls back to the language with its likely region when nothing matches", () => {
+    expect(automaticLocale("de", ["en-US"])).toBe("de-DE")
+    expect(automaticLocale("ar", ["en-US", "ar"])).toBe("ar-EG")
+    expect(automaticLocale("pt-BR", [])).toBe("pt-BR")
+  })
+
+  it("keeps an invalid language as its own fallback", () => {
+    expect(automaticLocale("not a tag", ["en-US"])).toBe("not a tag")
+  })
+
+  it("uses the caller's fallback when nothing matches", () => {
+    expect(automaticLocale("en", ["ru-RU", "en"], "en-GB")).toBe("en-GB")
+    expect(automaticLocale("en", ["en-US"], "en-GB")).toBe("en-US")
   })
 })
