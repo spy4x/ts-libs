@@ -219,12 +219,12 @@ describe("asciiSlug", () => {
     }
   })
 
-  it("handles a 100,000-character untrusted text in linear time", () => {
-    const text = "Ъ-!你a".repeat(20_000)
+  it("handles a 300,000-character untrusted text in linear time", () => {
+    const text = "Ъ-!你a".repeat(60_000)
     const started = performance.now()
     const slug = asciiSlug(text)
     expect(performance.now() - started).toBeLessThan(1_000)
-    expect(slug).toBe(Array(20_000).fill("a").join("-"))
+    expect(slug).toBe(Array(60_000).fill("a").join("-"))
   })
 })
 
