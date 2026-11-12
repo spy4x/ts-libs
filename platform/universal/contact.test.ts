@@ -8,6 +8,7 @@ import {
   contactJsonLd,
   type ContactKind,
   contactKind,
+  contactText,
   contactValueProblem,
   normalizeContactValue,
 } from "./contact.ts"
@@ -70,6 +71,35 @@ describe("normalizeContactValue", () => {
   it("lowercases an e-mail address and keeps a value it cannot read", () => {
     expect(normalizeContactValue("email", " Hello@Example.com ")).toBe("hello@example.com")
     expect(normalizeContactValue("email", "not an address")).toBe("not an address")
+  })
+})
+
+describe("contactText", () => {
+  it("writes a handle as the channel and @handle, with one @", () => {
+    expect(contactText("telegram", "vishop_hn")).toBe("Telegram @vishop_hn")
+    expect(contactText("instagram", "my.shop")).toBe("Instagram @my.shop")
+  })
+
+  it("keeps the channel, a colon and the value for a messenger number or a page", () => {
+    expect(contactText("zalo", "0912345678")).toBe("Zalo: 0912345678")
+    expect(contactText("whatsapp", "84912345678")).toBe("WhatsApp: 84912345678")
+    expect(contactText("facebook", "myshop")).toBe("Facebook: myshop")
+  })
+
+  it("shows a phone number or an address as it is, and a web address as its host", () => {
+    expect(contactText("phone", "+84912345678")).toBe("+84912345678")
+    expect(contactText("email", "hello@example.com")).toBe("hello@example.com")
+    expect(contactText("url", "https://shop.example.com:8443/order")).toBe("shop.example.com:8443")
+  })
+
+  it("shows a label instead, and treats an empty or missing label as none", () => {
+    expect(contactText("telegram", "my_shop", "Order on Telegram")).toBe("Order on Telegram")
+    expect(contactText("telegram", "my_shop", "")).toBe("Telegram @my_shop")
+    expect(contactText("telegram", "my_shop", null)).toBe("Telegram @my_shop")
+  })
+
+  it("throws on a web address it cannot read", () => {
+    expect(() => contactText("url", "not a url")).toThrow(TypeError)
   })
 })
 
