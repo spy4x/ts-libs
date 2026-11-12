@@ -60,6 +60,7 @@ export interface PostgresOutboxRepositoryOptions {
    * and `removeProcessed` purges processed rows of every kind.
    *
    * An empty `except` filters nothing. An empty `only` throws, since it would claim nothing.
+   * The kinds travel as one array parameter, never as SQL text.
    */
   kinds?: OutboxKindFilter
 }
@@ -76,7 +77,7 @@ export class PostgresOutboxRepository implements OutboxRepository {
         throw new RangeError(`kinds.only must list at least one event kind`)
       }
       this.#kindFilter = sql`AND event_kind = ANY(${kinds.only}::text[])`
-    } else if (kinds && kinds.except.length > 0) {
+    } else if (kinds) {
       this.#kindFilter = sql`AND event_kind <> ALL(${kinds.except}::text[])`
     } else {
       this.#kindFilter = sql``
