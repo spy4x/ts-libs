@@ -2,6 +2,7 @@ import { describe, it } from "@std/testing/bdd"
 import { expect } from "@std/expect"
 
 import {
+  asciiSlug,
   convertToKebabCase,
   filterRows,
   fold,
@@ -148,6 +149,82 @@ describe("slugify", () => {
 
   it("returns an empty string for text with no letter or digit", () => {
     expect(slugify("!!! ???")).toBe("")
+  })
+})
+
+describe("asciiSlug", () => {
+  const ADDRESS = /^[a-z0-9]+(?:-[a-z0-9]+)*$/
+
+  it("spells Cyrillic in Latin letters", () => {
+    expect(asciiSlug("Футболка")).toBe("futbolka")
+    expect(asciiSlug("Привет, мир")).toBe("privet-mir")
+    expect(asciiSlug("Щука и ёж")).toBe("shchuka-i-ezh")
+  })
+
+  it("removes accents from Latin letters", () => {
+    expect(asciiSlug("Café déjà vu")).toBe("cafe-deja-vu")
+  })
+
+  it("returns an empty string for text in other scripts only", () => {
+    expect(asciiSlug("قميص")).toBe("")
+    expect(asciiSlug("नमस्ते")).toBe("")
+    expect(asciiSlug("你好")).toBe("")
+  })
+
+  it("drops a word of other scripts and the dash it leaves", () => {
+    expect(asciiSlug("Футболка 你好 2")).toBe("futbolka-2")
+    expect(asciiSlug("你好 world")).toBe("world")
+  })
+
+  it("drops a word made only of soft and hard signs", () => {
+    expect(asciiSlug("ь мир ъ")).toBe("mir")
+  })
+
+  it("returns an empty string for empty or punctuation-only text", () => {
+    expect(asciiSlug("")).toBe("")
+    expect(asciiSlug("!!! --- ???")).toBe("")
+  })
+
+  it("cuts to maxLength without leaving a dash at the end", () => {
+    expect(asciiSlug("Café déjà vu", 9)).toBe("cafe-deja")
+    expect(asciiSlug("Café déjà vu", 5)).toBe("cafe")
+    expect(asciiSlug("Café déjà vu", 100)).toBe("cafe-deja-vu")
+  })
+
+  it("refuses a maxLength that is not a positive integer", () => {
+    for (const maxLength of [0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(() => asciiSlug("x", maxLength)).toThrow(RangeError)
+    }
+  })
+
+  it("always gives an address of a-z, digits and single dashes, or nothing", () => {
+    const inputs = [
+      "  --Hello__World--  ",
+      "Ёлка — 2024 年 «новая»",
+      "ab 你 cd ь ef",
+      "Łódź / Ærø / Straße",
+      "١٢٣ abc ٤٥٦",
+      "x\u0301\u200b-y",
+      "Ґанок і Єва",
+    ]
+    for (const input of inputs) {
+      const slug = asciiSlug(input)
+      expect(slug === "" || ADDRESS.test(slug), `${input} gave ${slug}`).toBe(true)
+      for (const maxLength of [1, 2, 3, 7]) {
+        const cut = asciiSlug(input, maxLength)
+        expect(cut.length).toBeLessThanOrEqual(maxLength)
+        expect(cut === "" || ADDRESS.test(cut), `${input} cut to ${maxLength} gave ${cut}`)
+          .toBe(true)
+      }
+    }
+  })
+
+  it("handles a 100,000-character untrusted text in linear time", () => {
+    const text = "Ъ-!你a".repeat(20_000)
+    const started = performance.now()
+    const slug = asciiSlug(text)
+    expect(performance.now() - started).toBeLessThan(1_000)
+    expect(slug).toBe(Array(20_000).fill("a").join("-"))
   })
 })
 

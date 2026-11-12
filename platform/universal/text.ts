@@ -135,6 +135,33 @@ export function slugify(text: string): string {
 }
 
 /**
+ * A slug of only `a-z`, digits and single dashes, for an address that refuses other scripts.
+ *
+ * The text goes through {@link slugify}, then {@link cyrillicToLatin}, so `"Футболка"` is
+ * `"futbolka"`. Letters of any other non-Latin script are dropped, and so is a word made only of
+ * them. When `maxLength` is given, the slug is cut to it before dashes at either end are dropped,
+ * so a cut never ends on a dash. The result matches `^[a-z0-9]+(?:-[a-z0-9]+)*$`, or is `""` when
+ * nothing is left; the caller picks a fallback. Every step is a linear scan, so a long untrusted
+ * text costs time in proportion to its length.
+ *
+ * @example
+ * ```ts
+ * asciiSlug("Привет, мир") // "privet-mir"
+ * asciiSlug("Футболка 你好 2") // "futbolka-2"
+ * asciiSlug("Café déjà vu", 9) // "cafe-deja"
+ * ```
+ *
+ * @throws {RangeError} When `maxLength` is given and is not a positive integer.
+ */
+export function asciiSlug(text: string, maxLength?: number): string {
+  if (maxLength !== undefined && (!Number.isInteger(maxLength) || maxLength <= 0)) {
+    throw new RangeError(`maxLength must be a positive integer, received: ${maxLength}`)
+  }
+  const slug = cyrillicToLatin(slugify(text)).replace(/[^a-z0-9-]+/g, "").replace(/-{2,}/g, "-")
+  return slug.slice(0, maxLength).replace(/^-+|-+$/g, "")
+}
+
+/**
  * Whole minutes a reader needs for `text`, at least 1.
  *
  * Words are runs of non-whitespace, so Markdown syntax (`##`, `-`, a link's address) counts the
