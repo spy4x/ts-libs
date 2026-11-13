@@ -2664,6 +2664,7 @@ LostOutboxEvent	interface	@spy4x/server/outbox	An event OutboxRepository.findLos
 OutboxAttemptFailure	interface	@spy4x/server/outbox	One failed attempt, as `OutboxProcessorOptions.onAttemptFailed` gets it.
 OutboxEvent	interface	@spy4x/server/outbox	One outbox row.
 OutboxFailureStage	type	@spy4x/server/outbox	Where an attempt failed.
+OutboxKindFilter	type	@spy4x/server/outbox	The event kinds a repository claims: only the listed ones, or every kind except the listed ones.
 OutboxLeaseExpiredError	class	@spy4x/server/outbox	The `error` of a failure in the `lease` stage: the event's last attempt ended with no outcome reported.
 OutboxNextRun	type	@spy4x/server/outbox	When a repeating event runs next: a number of seconds from the database's now, or a moment.
 OutboxProcessor	class	@spy4x/server/outbox	
@@ -3262,4 +3263,4 @@ firstIssueMessage	function	@spy4x/validation/validate	First issue message in a v
 isArkErrors	function	@spy4x/validation/validate	Whether a value is an arktype rejection, without relying on `instanceof`.
 toValidationError	function	@spy4x/validation/validate	Build a ValidationError from arktype's issues.
 validate	function	@spy4x/validation/validate	Parse `value` with an arktype schema exactly once.
-# export surface: sha256 237441fbd6a29f86128bd8b4352b83b4b63bc015d62f67123a8c81ea8762494a
+# export surface: sha256 e6453c75c6690c1475a8c0f96e3fa14d29ab46219408da8916510bdeb32a90c5
