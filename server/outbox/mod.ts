@@ -6,7 +6,7 @@
  * `OutboxProcessor`, `OutboxEvent`, `OutboxPublisher`, `OutboxRepository`, `PostgresOutboxRepository`,
  * `LoggingOutboxPublisher`, `JobPublisher`, `retryDelayMs`, `errorCodeOf`, `scheduleOutboxEvent`,
  * `ensureScheduledOutboxEvent`, `OutboxAttemptFailure`, `OutboxLeaseExpiredError`,
- * `attemptFailureLine`, `stepsJob`, `JobStep`.
+ * `attemptFailureLine`, `stepsJob`, `JobStep`, `OutboxKindFilter`.
  *
  * A transactional outbox: a command writes an identity-only row (aggregate, version, kind — never a
  * payload) in the same transaction as its state change, and `OutboxProcessor.drainOnce`/`run` claim
@@ -152,6 +152,12 @@
  * opens an explicit transaction on one connection and claims from a second one while the first is still
  * open.
  *
+ * **Slow jobs get their own lane.** One processor drains its rows one after another, so a batch of
+ * slow jobs holds up every fast event behind it. Run two processors on the same table, each over
+ * its own `PostgresOutboxRepository`: `new PostgresOutboxRepository(sql, { kinds: { only: slow } })`
+ * and `{ kinds: { except: slow } }`. Give every kind to exactly one lane, or it is claimed by both
+ * or by none.
+ *
  * **The Postgres repository needs a small table.** The claim/retry/mark-processed SQL is generic
  * over any table shaped like this:
  *
@@ -245,7 +251,11 @@ export {
 export { LoggingOutboxPublisher } from "./logging-publisher.ts"
 export { type JobHandler, JobPublisher, type JobPublisherOptions } from "./job-publisher.ts"
 export { attemptFailureLine, type JobStep, stepsJob } from "./job-log.ts"
-export { PostgresOutboxRepository } from "./postgres-repository.ts"
+export {
+  type OutboxKindFilter,
+  PostgresOutboxRepository,
+  type PostgresOutboxRepositoryOptions,
+} from "./postgres-repository.ts"
 export {
   type EnsureScheduledOptions,
   ensureScheduledOutboxEvent,

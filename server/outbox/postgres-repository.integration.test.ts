@@ -1475,3 +1475,68 @@ describe("removeProcessed against a real server", () => {
     })
   })
 })
+
+describe("kind filters against a real server", () => {
+  const ROW_C = "33333333-3333-4333-8333-333333333333"
+
+  /** Rows A (`image.resize`), B (`mail.send`) and C (`image.thumb`), in that order. */
+  async function insertThreeKinds(sql: Sql): Promise<void> {
+    for (
+      const [id, kind] of [[ROW_A, "image.resize"], [ROW_B, "mail.send"], [ROW_C, "image.thumb"]]
+    ) {
+      await insertRow(sql, id, kind, id)
+      await sql`SELECT pg_sleep(0.01)`
+    }
+  }
+
+  const claimedIds = async (repository: PostgresOutboxRepository) =>
+    (await repository.claimBatch(10, 5, 60)).map((event) => event.id)
+
+  it("only claims its own kinds and leaves the others claimable", async () => {
+    await withOutboxSchema(async (sql) => {
+      await insertThreeKinds(sql)
+      const images = new PostgresOutboxRepository(sql, {
+        kinds: { only: ["image.resize", "image.thumb"] },
+      })
+
+      assertEquals(await claimedIds(images), [ROW_A, ROW_C])
+      assertEquals(await claimedIds(images), [])
+      assertEquals(await claimedIds(new PostgresOutboxRepository(sql)), [ROW_B])
+    })
+  })
+
+  it("except claims every kind but the listed ones, which stay claimable", async () => {
+    await withOutboxSchema(async (sql) => {
+      await insertThreeKinds(sql)
+      const rest = new PostgresOutboxRepository(sql, { kinds: { except: ["image.resize"] } })
+
+      assertEquals(await claimedIds(rest), [ROW_B, ROW_C])
+      assertEquals(await claimedIds(rest), [])
+      assertEquals(await claimedIds(new PostgresOutboxRepository(sql)), [ROW_A])
+    })
+  })
+
+  it("claims every kind without a filter and with an empty except list", async () => {
+    for (const options of [undefined, { kinds: { except: [] } }]) {
+      await withOutboxSchema(async (sql) => {
+        await insertThreeKinds(sql)
+        const repository = new PostgresOutboxRepository(sql, options)
+
+        assertEquals(await claimedIds(repository), [ROW_A, ROW_B, ROW_C])
+      })
+    }
+  })
+
+  it("findLost returns only the lost rows of the kinds the filter claims", async () => {
+    await withOutboxSchema(async (sql) => {
+      await insertThreeKinds(sql)
+      // Every row is out of attempts, with a lease that is over at once.
+      await new PostgresOutboxRepository(sql).claimBatch(10, 1, 0)
+      const lostIds = async (kinds: { only: string[] } | { except: string[] }) =>
+        (await new PostgresOutboxRepository(sql, { kinds }).findLost(1, 10)).map((e) => e.id)
+
+      assertEquals(await lostIds({ only: ["mail.send"] }), [ROW_B])
+      assertEquals(await lostIds({ except: ["mail.send"] }), [ROW_A, ROW_C])
+    })
+  })
+})

@@ -43,8 +43,46 @@ import type { Sql } from "../db/index.ts"
 import type { LostOutboxEvent, OutboxEvent, OutboxNextRun, OutboxRepository } from "./processor.ts"
 import { uuidV7 } from "@spy4x/platform/universal/uuid"
 
+/**
+ * The event kinds a repository claims: only the listed ones, or every kind except the listed ones.
+ */
+export type OutboxKindFilter = { only: readonly string[] } | { except: readonly string[] }
+
+/** Options of a {@link PostgresOutboxRepository}. */
+export interface PostgresOutboxRepositoryOptions {
+  /**
+   * Limits `claimBatch` and `findLost` to these event kinds; without it they take every kind.
+   *
+   * It lets two processors share one table in separate lanes, so slow jobs do not hold up fast
+   * ones: one repository with `{ only: ["image.resize"] }`, the other with
+   * `{ except: ["image.resize"] }`. Give every kind to exactly one lane: a kind in both lanes is
+   * claimed by both, and a kind in neither is never claimed. The other methods act on rows by id,
+   * and `removeProcessed` purges processed rows of every kind.
+   *
+   * An empty `except` filters nothing. An empty `only` throws, since it would claim nothing.
+   * The kinds travel as one array parameter, never as SQL text.
+   */
+  kinds?: OutboxKindFilter
+}
+
 export class PostgresOutboxRepository implements OutboxRepository {
-  constructor(private readonly sql: Sql) {}
+  /** The `event_kind` condition of `claimBatch` and `findLost`, empty without a filter. */
+  readonly #kindFilter
+
+  /** @throws {RangeError} When `kinds.only` is empty. */
+  constructor(private readonly sql: Sql, options: PostgresOutboxRepositoryOptions = {}) {
+    const kinds = options.kinds
+    if (kinds && "only" in kinds) {
+      if (kinds.only.length === 0) {
+        throw new RangeError(`kinds.only must list at least one event kind`)
+      }
+      this.#kindFilter = sql`AND event_kind = ANY(${kinds.only}::text[])`
+    } else if (kinds) {
+      this.#kindFilter = sql`AND event_kind <> ALL(${kinds.except}::text[])`
+    } else {
+      this.#kindFilter = sql``
+    }
+  }
 
   /**
    * `FOR UPDATE SKIP LOCKED` stops two workers claiming the same row in the same
@@ -83,6 +121,7 @@ export class PostgresOutboxRepository implements OutboxRepository {
         WHERE processed_at IS NULL
           AND available_at <= now()
           AND attempt_count < ${maxAttempts}
+          ${this.#kindFilter}
         ORDER BY available_at, created_at
         FOR UPDATE SKIP LOCKED
         LIMIT ${limit}
@@ -240,6 +279,7 @@ export class PostgresOutboxRepository implements OutboxRepository {
       WHERE processed_at IS NULL
         AND attempt_count >= ${maxAttempts}
         AND available_at + (available_at - COALESCE(claimed_at, available_at)) <= now()
+        ${this.#kindFilter}
       ORDER BY available_at, created_at
       LIMIT ${limit}
     `
