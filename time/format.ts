@@ -70,6 +70,11 @@ export interface Formatters {
   /** A day without its year, `17 Oct` or `Oct 17`: the label of a chart's axis. */
   dayMonth(value: DateInput): string
   /**
+   * The month's short name, `Nov` or `nov.`: the label of a month in a strip or a chart's axis.
+   * With its year, `November 2026`, a month comes from `periodLabel` in `./period.ts`.
+   */
+  month(value: DateInput): string
+  /**
    * The exact instant to the second, with the zone named as the region format writes it:
    * `17 Oct 2026, 14:05:09 UTC` from {@link Formatters.utc}. For a log a reader matches against
    * other logs.
@@ -155,6 +160,10 @@ export function createFormatters(
       return instant === null
         ? EMPTY
         : dateFormat("dm", { day: "numeric", month: "short" }).format(instant)
+    },
+    month(value) {
+      const instant = toInstant(value)
+      return instant === null ? EMPTY : dateFormat("m", { month: "short" }).format(instant)
     },
     exact(value) {
       const instant = toInstant(value)

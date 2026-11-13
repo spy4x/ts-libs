@@ -134,6 +134,14 @@ export function slugify(text: string): string {
   return fold(text).replace(/[^\p{L}\p{M}\p{N}]+/gu, "-").replace(/^-+|-+$/g, "")
 }
 
+// Han, Hiragana and Katakana, with the marks and punctuation they share (ー, 、, 。, 「」).
+const CJK_CHARACTER = /[\p{scx=Han}\p{scx=Hiragana}\p{scx=Katakana}]/gu
+const KANA = /[\p{sc=Hiragana}\p{sc=Katakana}]/u
+// Characters read in the time 230 English words take, measured on the 22 Japanese and Chinese
+// posts of spy4x/seed against their English originals (spy4x/seed#806).
+const JAPANESE_CHARACTERS_PER_230_WORDS = 650
+const CHINESE_CHARACTERS_PER_230_WORDS = 450
+
 /**
  * A slug of only `a-z`, digits and single dashes, for an address that refuses other scripts.
  *
@@ -168,15 +176,25 @@ export function asciiSlug(text: string, maxLength?: number): string {
  * same as a word; that error is small next to how much reading speeds differ. The count is
  * rounded to the nearest minute, as "5 min read" labels are.
  *
+ * Chinese and Japanese put no spaces between words, so their characters are counted one by one
+ * instead: in the time 230 English words take, about 650 characters of Japanese (its kana make a
+ * text longer) or 450 of Chinese. A text with any kana is read as Japanese.
+ *
  * @param wordsPerMinute Reading speed; 230 is the usual figure for adults reading on a screen.
+ *   The character rates scale with it.
  * @throws When `wordsPerMinute` is not a positive finite number.
  */
 export function readingMinutes(text: string, wordsPerMinute = 230): number {
   if (!Number.isFinite(wordsPerMinute) || wordsPerMinute <= 0) {
     throw new Error(`wordsPerMinute must be a positive number, received: ${wordsPerMinute}`)
   }
-  const words = text.match(/\S+/g)?.length ?? 0
-  return Math.max(1, Math.round(words / wordsPerMinute))
+  const characters = text.match(CJK_CHARACTER)?.length ?? 0
+  const words = text.replace(CJK_CHARACTER, " ").match(/\S+/g)?.length ?? 0
+  const charactersPer230Words = KANA.test(text)
+    ? JAPANESE_CHARACTERS_PER_230_WORDS
+    : CHINESE_CHARACTERS_PER_230_WORDS
+  const wordsRead = words + characters * 230 / charactersPer230Words
+  return Math.max(1, Math.round(wordsRead / wordsPerMinute))
 }
 
 /** Levenshtein edit distance between two strings, computed over code points. */

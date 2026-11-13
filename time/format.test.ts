@@ -60,6 +60,7 @@ describe("createFormatters", () => {
       expect(format.dateTime(value)).toBe("-")
       expect(format.relative(value)).toBe("-")
       expect(format.dayMonth(value)).toBe("-")
+      expect(format.month(value)).toBe("-")
       expect(format.exact(value)).toBe("-")
     }
   })
@@ -88,6 +89,20 @@ describe("dayMonth", () => {
     // 13:45 UTC on the 17th is 00:45 on the 18th in Auckland (NZDT, UTC+13).
     const format = createFormatters({ locale: "en-GB", timeZone: "Pacific/Auckland" }, fixed)
     expect(format.dayMonth(AT)).toBe("18 Oct")
+  })
+})
+
+describe("month", () => {
+  it("writes the month's short name in the region format's language", () => {
+    expect(createFormatters({ locale: "en-GB" }, fixed).month(AT)).toBe("Oct")
+    expect(createFormatters({ locale: "de-DE" }, fixed).month(AT)).toBe("Okt")
+  })
+
+  it("counts the month in the person's zone", () => {
+    // 23:30 UTC on 31 October is 08:30 on 1 November in Tokyo (UTC+9).
+    const format = createFormatters({ locale: "en-GB", timeZone: "Asia/Tokyo" }, fixed)
+    expect(format.month(`2026-10-31T23:30:00Z`)).toBe("Nov")
+    expect(format.utc().month(`2026-10-31T23:30:00Z`)).toBe("Oct")
   })
 })
 

@@ -206,6 +206,22 @@ export function contactHref(kind: ContactKind, value: string): string {
   }
 }
 
+/**
+ * The words a link shows: its label, else its channel and value. A handle reads `Telegram @my_shop`
+ * (its value is stored without the `@`), a number on a messenger `Zalo: 0912345678`; a phone number
+ * or an e-mail address is its value, and a web address its host. An empty label counts as none.
+ *
+ * @throws {TypeError} When `kind` is `url` and `value` is no web address; pass a value
+ * {@link contactValueProblem} accepts.
+ */
+export function contactText(kind: ContactKind, value: string, label?: string | null): string {
+  if (label) return label
+  if (kind === "phone" || kind === "email") return value
+  if (kind === "url") return new URL(value).host
+  if (kind === "telegram" || kind === "instagram") return `${CONTACT_KIND_NAMES[kind]} @${value}`
+  return `${CONTACT_KIND_NAMES[kind]}: ${value}`
+}
+
 /** A schema.org `ContactPoint`: one way to reach an organization. */
 export interface ContactPointJsonLd {
   "@type": "ContactPoint"
