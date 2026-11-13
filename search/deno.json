@@ -1,6 +1,6 @@
 {
   "name": "@spy4x/search",
-  "version": "1.125.0",
+  "version": "1.126.0",
   "exports": {
     ".": "./mod.ts"
   }
