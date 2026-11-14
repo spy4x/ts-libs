@@ -4,7 +4,7 @@
  * @module
  */
 
-import { currencyDecimals, moneyDecimalString } from "./money.ts"
+import { currencyDecimals, moneyDecimalString } from "./money-core.ts"
 import { canonicalUrl, webUrl } from "./seo-canonical.ts"
 import { type JsonLdPerson, type JsonLdPersonNode, nodeId, personNode } from "./seo-json-ld.ts"
 
