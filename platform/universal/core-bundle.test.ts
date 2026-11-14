@@ -1,5 +1,6 @@
 /**
- * What a browser bundle of `universal/money-core` and `universal/color-core` carries.
+ * What a browser bundle of `universal/money-core`, `universal/color-core` and `universal/seo`
+ * carries.
  *
  * arktype's own module code runs when it loads and the package does not declare
  * `sideEffects: false`, so any import of it keeps about 150 KB in a bundle, used or not. The core
@@ -61,5 +62,9 @@ describe(`a browser bundle of the money and colour helpers`, () => {
     expect(code.includes(ARKTYPE_MARKER)).toBe(false)
     // 0.5 KB today: `isHexColor`, `readableTextColor` and the luminance maths.
     expect(code.length).toBeLessThan(1_000)
+  })
+
+  it(`carries no arktype when it imports universal/seo`, async () => {
+    expect((await bundle(`island-seo.ts`)).includes(ARKTYPE_MARKER)).toBe(false)
   })
 })
