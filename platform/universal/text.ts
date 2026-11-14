@@ -166,8 +166,8 @@ const SPELLED_IN_SLUG = /[ßæœþðђјљњћџѕ]/g
  * `"futbolka"`. Latin letters without an `a-z` form are spelled out (`ß` is `ss`, `æ` is `ae`),
  * and so are the Serbian and Macedonian Cyrillic letters (`љ` is `lj`). Letters of any other script
  * are dropped, and so is a word made only of them. When `maxLength` is given, the slug is cut to it
- * before dashes at either end are dropped, so a cut never ends on a dash. The result matches `^[a-z0-9]+(?:-[a-z0-9]+)*$`, or is `""` when
- * nothing is left; the caller picks a fallback. Every step is a linear scan, so a long untrusted
+ * before dashes at either end are dropped, so a cut never ends on a dash. The result matches
+ * `^[a-z0-9]+(?:-[a-z0-9]+)*$`, or is `""` when nothing is left; the caller picks a fallback. Every step is a linear scan, so a long untrusted
  * text costs time in proportion to its length.
  *
  * @example
