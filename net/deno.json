@@ -1,6 +1,6 @@
 {
   "name": "@spy4x/net",
-  "version": "1.126.0",
+  "version": "1.127.0",
   "exports": {
     ".": "./+main.ts",
     "./url-shape": "./url-shape.ts",
