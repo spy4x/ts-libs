@@ -953,6 +953,7 @@ UUID_V7_PATTERN	constant	@spy4x/platform	A lower-case UUID of version 7, as uuid
 UnsafeTextOptions	interface	@spy4x/platform	Options of hasUnsafeTextCharacters.
 UuidVersion	type	@spy4x/platform	The version digit of a UUID: `4` is the random one, `7` the time-ordered one.
 ValidationError	type	@spy4x/platform	A rejected input: its kind, one sentence for the user, the issues per field path, and arktype's own errors.
+asciiSlug	function	@spy4x/platform	A slug of only `a-z`, digits and single dashes, for an address that refuses other scripts.
 backoffDelay	function	@spy4x/platform	Caps a raw delay and jitters it: the exponential-backoff arithmetic shared by `integrations/retry.ts`'s `createExponentialBackoff` (symmetric jitter around the capped delay) and `realtime/backoff.ts`'s `nextBackoffDelay` (jitter that only ever shortens the wait).
 blogPostingJsonLd	function	@spy4x/platform	The schema.org `BlogPosting` node for one post, with the fields Google reads for an article: `headline`, `image`, `datePublished`, `dateModified`, `author` and `publisher`, plus `mainEntityOfPage`, `articleSection`, `inLanguage`, `timeRequired` and `isPartOf`.
 breadcrumbItems	function	@spy4x/platform	`itemListElement` for a schema.org `BreadcrumbList`, built from the crumbs the caller stated.
@@ -1820,6 +1821,7 @@ SearchEntry	interface	@spy4x/platform/universal/text	Something searchEntries can
 SearchMatch	interface	@spy4x/platform/universal/text	One result of searchEntries.
 SearchMatchKind	type	@spy4x/platform/universal/text	How a query matched an entry, from the strongest to the weakest:
 UnsafeTextOptions	interface	@spy4x/platform/universal/text	Options of hasUnsafeTextCharacters.
+asciiSlug	function	@spy4x/platform/universal/text	A slug of only `a-z`, digits and single dashes, for an address that refuses other scripts.
 convertToKebabCase	function	@spy4x/platform/universal/text	Convert a free-form identifier to kebab-case.
 cyrillicToLatin	function	@spy4x/platform/universal/text	Folded text with each Cyrillic letter spelled in Latin letters: `ж` becomes `zh`, `щ` becomes `shch`, and `ь` and `ъ` disappear.
 filterRows	function	@spy4x/platform/universal/text	Keep the rows that every word of the query matches.
@@ -3261,4 +3263,4 @@ firstIssueMessage	function	@spy4x/validation/validate	First issue message in a v
 isArkErrors	function	@spy4x/validation/validate	Whether a value is an arktype rejection, without relying on `instanceof`.
 toValidationError	function	@spy4x/validation/validate	Build a ValidationError from arktype's issues.
 validate	function	@spy4x/validation/validate	Parse `value` with an arktype schema exactly once.
-# export surface: sha256 b619418f80f2f1f222f64642bbc1a7a6c0be24b18d39fef3850db2d0efa0b055
+# export surface: sha256 e82983462e7e85ea27a32f28360d20d4897e2d04dd71c832da2abc58a9931985
