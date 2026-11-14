@@ -161,6 +161,17 @@ describe("asciiSlug", () => {
     expect(asciiSlug("Щука и ёж")).toBe("shchuka-i-ezh")
   })
 
+  it("spells Latin letters that have no a-z form instead of dropping them", () => {
+    expect(asciiSlug("Straße")).toBe("strasse")
+    expect(asciiSlug("Ærø Œuvre")).toBe("aero-oeuvre")
+    expect(asciiSlug("Þór")).toBe("thor")
+  })
+
+  it("spells Serbian and Macedonian Cyrillic letters in Latin", () => {
+    expect(asciiSlug("Љубљана Ђорђе")).toBe("ljubljana-djordje")
+    expect(asciiSlug("Њујорк џеп ћуп")).toBe("njujork-dzep-cup")
+  })
+
   it("removes accents from Latin letters", () => {
     expect(asciiSlug("Café déjà vu")).toBe("cafe-deja-vu")
   })

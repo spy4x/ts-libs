@@ -142,13 +142,31 @@ const KANA = /[\p{sc=Hiragana}\p{sc=Katakana}]/u
 const JAPANESE_CHARACTERS_PER_230_WORDS = 650
 const CHINESE_CHARACTERS_PER_230_WORDS = 450
 
+/** Letters that neither {@link fold} nor {@link cyrillicToLatin} turn into `a-z`. */
+const SLUG_SPELLINGS: Record<string, string> = {
+  "ß": "ss",
+  "æ": "ae",
+  "œ": "oe",
+  "þ": "th",
+  "ð": "d",
+  "ђ": "dj",
+  "ј": "j",
+  "љ": "lj",
+  "њ": "nj",
+  "ћ": "c",
+  "џ": "dz",
+  "ѕ": "dz",
+}
+const SPELLED_IN_SLUG = /[ßæœþðђјљњћџѕ]/g
+
 /**
  * A slug of only `a-z`, digits and single dashes, for an address that refuses other scripts.
  *
  * The text goes through {@link slugify}, then {@link cyrillicToLatin}, so `"Футболка"` is
- * `"futbolka"`. Letters of any other non-Latin script are dropped, and so is a word made only of
- * them. When `maxLength` is given, the slug is cut to it before dashes at either end are dropped,
- * so a cut never ends on a dash. The result matches `^[a-z0-9]+(?:-[a-z0-9]+)*$`, or is `""` when
+ * `"futbolka"`. Latin letters without an `a-z` form are spelled out (`ß` is `ss`, `æ` is `ae`),
+ * and so are the Serbian and Macedonian Cyrillic letters (`љ` is `lj`). Letters of any other script
+ * are dropped, and so is a word made only of them. When `maxLength` is given, the slug is cut to it
+ * before dashes at either end are dropped, so a cut never ends on a dash. The result matches `^[a-z0-9]+(?:-[a-z0-9]+)*$`, or is `""` when
  * nothing is left; the caller picks a fallback. Every step is a linear scan, so a long untrusted
  * text costs time in proportion to its length.
  *
@@ -165,7 +183,10 @@ export function asciiSlug(text: string, maxLength?: number): string {
   if (maxLength !== undefined && (!Number.isInteger(maxLength) || maxLength <= 0)) {
     throw new RangeError(`maxLength must be a positive integer, received: ${maxLength}`)
   }
-  const slug = cyrillicToLatin(slugify(text)).replace(/[^a-z0-9-]+/g, "").replace(/-{2,}/g, "-")
+  const slug = cyrillicToLatin(slugify(text))
+    .replace(SPELLED_IN_SLUG, (letter) => SLUG_SPELLINGS[letter])
+    .replace(/[^a-z0-9-]+/g, "")
+    .replace(/-{2,}/g, "-")
   return slug.slice(0, maxLength).replace(/^-+|-+$/g, "")
 }
 
