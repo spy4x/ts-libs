@@ -4,7 +4,8 @@
   "exports": {
     ".": "./mod.ts",
     "./pdf": "./pdf.ts",
-    "./infer": "./infer.ts"
+    "./infer": "./infer.ts",
+    "./app-exports": "./app-exports.ts"
   },
   "publish": {
     "exclude": ["fixtures"]
