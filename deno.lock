@@ -47,6 +47,7 @@
     "npm:nodemailer@10.0.10": "10.0.10",
     "npm:postgres@3.4.7": "3.4.7",
     "npm:reflect-metadata@~0.2.2": "0.2.2",
+    "npm:sql.js@1.16.0": "1.16.0",
     "npm:unpdf@2.1.0": "2.1.0",
     "npm:ws@8.22.1": "8.22.1"
   },
@@ -395,6 +396,9 @@
     "reflect-metadata@0.2.2": {
       "integrity": "sha512-urBwgfrvVP/eAyXx4hluJivBKzuEbSQs9rKWCrCkbSxNv8mxPcUZKeuoF3Uy4mJl3Lwprp6yy5/39VWigZ4K6Q=="
     },
+    "sql.js@1.16.0": {
+      "integrity": "sha512-q/JOZuJfmVh8Zf8Eo+cMJvtxAWeWBqTfJ6AQYGXZmcaLGHMwhA2niH3fQYHrBtPeOss1ttzHec07K5+rHaMRMw=="
+    },
     "tslib@1.14.1": {
       "integrity": "sha512-Xni35NKzjgMrwevysHTCArtLDpPvye8zV/0E4EyYn43P7/7qvQwPh9BGkHewbMulVntbigmcT7rdX3BNo9wRJg=="
     },
@@ -437,6 +441,7 @@
       "npm:marked@18.1.1",
       "npm:minisearch@7.2.0",
       "npm:postgres@3.4.7",
+      "npm:sql.js@1.16.0",
       "npm:unpdf@2.1.0",
       "npm:ws@8.22.1"
     ],

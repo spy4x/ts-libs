@@ -197,7 +197,12 @@
     // PDF text with positions for `bank-statements/pdf` (#820): a serverless build of Mozilla's
     // pdf.js with the worker inlined, no dependencies of its own. Only the text layer is read;
     // every load passes `isEvalSupported: false`.
-    "unpdf": "npm:unpdf@2.1.0"
+    "unpdf": "npm:unpdf@2.1.0",
+
+    // SQLite compiled to WebAssembly for `bank-statements/app-exports` (#945): Actual Budget's
+    // export is a SQLite database, and no web standard reads one. No dependencies of its own;
+    // loaded only when an Actual Budget export is read.
+    "sql.js": "npm:sql.js@1.16.0"
   },
   "compilerOptions": {
     // An explicit "lib" replaces Deno's default lib set, so "deno.ns" has to be
