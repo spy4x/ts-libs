@@ -22,6 +22,8 @@ export interface HistoryAccount {
 /** One category the file names. */
 export interface HistoryCategory {
   name: string
+  /** The group the app files the category under, when it has groups. */
+  group?: string
 }
 
 /** What an entry and a transfer both carry. */
