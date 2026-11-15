@@ -58,7 +58,8 @@ const QUERIES = {
   categories: "SELECT id, name, cat_group, tombstone FROM categories ORDER BY sort_order, id",
   category_groups: "SELECT id, name, tombstone FROM category_groups",
   category_mapping: "SELECT id, transferId FROM category_mapping",
-  transactions: "SELECT id, isParent, isChild, acct, category, amount, description, notes, date, " +
+  transactions:
+    "SELECT id, isParent, isChild, acct, category, IFNULL(amount, 0), description, notes, date, " +
     "parent_id, transferred_id FROM transactions WHERE IFNULL(tombstone, 0) = 0 ORDER BY date, id",
 } as const
 

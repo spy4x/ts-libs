@@ -524,6 +524,14 @@ Deno.test("each lookup table with more rows than maxRows is refused whole, delet
   }
 })
 
+Deno.test("a transaction without an amount reads as 0, as Actual reads it", async () => {
+  const history = await parseActualBudget(
+    await exportOf(BUDGET + "UPDATE transactions SET amount = NULL WHERE id = 't1';"),
+  )
+  assertEquals(history.rowErrors, [])
+  assertEquals(history.entries.find((entry) => entry.sourceId === "t1")?.amount, 0)
+})
+
 Deno.test("the main entry imports no sql.js and no Actual Budget reader, and app-exports loads sql.js only when called", async () => {
   const seen = new Set<string>()
   const visit = async (url: URL) => {
