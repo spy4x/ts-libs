@@ -17,7 +17,7 @@ import type {
   ParsedHistory,
 } from "./history.ts"
 import {
-  checkRowCount,
+  DEFAULT_MAX_ROWS,
   quote,
   readIsoDate,
   StatementError,
@@ -74,9 +74,23 @@ const COLUMN_QUERIES = {
   preferences: "SELECT hidden FROM pragma_table_xinfo('preferences')",
 } as const
 
-const COUNT_QUERY = "SELECT COUNT(*) FROM transactions WHERE IFNULL(tombstone, 0) = 0"
-const CURRENCY_QUERY = "SELECT value FROM preferences WHERE id = 'defaultCurrencyCode'"
-const SCHEMA_QUERY = "SELECT type, name, sql FROM sqlite_master"
+/**
+ * The rows each query in {@link QUERIES} loads, counted before any is read: every row of a lookup
+ * table, deleted ones too, and the live transactions.
+ */
+const COUNT_QUERIES = {
+  accounts: "SELECT COUNT(*) FROM accounts",
+  payees: "SELECT COUNT(*) FROM payees",
+  payee_mapping: "SELECT COUNT(*) FROM payee_mapping",
+  categories: "SELECT COUNT(*) FROM categories",
+  category_groups: "SELECT COUNT(*) FROM category_groups",
+  category_mapping: "SELECT COUNT(*) FROM category_mapping",
+  transactions: "SELECT COUNT(*) FROM transactions WHERE IFNULL(tombstone, 0) = 0",
+} as const
+
+const CURRENCY_QUERY = "SELECT value FROM preferences WHERE id = 'defaultCurrencyCode' LIMIT 1"
+const SCHEMA_QUERY = "SELECT type, name, sql FROM sqlite_master WHERE name IN (" +
+  Object.keys(COLUMN_QUERIES).map((table) => `'${table}'`).join(", ") + ")"
 
 /** One SQLite value as sql.js returns it. */
 type SqlValue = number | string | Uint8Array | null
@@ -111,12 +125,17 @@ function loadSqlJs() {
  * fraction (¥1,500.50). `line` is the 1-based place of the transaction among the live ones, by
  * date and then id; `sourceId` is Actual's id.
  *
- * Throws a {@link StatementError}: `"too-large"` over `maxBytes`, `maxDatabaseBytes` or `maxRows`,
- * checked before the database opens or any transaction is read; `"malformed"` when the file is not
- * a zip, holds no `db.sqlite`, or that is not SQLite or lacks one of Actual's tables;
- * `"unsupported"` for a zip it does not read (encrypted, zip64), a table that is a view or computes
- * a column, or a budget without a currency when `currency` is not given. A `currency` that is not
- * an ISO 4217 code throws a `RangeError`.
+ * `maxRows` caps every table read, not only the live transactions: accounts, payees, categories,
+ * category groups and the two merge tables may each hold at most that many rows, deleted ones
+ * included (default 100,000; a real budget has a few thousand payees at most). Those tables are
+ * read whole, so this bounds the memory a crafted file can take.
+ *
+ * Throws a {@link StatementError}: `"too-large"` over `maxBytes` or `maxDatabaseBytes`, checked
+ * before the database opens, or over `maxRows` in any table, checked before any row is read;
+ * `"malformed"` when the file is not a zip, holds no `db.sqlite`, or that is not SQLite or lacks
+ * one of Actual's tables; `"unsupported"` for a zip it does not read (encrypted, zip64), a table
+ * that is a view or computes a column, or a budget without a currency when `currency` is not
+ * given. A `currency` that is not an ISO 4217 code throws a `RangeError`.
  */
 export async function parseActualBudget(
   zip: Uint8Array,
@@ -177,7 +196,16 @@ function readBudget(db: SqlDatabase, options: ActualBudgetOptions): ParsedHistor
   }
   // Actual stores hundredths whatever the currency.
   const decimals = currencyDecimals(currency)
-  checkRowCount(Number(rows(db, COUNT_QUERY)[0]?.[0] ?? 0), options.maxRows)
+  const maxRows = options.maxRows ?? DEFAULT_MAX_ROWS
+  for (const [table, sql] of Object.entries(COUNT_QUERIES)) {
+    const count = Number(rows(db, sql)[0]?.[0] ?? 0)
+    if (count > maxRows) {
+      throw new StatementError(
+        "too-large",
+        `${table} holds ${count} rows, over the limit of ${maxRows}`,
+      )
+    }
+  }
 
   const history: ParsedHistory = {
     accounts: [],

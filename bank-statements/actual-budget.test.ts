@@ -501,6 +501,29 @@ Deno.test("more live transactions than maxRows are refused whole, and deleted on
   assertEquals((await parseActualBudget(zip, { maxRows: 6 })).entries.length, 3)
 })
 
+Deno.test("each lookup table with more rows than maxRows is refused whole, deleted rows included", async () => {
+  // The budget's largest table is transactions, with six live rows, so maxRows 6 reads it.
+  const tables = {
+    accounts: true,
+    payees: true,
+    payee_mapping: false,
+    categories: true,
+    category_groups: true,
+    category_mapping: false,
+  }
+  for (const [table, hasTombstone] of Object.entries(tables)) {
+    const columns = hasTombstone ? "id, tombstone" : "id"
+    const values = hasTombstone ? "'extra' || i, 1" : "'extra' || i"
+    const zip = await exportOf(
+      BUDGET + `INSERT INTO ${table} (${columns})
+        WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 7)
+        SELECT ${values} FROM n;`,
+    )
+    const error = await refused(zip, "too-large", { maxRows: 6 })
+    assertEquals(error.message.split(" ")[0], table)
+  }
+})
+
 Deno.test("the main entry imports no sql.js and no Actual Budget reader, and app-exports loads sql.js only when called", async () => {
   const seen = new Set<string>()
   const visit = async (url: URL) => {
