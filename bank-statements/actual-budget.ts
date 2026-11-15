@@ -91,12 +91,12 @@ const COLUMN_QUERIES = {
 
 const CURRENCY_QUERY = "SELECT value FROM preferences WHERE id = 'defaultCurrencyCode' LIMIT 1"
 /**
- * The kind of each table read, as SQLite loaded it: a query uses that object, and `sqlite_master`
- * can hold a second row under the same name that SQLite skipped. One row per name.
+ * The schema rows of the tables read. SQLite matches names in any letter case, and the `LIMIT`
+ * stops one row past one per table: any more means a name is defined twice.
  */
-const SCHEMA_QUERY =
-  "SELECT name, type FROM pragma_table_list WHERE schema = 'main' AND name IN (" +
-  Object.keys(COLUMN_QUERIES).map((table) => `'${table}'`).join(", ") + ")"
+const SCHEMA_QUERY = "SELECT type, lower(name), sql FROM sqlite_master WHERE lower(name) IN (" +
+  Object.keys(COLUMN_QUERIES).map((table) => `'${table}'`).join(", ") +
+  `) LIMIT ${Object.keys(COLUMN_QUERIES).length + 1}`
 
 /** One SQLite value as sql.js returns it. */
 type SqlValue = number | string | Uint8Array | null
@@ -140,7 +140,7 @@ function loadSqlJs() {
  * Throws a {@link StatementError}: `"too-large"` over `maxBytes` or `maxDatabaseBytes`, checked
  * before the database opens, or over `maxRows` in any table, found when its read returns one row
  * past the limit; `"malformed"` when the file is not a zip, holds no `db.sqlite`, or that is not
- * SQLite or lacks one of Actual's tables; `"unsupported"` for a zip it does not read (encrypted,
+ * SQLite, or lacks one of Actual's tables or defines one twice; `"unsupported"` for a zip it does not read (encrypted,
  * zip64), a table that is a view or a virtual table or computes a column, or a budget without a
  * currency when `currency` is not given. A `currency` that is not an ISO 4217 code, or a `maxRows`
  * that is not a positive whole number, throws a `RangeError`.
@@ -398,20 +398,31 @@ function readBudget(
  * `preferences`, which budgets made before 2024 lack. Returns whether `preferences` is there.
  */
 function checkSchema(db: SqlDatabase): boolean {
-  const types = new Map(rows(db, SCHEMA_QUERY).map(([name, type]) => [text(name), text(type)]))
+  const objects = new Map<string, { type: string; sql: string }>()
+  for (const [type, name, sql] of rows(db, SCHEMA_QUERY)) {
+    // SQLite keeps the first row of a name and skips a later `CREATE TABLE IF NOT EXISTS`, so a
+    // second row could pass this check while a query reads the first.
+    if (objects.has(text(name))) {
+      throw new StatementError(
+        "malformed",
+        `not an Actual Budget database: ${text(name)} is defined twice`,
+      )
+    }
+    objects.set(text(name), { type: text(type), sql: text(sql) })
+  }
   for (const [table, columns] of Object.entries(COLUMN_QUERIES)) {
-    const type = types.get(table)
-    if (type === undefined) {
+    const object = objects.get(table)
+    if (!object) {
       if (table === "preferences") continue
       throw new StatementError("malformed", `not an Actual Budget database: no ${table} table`)
     }
-    // A virtual or shadow table runs a module's code on read.
-    if (type !== "table") {
+    // A virtual table runs a module's code on read; its schema row says "table" too.
+    if (object.type !== "table" || !/^create table/i.test(object.sql)) {
       throw new StatementError("unsupported", `${table} is not a plain table`)
     }
     if (rows(db, columns).some(([hidden]) => hidden === 2 || hidden === 3)) {
       throw new StatementError("unsupported", `${table} has a generated column`)
     }
   }
-  return types.has("preferences")
+  return objects.has("preferences")
 }

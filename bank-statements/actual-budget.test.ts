@@ -541,27 +541,29 @@ Deno.test("a table that is a view, a virtual table or computes a column is refus
   )
 })
 
-Deno.test("a view is refused even when a second schema row gives a table its name", async () => {
-  // SQLite loads the view first and skips the table, which only exists "IF NOT EXISTS".
-  const schema = SCHEMA.replace(
-    "CREATE TABLE payee_mapping (id TEXT PRIMARY KEY, targetId TEXT);",
-    `CREATE VIEW payee_mapping AS SELECT id, id AS targetId FROM payees;
-    CREATE TABLE decoy (id TEXT, targetId TEXT);
-    PRAGMA writable_schema = ON;
-    UPDATE sqlite_master SET name = 'payee_mapping', tbl_name = 'payee_mapping',
-      sql = 'CREATE TABLE IF NOT EXISTS payee_mapping (id TEXT, targetId TEXT)'
-      WHERE name = 'decoy';`,
-  )
-  const db = new SQL.Database(database("", schema))
-  try {
-    const types = db.exec("SELECT type FROM sqlite_master WHERE name = 'payee_mapping'")
-    assertEquals(types[0].values, [["view"], ["table"]])
-  } finally {
-    db.close()
+Deno.test("a table defined twice, in any letter case, is refused, so a view cannot hide behind a table", async () => {
+  for (const view of ["payee_mapping", "PAYEE_MAPPING"]) {
+    // SQLite loads the view first and skips the table, which only exists "IF NOT EXISTS".
+    const schema = SCHEMA.replace(
+      "CREATE TABLE payee_mapping (id TEXT PRIMARY KEY, targetId TEXT);",
+      `CREATE VIEW ${view} AS SELECT id, 'view' AS targetId FROM payees;
+      CREATE TABLE decoy (id TEXT, targetId TEXT);
+      PRAGMA writable_schema = ON;
+      UPDATE sqlite_master SET name = 'payee_mapping', tbl_name = 'payee_mapping',
+        sql = 'CREATE TABLE IF NOT EXISTS payee_mapping (id TEXT, targetId TEXT)'
+        WHERE name = 'decoy';`,
+    )
+    const db = new SQL.Database(database(`INSERT INTO payees (id) VALUES ('p');`, schema))
+    try {
+      const types = db.exec("SELECT type FROM sqlite_master WHERE lower(name) = 'payee_mapping'")
+      assertEquals(types[0].values, [["view"], ["table"]])
+      assertEquals(db.exec("SELECT targetId FROM payee_mapping")[0].values, [["view"]])
+    } finally {
+      db.close()
+    }
+    const error = await refused(exportOf("", 8, schema), "malformed", { currency: "EUR" })
+    assertEquals(error.message, "not an Actual Budget database: payee_mapping is defined twice")
   }
-  const zip = exportOf("", 8, schema)
-  const error = await refused(zip, "unsupported", { currency: "EUR" })
-  assertEquals(error.message, "payee_mapping is not a plain table")
 })
 
 Deno.test("a database whose tables lack a column Actual has is refused whole", async () => {
