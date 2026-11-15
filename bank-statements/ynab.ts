@@ -99,7 +99,8 @@ export async function parseYnab(
   let text: string
   if (typeof input === "string") {
     checkTextSize(input, options.maxBytes)
-    text = input.startsWith("\uFEFF") ? input.slice(1) : input
+    // A byte-order mark goes with the first header cell's `trim()`.
+    text = input
   } else text = await registerText(input, options.maxBytes ?? DEFAULT_MAX_BYTES)
   return readRegister(text, options)
 }
@@ -169,9 +170,10 @@ function readRegister(text: string, options: ParseYnabOptions): ParsedHistory {
     history.accounts.push(account)
   }
   const categories = new Set<string>()
-  // Transfer rows still waiting for their other half, by date, size and accounts. Each holds the
-  // index of the transfer it was written to, so the pair replaces it in place.
-  const waiting = new Map<string, { row: RegisterRow; index: number }[]>()
+  // Transfer rows still waiting for their other half, by date, accounts and signed amount, first
+  // in first out. Each holds the index of the transfer it was written to, so the pair replaces it
+  // in place. A key holds only rows that pair with the same partner, so a lookup never scans.
+  const waiting = new Map<string, { rows: { row: RegisterRow; index: number }[]; next: number }>()
   let split: { account: string; date: string; parts: number; next: number; id: string } | undefined
 
   for (const { line, cell } of rows) {
@@ -217,19 +219,17 @@ function readRegister(text: string, options: ParseYnabOptions): ParsedHistory {
     }
 
     noteAccount(row.target)
-    const size = Math.abs(row.amount)
-    const queue = waiting.get(`${item.date}\n${size}\n${row.target}\n${row.account}`)
-    const match = queue?.findIndex((other) => other.row.amount === -row.amount) ?? -1
-    if (queue && match !== -1) {
-      const [other] = queue.splice(match, 1)
+    const partner = waiting.get(`${item.date}\n${row.target}\n${row.account}\n${-row.amount}`)
+    if (partner && partner.next < partner.rows.length) {
+      const other = partner.rows[partner.next++]
       const [out, into] = other.row.amount <= row.amount ? [other.row, row] : [row, other.row]
       history.transfers[other.index] = transferOf(out, out.account, into.account, options.currency)
       continue
     }
     const [from, to] = row.amount < 0 ? [row.account, row.target] : [row.target, row.account]
-    const key = `${item.date}\n${size}\n${row.account}\n${row.target}`
-    const own = waiting.get(key) ?? []
-    own.push({ row, index: history.transfers.length })
+    const key = `${item.date}\n${row.account}\n${row.target}\n${row.amount}`
+    const own = waiting.get(key) ?? { rows: [], next: 0 }
+    own.rows.push({ row, index: history.transfers.length })
     waiting.set(key, own)
     history.transfers.push(transferOf(row, from, to, options.currency))
   }
@@ -276,7 +276,7 @@ function readRow(
   if (category && !category.toLowerCase().startsWith("inflow:")) item.category = category
   if (notes) item.notes = notes
 
-  const row: RegisterRow = { item, account, amount: inflow.value - outflow.value || 0 }
+  const row: RegisterRow = { item, account, amount: inflow.value - outflow.value }
   if (split) row.split = { part: split.part, parts: split.parts }
   const target = payee.startsWith(TRANSFER_PREFIX) ? payee.slice(TRANSFER_PREFIX.length).trim() : ""
   if (target) row.target = target

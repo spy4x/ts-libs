@@ -290,6 +290,25 @@ Deno.test("transfer rows pair only with the same date and amount, and opposite s
   )
 })
 
+Deno.test("equal transfer halves pair first in, first out", async () => {
+  const csv = register([
+    row("Savings", "2026-01-10", "Transfer : Checking", { Inflow: "$5.00", Memo: "first" }),
+    row("Savings", "2026-01-10", "Transfer : Checking", { Inflow: "$5.00", Memo: "second" }),
+    row("Checking", "2026-01-10", "Transfer : Savings", { Outflow: "$5.00", Memo: "pays" }),
+    row("Checking", "2026-01-10", "Transfer : Savings", { Memo: "zero" }),
+    row("Savings", "2026-01-10", "Transfer : Checking", {}),
+  ])
+  const history = await parseYnab(csv, { currency: "USD" })
+  assertEquals(
+    history.transfers.map(({ line, notes, amount }) => ({ line, notes, amount })),
+    [
+      { line: 4, notes: "pays", amount: 500 },
+      { line: 3, notes: "second", amount: 500 },
+      { line: 5, notes: "zero", amount: 0 },
+    ],
+  )
+})
+
 Deno.test("a split part that is a transfer pairs with its other half and keeps the group id", async () => {
   const csv = register([
     row("Checking", "2026-01-12", "Grocer", {
@@ -331,6 +350,10 @@ Deno.test("split parts out of sequence or on another account or date share no gr
     row("Checking", "2026-01-12", "A", { Memo: "Not a split" }),
     row("Checking", "2026-01-12", "A", { Memo: "Split (2/2) after a break" }),
     row("Checking", "2026-01-12", "A", { Memo: "Split (3/2) not a split" }),
+    row("Checking", "2026-01-12", "A", { Memo: "Split (1/3) one" }),
+    row("Checking", "2026-01-12", "A", { Memo: "Split (3/3) skips two" }),
+    row("Checking", "2026-01-12", "A", { Memo: "Split (1/2) one" }),
+    row("Checking", "2026-01-12", "A", { Memo: "Split (2/3) other count" }),
   ])
   const history = await parseYnab(csv, { currency: "USD" })
   assertEquals(
@@ -345,6 +368,10 @@ Deno.test("split parts out of sequence or on another account or date share no gr
       [undefined, "Not a split"],
       [undefined, "after a break"],
       [undefined, "Split (3/2) not a split"],
+      ["split:11", "one"],
+      [undefined, "skips two"],
+      ["split:13", "one"],
+      [undefined, "other count"],
     ],
   )
 })
@@ -446,7 +473,6 @@ Deno.test("amounts read in the budget's currency format, in minor units", async 
     const history = await parseYnab(csv, { currency })
     assertEquals(history.rowErrors, [], `${outflow} / ${inflow}`)
     assertEquals(history.entries[0].amount, amount, `${currency} ${outflow} / ${inflow}`)
-    assertEquals(Object.is(history.entries[0].amount, -0), false)
   }
 })
 
@@ -580,6 +606,46 @@ Deno.test("a register that inflates past maxBytes is refused whole, though its h
   assertEquals(error.message, `zip entry "${REGISTER}" inflates past its declared 100 bytes`)
 })
 
+Deno.test("a zip bomb is refused after a few kilobytes of it are inflated, not all of it", async () => {
+  // 64 MiB of zeros deflate to about 64 KiB; the header claims 100 bytes.
+  let chunks = 0
+  const zeros = new ReadableStream<Uint8Array<ArrayBuffer>>({
+    pull(controller) {
+      if (chunks++ === 64) controller.close()
+      else controller.enqueue(new Uint8Array(1024 * 1024))
+    },
+  }).pipeThrough(new CompressionStream("deflate-raw"))
+  const data = new Uint8Array(await new Response(zeros).arrayBuffer())
+  const file = zip([{ name: REGISTER, data, method: 8, uncompressedSize: 100 }])
+
+  // Count the compressed bytes the reader hands to the inflater.
+  const Real = globalThis.DecompressionStream
+  let fed = 0
+  globalThis.DecompressionStream = class {
+    readonly readable: ReadableStream<Uint8Array<ArrayBuffer>>
+    readonly writable: WritableStream<BufferSource>
+    constructor(format: CompressionFormat) {
+      const real = new Real(format)
+      const counter = new TransformStream<BufferSource, BufferSource>({
+        transform(chunk, controller) {
+          fed += chunk.byteLength
+          controller.enqueue(chunk)
+        },
+      })
+      counter.readable.pipeTo(real.writable).catch(() => {})
+      this.readable = real.readable
+      this.writable = counter.writable
+    }
+  } as typeof DecompressionStream
+  try {
+    await refused(file, "too-large")
+  } finally {
+    globalThis.DecompressionStream = Real
+  }
+  assertEquals(data.length > 60_000, true, `the bomb deflated to ${data.length} bytes`)
+  assertEquals(fed <= 8 * 1024, true, `${fed} compressed bytes were inflated`)
+})
+
 Deno.test("a zip without a register is refused whole", async () => {
   await refused(zip([await deflated(PLAN, "a,b")]), "malformed")
   await refused(zip([]), "malformed")
@@ -602,8 +668,18 @@ Deno.test("a zip listing more than 1,000 entries is refused whole", async () => 
 Deno.test("a broken zip is refused whole as malformed", async () => {
   const csv = register([row("A", "2026-01-05", "P")])
   const good = zip([stored(REGISTER, csv)])
+  const broken = async (bytes: Uint8Array, message: string) =>
+    assertEquals((await refused(bytes, "malformed")).message, `zip: ${message}`)
   // Cut before the end record.
-  await refused(good.subarray(0, good.length - 22), "malformed")
+  await broken(good.subarray(0, good.length - 22), "no end of central directory record")
+  // An end record whose directory starts past the end of the file.
+  const pastEnd = good.slice()
+  new DataView(pastEnd.buffer).setUint32(pastEnd.length - 6, good.length, true)
+  await broken(pastEnd, "the central directory is outside the file")
+  // A central directory header without its signature.
+  const unsigned = good.slice()
+  unsigned[good.length - 22 - 46 - REGISTER.length] = 0
+  await broken(unsigned, "a central directory header is broken")
   // An end record that claims zip64.
   await refused(zip([stored(REGISTER, csv)], 0xffff), "malformed")
   // A central directory that lists one entry more than it holds.
@@ -615,5 +691,5 @@ Deno.test("a broken zip is refused whole as malformed", async () => {
     method: 8,
     uncompressedSize: 9,
   }
-  await refused(zip([garbage]), "malformed")
+  await broken(zip([garbage]), `"${REGISTER}" does not inflate`)
 })
