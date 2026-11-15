@@ -34,6 +34,7 @@ parseWithProfile	function	@spy4x/bank-statements	Read CSV text with a profile.
 readStatement	function	@spy4x/bank-statements	Read a statement file of any supported format.
 statementProfile	constant	@spy4x/bank-statements	The arktype schema of StatementProfile, for a profile read from storage or an AI.
 verifyStatement	function	@spy4x/bank-statements	Check a statement against its own balances.
+DateOrder	type	@spy4x/bank-statements/app-exports	The order of day, month and year in a date: `30.12.2026` is `"dmy"`, `12/30/2026` `"mdy"`.
 HistoryAccount	interface	@spy4x/bank-statements/app-exports	One account the file names.
 HistoryAccountKind	type	@spy4x/bank-statements/app-exports	What an account is for.
 HistoryCategory	interface	@spy4x/bank-statements/app-exports	One category the file names.
@@ -42,6 +43,7 @@ HistoryItem	interface	@spy4x/bank-statements/app-exports	What an entry and a tra
 HistoryTransfer	interface	@spy4x/bank-statements/app-exports	Money moved between two of the household's accounts.
 ParsedHistory	interface	@spy4x/bank-statements/app-exports	What a reader got from one export file.
 parseFireflyIii	function	@spy4x/bank-statements/app-exports	Read Firefly III's transactions export.
+parseYnab	function	@spy4x/bank-statements/app-exports	Read YNAB's "Export budget": the zip (only its register is read; the plan is not), or the register CSV alone, as text or bytes.
 DEFAULT_SAMPLE_ROWS	constant	@spy4x/bank-statements/infer	How many lines a sample has by default.
 InferFailure	type	@spy4x/bank-statements/infer	Why no profile was found.
 InferredProfile	type	@spy4x/bank-statements/infer	A file that reads and verifies, and where the way to read it came from.
@@ -3271,4 +3273,4 @@ firstIssueMessage	function	@spy4x/validation/validate	First issue message in a v
 isArkErrors	function	@spy4x/validation/validate	Whether a value is an arktype rejection, without relying on `instanceof`.
 toValidationError	function	@spy4x/validation/validate	Build a ValidationError from arktype's issues.
 validate	function	@spy4x/validation/validate	Parse `value` with an arktype schema exactly once.
-# export surface: sha256 980bf9f4b8d90e1aac532d3121b30fe1223cf46ea569c8bbb2dec455fa0c150d
+# export surface: sha256 119063d1eab0b580a55036bae9df9d9df6d3d92003c0ba3fd9f5cab700f59fec
