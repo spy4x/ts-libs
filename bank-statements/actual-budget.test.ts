@@ -349,13 +349,15 @@ Deno.test("hundredths become fils of a three-decimal currency by multiplying, un
   assertEquals(history.rowErrors, [{ line: 1, reason: `amount ${2 ** 53 - 1} is too large` }])
 })
 
-Deno.test("a bad date, a non-integer amount and an unknown account are row errors", async () => {
+Deno.test("a bad or overlong date, a non-integer amount and an unknown account are row errors", async () => {
   const history = await parseActualBudget(
     await exportOf(
       BUDGET + `
       UPDATE transactions SET date = 20240231 WHERE id = 't1';
       UPDATE transactions SET amount = 12.5 WHERE id = 't2/1';
       UPDATE transactions SET acct = 'a3' WHERE id = 't2/2';
+      INSERT INTO transactions (id, acct, amount, description, date)
+        VALUES ('t8', 'a1', -100, 'p1', 202403011);
     `,
     ),
   )
@@ -363,6 +365,7 @@ Deno.test("a bad date, a non-integer amount and an unknown account are row error
     { line: 1, reason: `date "20240231" is not YYYYMMDD` },
     { line: 3, reason: `amount "12.5" is not a whole number of hundredths` },
     { line: 4, reason: `account "a3" is not in the budget` },
+    { line: 7, reason: `date "202403011" is not YYYYMMDD` },
   ])
   assertEquals(history.transfers.length, 1)
 })
@@ -397,8 +400,12 @@ Deno.test("an account or category named with over 10,000 characters is left out,
 })
 
 Deno.test("a file that is not a zip is refused whole", async () => {
-  await refused(new TextEncoder().encode("date,amount\n2024-03-01,1\n"), "malformed")
-  await refused(new Uint8Array(), "malformed")
+  for (const bytes of [new TextEncoder().encode("date,amount\n2024-03-01,1\n"), new Uint8Array()]) {
+    assertEquals(
+      (await refused(bytes, "malformed")).message,
+      "not a zip archive: no end of central directory",
+    )
+  }
 })
 
 Deno.test("a zip without db.sqlite is refused whole", async () => {
