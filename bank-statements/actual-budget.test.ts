@@ -589,6 +589,15 @@ Deno.test("a schema that spans interior pages reads like one on a single page", 
   )
 })
 
+Deno.test("a database of 65,536-byte pages, whose header stores the size as 1, reads", async () => {
+  const data = database(BUDGET, "PRAGMA page_size = 65536;" + SCHEMA)
+  assertEquals(new DataView(data.buffer).getUint16(16), 1)
+  assertEquals(
+    await parseActualBudget(await zipOf([{ name: "db.sqlite", data }])),
+    await parseActualBudget(await exportOf(BUDGET)),
+  )
+})
+
 Deno.test("a db.sqlite cut short inside its header or its first page is refused", async () => {
   const magic = new TextEncoder().encode("SQLite format 3\0")
   const header = new Uint8Array(100)
