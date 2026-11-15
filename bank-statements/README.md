@@ -4,8 +4,8 @@ Bank statements read into dated, signed amounts in minor units, and checked agai
 balances. Standard formats need nothing else: OFX and QFX, QIF, CAMT.053 and MT940. A bank's own
 CSV, or its PDF statement's text, is read through a profile, which describes its format as data, so
 a household's mapping, a built-in profile and an AI proposal all go through the same tested parser. A check that fails
-names the lines that do not add up. A household's history from another money app (Firefly III)
-reads into accounts, categories, entries and transfers. No UI and no storage.
+names the lines that do not add up. A household's history from another money app (Firefly III,
+Actual Budget) reads into accounts, categories, entries and transfers. No UI and no storage.
 
 ## Install
 
@@ -15,7 +15,10 @@ deno add jsr:@spy4x/bank-statements
 
 Runs on: shared — both the server and a browser bundle. Its sources use no `Deno.*` API. The
 `./pdf` entry runs pdf.js through [unpdf](https://github.com/unjs/unpdf); a bundle of it was run on
-Deno 2.9, Node 26 and Bun 1.4, and unpdf itself asks for Node 24 or later.
+Deno 2.9, Node 26 and Bun 1.4, and unpdf itself asks for Node 24 or later. `parseActualBudget`
+opens SQLite with [sql.js](https://github.com/sql-js/sql.js), its build with the WebAssembly
+inlined, so it reads no file and fetches nothing; it was run on Deno 2.9, Node 26 and Bun 1.4, and
+not yet in a browser.
 
 ## Modules
 
@@ -29,9 +32,10 @@ Usage is in the module doc, shown by `deno doc` and on JSR.
 - [`@spy4x/bank-statements/infer`](infer.ts): `inferProfile`, which asks a language model for a
   profile when no known one reads a file, `maskSample` and `profilePrompt`. The model is a port the
   app passes in, so this package sends nothing by itself.
-- [`@spy4x/bank-statements/app-exports`](app-exports.ts): `parseFireflyIii`, which reads
-  another money app's export into accounts, categories, entries and transfers (`ParsedHistory`).
-  Firefly III's transactions export today.
+- [`@spy4x/bank-statements/app-exports`](app-exports.ts): `parseFireflyIii` and
+  `parseActualBudget`, which read another money app's export into accounts, categories, entries
+  and transfers (`ParsedHistory`): Firefly III's transactions export and Actual Budget's
+  `Export data` zip. sql.js loads only when an Actual Budget export is read.
 
 ## Safety
 
@@ -39,7 +43,11 @@ An uploaded statement comes from a stranger. `maxBytes` (10 MiB) is checked befo
 `maxRows` (100,000) before any row is read; the XML formats refuse a DTD; OFX 1 is read by a
 linear tokenizer. A file refused whole throws `StatementError`; a row that does not read is a row
 error with its line, and a statement with one never verifies. An app export has the same limits,
-and a cell over 10,000 characters is a row error.
+and a cell over 10,000 characters is a row error. An Actual Budget zip may be 32 MiB and its
+database 128 MiB, checked against the zip's directory before inflating and enforced while
+inflating; an encrypted, zip64 or multi-disk zip is refused. The database is opened only after its
+SQLite header is checked, and read only by fixed queries, after the transaction count is checked
+against `maxRows` and every table read is checked to be a plain table without generated columns.
 
 A PDF is checked against `maxBytes` before pdf.js opens it, and against `maxPages` (50) before any
 page's text is read; the text read and the lines are capped too. pdf.js loads with
