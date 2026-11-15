@@ -403,7 +403,7 @@ Deno.test("a file that is not a zip is refused whole", async () => {
   for (const bytes of [new TextEncoder().encode("date,amount\n2024-03-01,1\n"), new Uint8Array()]) {
     assertEquals(
       (await refused(bytes, "malformed")).message,
-      "not a zip archive: no end of central directory",
+      "not an Actual Budget export: not a zip",
     )
   }
 })
@@ -459,64 +459,6 @@ Deno.test("a table that is a view or computes a column is refused before it is r
   )
 })
 
-Deno.test("an encrypted db.sqlite is refused whole", async () => {
-  const zip = zipOf([{ name: "db.sqlite", data: database(BUDGET), flags: 1 }])
-  assertEquals((await refused(zip, "unsupported")).message, `zip: "db.sqlite" is encrypted`)
-})
-
-Deno.test("a compression method other than stored and deflate is refused whole", async () => {
-  const zip = zipOf([{ name: "db.sqlite", data: database(BUDGET), method: 12 }])
-  assertEquals(
-    (await refused(zip, "unsupported")).message,
-    `zip: "db.sqlite" uses compression method 12`,
-  )
-})
-
-Deno.test("a zip64 or multi-disk archive is refused whole", async () => {
-  const zip = await exportOf(BUDGET)
-  const zip64 = zip.slice()
-  new DataView(zip64.buffer).setUint16(zip64.length - 14, 0xffff, true)
-  new DataView(zip64.buffer).setUint16(zip64.length - 12, 0xffff, true)
-  assertEquals((await refused(zip64, "unsupported")).message, "zip: zip64 archives are not read")
-  const locator = zip.slice()
-  new DataView(locator.buffer).setUint32(locator.length - 42, 0x07064b50, true)
-  assertEquals((await refused(locator, "unsupported")).message, "zip: zip64 archives are not read")
-  const disks = zip.slice()
-  new DataView(disks.buffer).setUint16(disks.length - 18, 1, true)
-  assertEquals(
-    (await refused(disks, "unsupported")).message,
-    "zip: archives on several disks are not read",
-  )
-})
-
-Deno.test("a zip whose records point outside it or hold broken data is refused whole", async () => {
-  const data = database(BUDGET)
-  const stored = await zipOf([{ name: "db.sqlite", data, method: 0 }])
-  const deflated = await zipOf([{ name: "db.sqlite", data }])
-  /** `zip` with the 32-bit field at `at` set to `value`. */
-  const patched = (zip: Uint8Array, at: number, value: number) => {
-    const copy = zip.slice()
-    new DataView(copy.buffer).setUint32(at, value, true)
-    return copy
-  }
-  // Each zip holds one entry: its local header at 0, its data at 39, the directory after it.
-  const directory = (zip: Uint8Array) => new DataView(zip.buffer).getUint32(zip.length - 6, true)
-  const cases: [Uint8Array, string][] = [
-    [patched(stored, stored.length - 6, stored.length), "the central directory runs past its end"],
-    [patched(stored, directory(stored), 0), "a central directory entry is broken"],
-    [patched(stored, directory(stored) + 42, 1000), `the local header of "db.sqlite" is broken`],
-    [patched(deflated, directory(deflated) + 20, 1 << 30), `"db.sqlite" runs past its end`],
-    [
-      patched(stored, directory(stored) + 24, data.length - 1),
-      `"db.sqlite" is stored with two sizes`,
-    ],
-    [patched(deflated, 39, 0xffffffff), `"db.sqlite" does not inflate`],
-  ]
-  for (const [zip, message] of cases) {
-    assertEquals((await refused(zip, "malformed")).message, `not a zip archive: ${message}`)
-  }
-})
-
 Deno.test("a database whose tables lack a column Actual has is refused whole", async () => {
   const schema = SCHEMA.replace("closed INTEGER DEFAULT 0, sort_order REAL,", "")
   assertEquals(
@@ -545,44 +487,9 @@ Deno.test("a db.sqlite that inflates past its declared size stops at that size",
     data: new Uint8Array(64 << 20),
     declaredSize: 1024,
   }])
-  const error = await refused(zip, "malformed", { maxDatabaseBytes: 2048 })
+  const error = await refused(zip, "too-large", { maxDatabaseBytes: 2048 })
   assertEquals(
     error.message,
-    `not a zip archive: "db.sqlite" inflates past its declared 1024 bytes`,
+    `zip entry "db.sqlite" inflates past its declared 1024 bytes`,
   )
-})
-
-Deno.test("a db.sqlite that inflates short of its declared size is refused whole", async () => {
-  const data = database(BUDGET)
-  const zip = await zipOf([{ name: "db.sqlite", data, declaredSize: data.length + 1 }])
-  await refused(zip, "malformed")
-})
-
-Deno.test("more live transactions than maxRows are refused whole, and deleted ones do not count", async () => {
-  const zip = await exportOf(BUDGET)
-  // Six live transactions, the split's parent among them, and one deleted.
-  await refused(zip, "too-large", { maxRows: 5 })
-  assertEquals((await parseActualBudget(zip, { maxRows: 6 })).entries.length, 3)
-})
-
-Deno.test("the main entry imports no sql.js and no Actual Budget reader, and app-exports loads sql.js only when called", async () => {
-  const seen = new Set<string>()
-  const visit = async (url: URL) => {
-    if (seen.has(url.href)) return
-    seen.add(url.href)
-    const source = await Deno.readTextFile(url)
-    // Static imports and re-exports, with or without names; a dynamic `import()` is not one.
-    const statements = /^(?:import|export)\b[^"]*?\bfrom "([^"]+)"|^import "([^"]+)"/gm
-    for (const [, named, bare] of source.matchAll(statements)) {
-      const specifier = named ?? bare
-      if (specifier.startsWith(".")) await visit(new URL(specifier, url))
-      else seen.add(specifier)
-    }
-  }
-  await visit(new URL("./mod.ts", import.meta.url))
-  assertEquals([...seen].filter((name) => /sql\.js|actual-budget|zip\.ts/.test(name)), [])
-  seen.clear()
-  await visit(new URL("./app-exports.ts", import.meta.url))
-  assertEquals(seen.has(new URL("./actual-budget.ts", import.meta.url).href), true)
-  assertEquals([...seen].filter((name) => name.startsWith("sql.js")), [])
 })

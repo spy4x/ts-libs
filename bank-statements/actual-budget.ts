@@ -23,7 +23,7 @@ import {
   StatementError,
   type StatementLimits,
 } from "./statement.ts"
-import { readZipEntry } from "./zip.ts"
+import { isZip, listZipEntries, readZipEntry } from "./zip.ts"
 
 /** Options of {@link parseActualBudget}. */
 export interface ActualBudgetOptions extends StatementLimits {
@@ -129,12 +129,14 @@ export async function parseActualBudget(
   if (zip.length > maxBytes) {
     throw new StatementError("too-large", `file is over ${maxBytes} bytes`)
   }
+  if (!isZip(zip)) throw new StatementError("malformed", "not an Actual Budget export: not a zip")
+  const entry = listZipEntries(zip).find((entry) => entry.name === `db.sqlite`)
+  if (!entry) throw new StatementError("malformed", "not an Actual Budget export: no db.sqlite")
   const file = await readZipEntry(
     zip,
-    "db.sqlite",
+    entry,
     options.maxDatabaseBytes ?? DEFAULT_MAX_DATABASE_BYTES,
   )
-  if (!file) throw new StatementError("malformed", "not an Actual Budget export: no db.sqlite")
   if (new TextDecoder().decode(file.subarray(0, SQLITE_MAGIC.length)) !== SQLITE_MAGIC) {
     throw new StatementError("malformed", "db.sqlite is not a SQLite database")
   }

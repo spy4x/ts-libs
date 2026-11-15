@@ -1,181 +1,191 @@
 /**
- * A small reader of one file in a zip archive, for app exports that come zipped. It reads the
- * central directory, never scans the data, and inflates with the web-standard
- * `DecompressionStream`. Internal: no entry point exports it.
+ * A minimal zip reader for app exports that come as a zip: it lists the entries from the central
+ * directory and reads one entry, stored or deflated. Internal to this package. Web standards only:
+ * deflate is `DecompressionStream("deflate-raw")`.
+ *
+ * The zip comes from a stranger, so every offset is checked against the bytes, and an entry is
+ * inflated only up to its declared size, which must fit `maxBytes`: the declared size is checked
+ * before inflating and the output is counted while inflating, because a hostile file can lie about
+ * it. Encrypted entries, zip64, archives split over several disks and compression methods other
+ * than stored (0) and deflate (8) are refused. CRC-32 is not checked: a corrupt entry reads as bad
+ * rows, not as a security problem.
  *
  * @module
  */
 
-import { quote, StatementError } from "./statement.ts"
+import { StatementError } from "./statement.ts"
 
-/** The end-of-central-directory record: its fixed part and its signature. */
-const EOCD_SIZE = 22
-const EOCD_SIGNATURE = 0x06054b50
-/** A zip64 end-of-central-directory locator, which sits right before the record. */
-const ZIP64_LOCATOR_SIGNATURE = 0x07064b50
-const ZIP64_LOCATOR_SIZE = 20
-const CENTRAL_SIZE = 46
-const CENTRAL_SIGNATURE = 0x02014b50
-const LOCAL_SIZE = 30
-const LOCAL_SIGNATURE = 0x04034b50
-/** How much compressed input the inflater gets at a time, so its output stays near the limit. */
-const INFLATE_CHUNK = 4096
+/** Most entries an archive may list. An app export holds a handful. */
+export const MAX_ZIP_ENTRIES = 1_000
+
+/** The signature a zip's first local file header starts with: `PK\x03\x04`. */
+const LOCAL_HEADER = 0x04034b50
+/** The signature of a central directory file header: `PK\x01\x02`. */
+const CENTRAL_HEADER = 0x02014b50
+/** The signature of the end of central directory record: `PK\x05\x06`. */
+const END_OF_DIRECTORY = 0x06054b50
+/** The end record's fixed size; a comment of at most 65,535 bytes may follow it. */
+const END_SIZE = 22
+const MAX_COMMENT = 0xffff
+/** How many compressed bytes go into the inflater at a time. */
+const INFLATE_SLICE = 1024
+
+/** One file the central directory lists. */
+export interface ZipEntry {
+  name: string
+  /** 0 stored, 8 deflate; others are refused before this point. */
+  method: number
+  compressedSize: number
+  /** What the archive claims the entry inflates to. Untrusted. */
+  uncompressedSize: number
+  /** Where the entry's local file header starts. */
+  localOffset: number
+}
+
+/** Whether `bytes` start like a zip archive: a local file header, or the end record of an empty one. */
+export function isZip(bytes: Uint8Array): boolean {
+  if (bytes.length < 4) return false
+  const signature = new DataView(bytes.buffer, bytes.byteOffset, 4).getUint32(0, true)
+  return signature === LOCAL_HEADER || signature === END_OF_DIRECTORY
+}
+
+function malformed(message: string): never {
+  throw new StatementError("malformed", `zip: ${message}`)
+}
 
 /**
- * The bytes of the entry `name` in the zip archive `zip`, or `undefined` when there is none.
- *
- * Throws a {@link StatementError}: `"malformed"` when `zip` is not a zip archive, a record runs
- * past its end, or the entry inflates to another size than the central directory declares;
- * `"unsupported"` for zip64, an archive on several disks, an encrypted entry or a compression
- * method other than stored (0) and deflate (8); `"too-large"` when the entry declares more than
- * `maxSize` bytes. Inflating stops as soon as the output passes the declared size, so an entry
- * that lies about its size never grows past `maxSize`.
+ * The entries `bytes` list in their central directory. Throws a {@link StatementError}: `"too-large"`
+ * over {@link MAX_ZIP_ENTRIES}, `"malformed"` for a broken or unsupported archive.
  */
-export async function readZipEntry(
-  zip: Uint8Array,
-  name: string,
-  maxSize: number,
-): Promise<Uint8Array | undefined> {
-  const view = new DataView(zip.buffer, zip.byteOffset, zip.byteLength)
-  const malformed = (why: string) => new StatementError("malformed", `not a zip archive: ${why}`)
-  const unsupported = (why: string) => new StatementError("unsupported", `zip: ${why}`)
-
-  // The record ends the file: its comment, at most 65,535 bytes, runs to the last byte.
-  let eocd = -1
-  const lowest = Math.max(0, zip.length - EOCD_SIZE - 0xffff)
-  for (let at = zip.length - EOCD_SIZE; at >= lowest; at--) {
-    if (
-      view.getUint32(at, true) === EOCD_SIGNATURE &&
-      at + EOCD_SIZE + view.getUint16(at + 20, true) === zip.length
-    ) {
-      eocd = at
+export function listZipEntries(bytes: Uint8Array): ZipEntry[] {
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength)
+  let end = -1
+  const lowest = Math.max(0, bytes.length - END_SIZE - MAX_COMMENT)
+  for (let at = bytes.length - END_SIZE; at >= lowest; at--) {
+    if (view.getUint32(at, true) === END_OF_DIRECTORY) {
+      end = at
       break
     }
   }
-  if (eocd === -1) throw malformed("no end of central directory")
-  if (
-    eocd >= ZIP64_LOCATOR_SIZE &&
-    view.getUint32(eocd - ZIP64_LOCATOR_SIZE, true) === ZIP64_LOCATOR_SIGNATURE
-  ) {
-    throw unsupported("zip64 archives are not read")
+  if (end === -1) malformed("no end of central directory record")
+  if (view.getUint16(end + 4, true) !== 0 || view.getUint16(end + 6, true) !== 0) {
+    malformed("archives split over several disks are not read")
   }
-  const disk = view.getUint16(eocd + 4, true)
-  const directoryDisk = view.getUint16(eocd + 6, true)
-  const entriesHere = view.getUint16(eocd + 8, true)
-  const entries = view.getUint16(eocd + 10, true)
-  const directorySize = view.getUint32(eocd + 12, true)
-  const directoryStart = view.getUint32(eocd + 16, true)
-  if (disk !== 0 || directoryDisk !== 0 || entriesHere !== entries) {
-    throw unsupported("archives on several disks are not read")
+  const count = view.getUint16(end + 10, true)
+  const size = view.getUint32(end + 12, true)
+  const offset = view.getUint32(end + 16, true)
+  if (count === 0xffff || size === 0xffffffff || offset === 0xffffffff) {
+    malformed("zip64 archives are not read")
   }
-  if (entries === 0xffff || directorySize === 0xffffffff || directoryStart === 0xffffffff) {
-    throw unsupported("zip64 archives are not read")
-  }
-  const directoryEnd = directoryStart + directorySize
-  if (directoryEnd > eocd) throw malformed("the central directory runs past its end")
-
-  const wanted = new TextEncoder().encode(name)
-  let at = directoryStart
-  for (let index = 0; index < entries; index++) {
-    if (at + CENTRAL_SIZE > directoryEnd || view.getUint32(at, true) !== CENTRAL_SIGNATURE) {
-      throw malformed("a central directory entry is broken")
-    }
-    const nameLength = view.getUint16(at + 28, true)
-    const next = at + CENTRAL_SIZE + nameLength + view.getUint16(at + 30, true) +
-      view.getUint16(at + 32, true)
-    if (next > directoryEnd) throw malformed("a central directory entry is broken")
-    const entryName = zip.subarray(at + CENTRAL_SIZE, at + CENTRAL_SIZE + nameLength)
-    if (entryName.length === wanted.length && entryName.every((byte, i) => byte === wanted[i])) {
-      return await readEntry(zip, view, at, directoryStart, maxSize, malformed, unsupported)
-    }
-    at = next
-  }
-  return undefined
-}
-
-/** The data of the entry whose central directory record starts at `record`. */
-async function readEntry(
-  zip: Uint8Array,
-  view: DataView,
-  record: number,
-  dataEnd: number,
-  maxSize: number,
-  malformed: (why: string) => StatementError,
-  unsupported: (why: string) => StatementError,
-): Promise<Uint8Array> {
-  const name = new TextDecoder().decode(
-    zip.subarray(record + CENTRAL_SIZE, record + CENTRAL_SIZE + view.getUint16(record + 28, true)),
-  )
-  const flags = view.getUint16(record + 8, true)
-  const method = view.getUint16(record + 10, true)
-  const compressedSize = view.getUint32(record + 20, true)
-  const size = view.getUint32(record + 24, true)
-  const local = view.getUint32(record + 42, true)
-  if (flags & 1) throw unsupported(`${quote(name)} is encrypted`)
-  if (compressedSize === 0xffffffff || size === 0xffffffff || local === 0xffffffff) {
-    throw unsupported("zip64 archives are not read")
-  }
-  if (method !== 0 && method !== 8) {
-    throw unsupported(`${quote(name)} uses compression method ${method}`)
-  }
-  if (size > maxSize) {
+  if (count > MAX_ZIP_ENTRIES) {
     throw new StatementError(
       "too-large",
-      `${quote(name)} is ${size} bytes, over the limit of ${maxSize}`,
+      `zip lists ${count} entries, over the limit of ${MAX_ZIP_ENTRIES}`,
     )
   }
-  if (local + LOCAL_SIZE > dataEnd || view.getUint32(local, true) !== LOCAL_SIGNATURE) {
-    throw malformed(`the local header of ${quote(name)} is broken`)
+  if (offset + size > end) malformed("the central directory is outside the file")
+
+  const names = new TextDecoder()
+  const entries: ZipEntry[] = []
+  let at = offset
+  for (let index = 0; index < count; index++) {
+    if (at + 46 > end || view.getUint32(at, true) !== CENTRAL_HEADER) {
+      malformed("a central directory header is broken")
+    }
+    const flags = view.getUint16(at + 8, true)
+    const method = view.getUint16(at + 10, true)
+    const nameLength = view.getUint16(at + 28, true)
+    const next = at + 46 + nameLength + view.getUint16(at + 30, true) +
+      view.getUint16(at + 32, true)
+    if (next > end) malformed("a central directory header is broken")
+    const name = names.decode(bytes.subarray(at + 46, at + 46 + nameLength))
+    if (flags & 1) malformed(`${JSON.stringify(name)} is encrypted`)
+    if (method !== 0 && method !== 8) {
+      malformed(`${JSON.stringify(name)} uses compression method ${method}; only 0 and 8 are read`)
+    }
+    const compressedSize = view.getUint32(at + 20, true)
+    const uncompressedSize = view.getUint32(at + 24, true)
+    const localOffset = view.getUint32(at + 42, true)
+    if (
+      compressedSize === 0xffffffff || uncompressedSize === 0xffffffff ||
+      localOffset === 0xffffffff
+    ) {
+      malformed("zip64 archives are not read")
+    }
+    entries.push({ name, method, compressedSize, uncompressedSize, localOffset })
+    at = next
   }
-  const start = local + LOCAL_SIZE + view.getUint16(local + 26, true) +
-    view.getUint16(local + 28, true)
-  const end = start + compressedSize
-  if (end > dataEnd) throw malformed(`${quote(name)} runs past its end`)
-  const data = zip.subarray(start, end)
-  if (method === 0) {
-    if (compressedSize !== size) throw malformed(`${quote(name)} is stored with two sizes`)
-    return data.slice()
-  }
-  return await inflate(data, size, name, malformed)
+  return entries
 }
 
 /**
- * `data` inflated as raw deflate, which must give exactly `size` bytes. Input goes in by
- * {@link INFLATE_CHUNK} bytes as the output is read, and reading stops once the output passes
- * `size`, so a lying entry costs at most `size` plus one chunk's output.
+ * The bytes of `entry`, at most `maxBytes` of them. Throws a {@link StatementError}: `"too-large"`
+ * when the entry declares more than `maxBytes` or inflates past its declared size, `"malformed"`
+ * when its data is outside the file or does not inflate.
  */
-async function inflate(
-  data: Uint8Array,
-  size: number,
-  name: string,
-  malformed: (why: string) => StatementError,
+export async function readZipEntry(
+  bytes: Uint8Array,
+  entry: ZipEntry,
+  maxBytes: number,
 ): Promise<Uint8Array> {
-  let offset = 0
-  const input = new ReadableStream<BufferSource>({
+  const tooLarge = () =>
+    new StatementError(
+      "too-large",
+      `zip entry ${JSON.stringify(entry.name)} is over ${maxBytes} bytes`,
+    )
+  if (entry.uncompressedSize > maxBytes) throw tooLarge()
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength)
+  const header = entry.localOffset
+  if (header + 30 > bytes.length || view.getUint32(header, true) !== LOCAL_HEADER) {
+    malformed(`the local header of ${JSON.stringify(entry.name)} is broken`)
+  }
+  const start = header + 30 + view.getUint16(header + 26, true) + view.getUint16(header + 28, true)
+  const data = bytes.subarray(start, start + entry.compressedSize)
+  if (data.length !== entry.compressedSize) {
+    malformed(`the data of ${JSON.stringify(entry.name)} is outside the file`)
+  }
+  // A stored entry is no bigger than the archive, which the caller has capped at `maxBytes`.
+  if (entry.method === 0) return data
+
+  // The declared size is the stranger's word: count the output and stop the moment it passes. The
+  // input goes in slices of INFLATE_SLICE bytes, pulled only when the output is read, since a
+  // runtime may inflate a whole input chunk before handing out any of it: deflate expands at most
+  // about 1,032 times, so one slice overshoots the limit by about 1 MiB at worst.
+  const limit = entry.uncompressedSize
+  const input = data.slice()
+  let fed = 0
+  const reader = new ReadableStream<Uint8Array<ArrayBuffer>>({
     pull(controller) {
-      if (offset >= data.length) return controller.close()
-      controller.enqueue(data.slice(offset, offset + INFLATE_CHUNK))
-      offset += INFLATE_CHUNK
+      if (fed >= input.length) return controller.close()
+      controller.enqueue(input.subarray(fed, fed + INFLATE_SLICE))
+      fed += INFLATE_SLICE
     },
-  }, { highWaterMark: 0 })
-  const reader = input.pipeThrough(new DecompressionStream("deflate-raw")).getReader()
-  const output = new Uint8Array(size)
-  let length = 0
+  }, { highWaterMark: 0 }).pipeThrough(new DecompressionStream("deflate-raw")).getReader()
+  const chunks: Uint8Array[] = []
+  let total = 0
   try {
-    for (;;) {
+    while (true) {
       const { done, value } = await reader.read()
       if (done) break
-      if (length + value.length > size) {
+      total += value.length
+      if (total > limit) {
         await reader.cancel().catch(() => {})
-        throw malformed(`${quote(name)} inflates past its declared ${size} bytes`)
+        throw new StatementError(
+          "too-large",
+          `zip entry ${JSON.stringify(entry.name)} inflates past its declared ${limit} bytes`,
+        )
       }
-      output.set(value, length)
-      length += value.length
+      chunks.push(value)
     }
   } catch (error) {
     if (error instanceof StatementError) throw error
-    throw malformed(`${quote(name)} does not inflate`)
+    malformed(`${JSON.stringify(entry.name)} does not inflate`)
   }
-  if (length !== size) throw malformed(`${quote(name)} inflates to ${length} bytes, not ${size}`)
-  return output
+  const out = new Uint8Array(total)
+  let offset = 0
+  for (const chunk of chunks) {
+    out.set(chunk, offset)
+    offset += chunk.length
+  }
+  return out
 }
