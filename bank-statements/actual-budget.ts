@@ -140,19 +140,15 @@ export async function parseActualBudget(
   }
 
   const { Database } = await loadSqlJs()
-  let db: SqlDatabase
+  let db: SqlDatabase | undefined
   try {
     db = new Database(file)
-  } catch {
-    throw new StatementError("malformed", "db.sqlite does not open")
-  }
-  try {
     return readBudget(db, options)
   } catch (error) {
-    if (error instanceof StatementError || error instanceof RangeError) throw error
+    if (error instanceof StatementError) throw error
     throw new StatementError("malformed", "db.sqlite is not an Actual Budget database")
   } finally {
-    db.close()
+    db?.close()
   }
 }
 
@@ -296,7 +292,11 @@ function readBudget(db: SqlDatabase, options: ActualBudgetOptions): ParsedHistor
 
     const other = row.transfer ? byId.get(row.transfer) : undefined
     const otherAccount = other?.transfer === row.id ? accounts.get(other.account) : undefined
-    const texts = [account, otherAccount ?? "", payee?.name ?? "", row.notes, category?.name ?? ""]
+    // A transfer whose other side is gone is paid to the account its payee stands for.
+    const payeeName = payee?.transferAccount
+      ? accounts.get(payee.transferAccount) ?? payee.name
+      : payee?.name ?? ""
+    const texts = [account, otherAccount ?? "", payeeName, row.notes, category?.name ?? ""]
     if (texts.some((value) => value.length > MAX_TEXT)) {
       fail(`a name or note is over ${MAX_TEXT} characters`)
       continue
@@ -317,10 +317,7 @@ function readBudget(db: SqlDatabase, options: ActualBudgetOptions): ParsedHistor
     }
 
     const entry: HistoryEntry = { ...item, account, amount, currency }
-    const payeeName = payee?.transferAccount
-      ? accounts.get(payee.transferAccount) ?? payee.name
-      : payee?.name
-    if (payeeName && payeeName.length <= MAX_TEXT) {
+    if (payeeName) {
       entry.payee = payeeName
       entry.description = payeeName
     }

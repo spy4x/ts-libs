@@ -415,6 +415,16 @@ Deno.test("a db.sqlite that is not SQLite is refused whole", async () => {
   assertEquals((await refused(zip, "malformed")).message, "db.sqlite is not a SQLite database")
 })
 
+Deno.test("a db.sqlite with SQLite's header and broken pages is refused whole", async () => {
+  const data = new Uint8Array(4096).fill(0xff)
+  data.set(new TextEncoder().encode("SQLite format 3\0"))
+  const zip = zipOf([{ name: "db.sqlite", data }])
+  assertEquals(
+    (await refused(zip, "malformed")).message,
+    "db.sqlite is not an Actual Budget database",
+  )
+})
+
 Deno.test("a SQLite database without Actual's tables is refused whole", async () => {
   const zip = exportOf("", 8, "CREATE TABLE notes (id TEXT);")
   assertEquals(
