@@ -114,7 +114,7 @@ export function parseFireflyIii(text: string, limits: StatementLimits = {}): Par
   const categories = new Set<string>()
 
   const noteAccount = (name: string, type: string, iban: string, currency: string) => {
-    const kind = ACCOUNT_KINDS[type] ?? "other"
+    const kind = Object.hasOwn(ACCOUNT_KINDS, type) ? ACCOUNT_KINDS[type] : "other"
     const key = `${kind}\n${name}`
     let account = accounts.get(key)
     if (!account) {

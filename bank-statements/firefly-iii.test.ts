@@ -325,6 +325,13 @@ Deno.test("an account in two currencies keeps no currency", () => {
   })
 })
 
+Deno.test("an account type named like an object property is other", () => {
+  const history = parseFireflyIii(exportOf([
+    { ...withdrawal, source_type: "constructor", destination_type: "__proto__" },
+  ]))
+  assertEquals(history.accounts.map((account) => account.kind), [`other`, `other`])
+})
+
 Deno.test("a withdrawal paid in another currency keeps the foreign amount, negative", () => {
   const history = parseFireflyIii(exportOf([{
     ...withdrawal,
