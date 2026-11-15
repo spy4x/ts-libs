@@ -79,7 +79,12 @@ const COLUMN_QUERIES = {
 } as const
 
 const CURRENCY_QUERY = "SELECT value FROM preferences WHERE id = 'defaultCurrencyCode' LIMIT 1"
-const SCHEMA_QUERY = "SELECT type, name, sql FROM sqlite_master WHERE name IN (" +
+/**
+ * The kind of each table read, as SQLite loaded it: a query uses that object, and `sqlite_master`
+ * can hold a second row under the same name that SQLite skipped. One row per name.
+ */
+const SCHEMA_QUERY =
+  "SELECT name, type FROM pragma_table_list WHERE schema = 'main' AND name IN (" +
   Object.keys(COLUMN_QUERIES).map((table) => `'${table}'`).join(", ") + ")"
 
 /** One SQLite value as sql.js returns it. */
@@ -125,9 +130,9 @@ function loadSqlJs() {
  * before the database opens, or over `maxRows` in any table, found when its read returns one row
  * past the limit; `"malformed"` when the file is not a zip, holds no `db.sqlite`, or that is not
  * SQLite or lacks one of Actual's tables; `"unsupported"` for a zip it does not read (encrypted,
- * zip64), a table that is a view or computes a column, or a budget without a currency when
- * `currency` is not given. A `currency` that is not an ISO 4217 code, or a `maxRows` that is not
- * a positive whole number, throws a `RangeError`.
+ * zip64), a table that is a view or a virtual table or computes a column, or a budget without a
+ * currency when `currency` is not given. A `currency` that is not an ISO 4217 code, or a `maxRows`
+ * that is not a positive whole number, throws a `RangeError`.
  */
 export async function parseActualBudget(
   zip: Uint8Array,
@@ -366,22 +371,20 @@ function readBudget(
  * `preferences`, which budgets made before 2024 lack. Returns whether `preferences` is there.
  */
 function checkSchema(db: SqlDatabase): boolean {
-  const objects = new Map<string, { type: string; sql: string }>()
-  for (const [type, name, sql] of rows(db, SCHEMA_QUERY)) {
-    objects.set(text(name), { type: text(type), sql: text(sql) })
-  }
+  const types = new Map(rows(db, SCHEMA_QUERY).map(([name, type]) => [text(name), text(type)]))
   for (const [table, columns] of Object.entries(COLUMN_QUERIES)) {
-    const object = objects.get(table)
-    if (!object) {
+    const type = types.get(table)
+    if (type === undefined) {
       if (table === "preferences") continue
       throw new StatementError("malformed", `not an Actual Budget database: no ${table} table`)
     }
-    if (object.type !== "table" || !/^create table/i.test(object.sql)) {
+    // A virtual or shadow table runs a module's code on read.
+    if (type !== "table") {
       throw new StatementError("unsupported", `${table} is not a plain table`)
     }
     if (rows(db, columns).some(([hidden]) => hidden === 2 || hidden === 3)) {
       throw new StatementError("unsupported", `${table} has a generated column`)
     }
   }
-  return objects.has("preferences")
+  return types.has("preferences")
 }
