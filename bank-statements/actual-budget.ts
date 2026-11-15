@@ -91,10 +91,10 @@ const COLUMN_QUERIES = {
 
 const CURRENCY_QUERY = "SELECT value FROM preferences WHERE id = 'defaultCurrencyCode' LIMIT 1"
 /**
- * The schema rows of the tables read. SQLite matches names in any letter case, and the `LIMIT`
- * stops one row past one per table: any more means a name is defined twice.
+ * The SQL that SQLite builds each table read from. It matches names in any letter case, and the
+ * `LIMIT` stops one row past one per table: any more means a name is defined twice.
  */
-const SCHEMA_QUERY = "SELECT type, lower(name), sql FROM sqlite_master WHERE lower(name) IN (" +
+const SCHEMA_QUERY = "SELECT lower(name), sql FROM sqlite_master WHERE lower(name) IN (" +
   Object.keys(COLUMN_QUERIES).map((table) => `'${table}'`).join(", ") +
   `) LIMIT ${Object.keys(COLUMN_QUERIES).length + 1}`
 
@@ -398,8 +398,8 @@ function readBudget(
  * `preferences`, which budgets made before 2024 lack. Returns whether `preferences` is there.
  */
 function checkSchema(db: SqlDatabase): boolean {
-  const objects = new Map<string, { type: string; sql: string }>()
-  for (const [type, name, sql] of rows(db, SCHEMA_QUERY)) {
+  const objects = new Map<string, string>()
+  for (const [name, sql] of rows(db, SCHEMA_QUERY)) {
     // SQLite keeps the first row of a name and skips a later `CREATE TABLE IF NOT EXISTS`, so a
     // second row could pass this check while a query reads the first.
     if (objects.has(text(name))) {
@@ -408,16 +408,17 @@ function checkSchema(db: SqlDatabase): boolean {
         `not an Actual Budget database: ${text(name)} is defined twice`,
       )
     }
-    objects.set(text(name), { type: text(type), sql: text(sql) })
+    objects.set(text(name), text(sql))
   }
   for (const [table, columns] of Object.entries(COLUMN_QUERIES)) {
-    const object = objects.get(table)
-    if (!object) {
+    const sql = objects.get(table)
+    if (sql === undefined) {
       if (table === "preferences") continue
       throw new StatementError("malformed", `not an Actual Budget database: no ${table} table`)
     }
-    // A virtual table runs a module's code on read; its schema row says "table" too.
-    if (object.type !== "table" || !/^create table/i.test(object.sql)) {
+    // A view's SQL starts `CREATE VIEW`, and a virtual table, which runs a module's code on read,
+    // `CREATE VIRTUAL TABLE`.
+    if (!/^create table/i.test(sql)) {
       throw new StatementError("unsupported", `${table} is not a plain table`)
     }
     if (rows(db, columns).some(([hidden]) => hidden === 2 || hidden === 3)) {
