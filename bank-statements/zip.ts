@@ -27,6 +27,8 @@ const END_OF_DIRECTORY = 0x06054b50
 /** The end record's fixed size; a comment of at most 65,535 bytes may follow it. */
 const END_SIZE = 22
 const MAX_COMMENT = 0xffff
+/** How many compressed bytes go into the inflater at a time. */
+const INFLATE_SLICE = 1024
 
 /** One file the central directory lists. */
 export interface ZipEntry {
@@ -145,12 +147,20 @@ export async function readZipEntry(
   // A stored entry is no bigger than the archive, which the caller has capped at `maxBytes`.
   if (entry.method === 0) return data
 
-  // The declared size is the stranger's word: count the output and stop the moment it passes.
+  // The declared size is the stranger's word: count the output and stop the moment it passes. The
+  // input goes in slices of INFLATE_SLICE bytes, pulled only when the output is read, since a
+  // runtime may inflate a whole input chunk before handing out any of it: deflate expands at most
+  // about 1,032 times, so one slice overshoots the limit by about 1 MiB at worst.
   const limit = entry.uncompressedSize
-  const reader = new Blob([data.slice()]).stream().pipeThrough(
-    new DecompressionStream("deflate-raw"),
-  )
-    .getReader()
+  const input = data.slice()
+  let fed = 0
+  const reader = new ReadableStream<Uint8Array<ArrayBuffer>>({
+    pull(controller) {
+      if (fed >= input.length) return controller.close()
+      controller.enqueue(input.subarray(fed, fed + INFLATE_SLICE))
+      fed += INFLATE_SLICE
+    },
+  }, { highWaterMark: 0 }).pipeThrough(new DecompressionStream("deflate-raw")).getReader()
   const chunks: Uint8Array[] = []
   let total = 0
   try {
