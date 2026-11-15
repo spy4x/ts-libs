@@ -55,16 +55,27 @@ const SQLITE_MAGIC = "SQLite format 3\0"
  * is missing refuses the file.
  */
 const QUERIES = {
-  accounts: "SELECT id, name, tombstone FROM accounts ORDER BY sort_order, id",
+  accounts: "SELECT id, name, tombstone, sort_order FROM accounts",
   payees: "SELECT id, name, transfer_acct, tombstone FROM payees",
   payee_mapping: "SELECT id, targetId FROM payee_mapping",
-  categories: "SELECT id, name, cat_group, tombstone FROM categories ORDER BY sort_order, id",
+  categories: "SELECT id, name, cat_group, tombstone, sort_order FROM categories",
   category_groups: "SELECT id, name, tombstone FROM category_groups",
   category_mapping: "SELECT id, transferId FROM category_mapping",
   transactions:
     "SELECT id, isParent, isChild, acct, category, IFNULL(amount, 0), description, notes, date, " +
-    "parent_id, transferred_id FROM transactions WHERE IFNULL(tombstone, 0) = 0 ORDER BY date, id",
+    "parent_id, transferred_id FROM transactions WHERE IFNULL(tombstone, 0) = 0",
 } as const
+
+/**
+ * The columns, by place in its query, that {@link readTable} sorts a table's rows by, as Actual
+ * lists them: by `sort_order`, or by `date`, then by `id`. The sort runs in JS on the rows read,
+ * since an `ORDER BY` makes SQLite look at every row of the table to find the first ones.
+ */
+const ORDER: { [table in keyof typeof QUERIES]?: number[] } = {
+  accounts: [3, 0],
+  categories: [4, 0],
+  transactions: [8, 0],
+}
 
 /** Each table's columns, by a fixed query, to find a generated column, which runs code on read. */
 const COLUMN_QUERIES = {
@@ -181,16 +192,32 @@ function rows(db: SqlDatabase, sql: string): SqlValue[][] {
 }
 
 /**
- * The rows of `table`, read by its query in {@link QUERIES} with a `LIMIT` one past `maxRows`. A
- * count would not do: SQLite counts through an index, and the file brings its own, which may list
- * none of the rows. Throws `"too-large"` when the read returns more than `maxRows` rows.
+ * The rows of `table`, read by its query in {@link QUERIES} with a `LIMIT` one past `maxRows`, then
+ * sorted as {@link ORDER} says. A count would not do: SQLite counts through an index, and the file
+ * brings its own, which may list none of the rows. Throws `"too-large"` when the read returns more
+ * than `maxRows` rows.
  */
 function readTable(db: SqlDatabase, table: keyof typeof QUERIES, maxRows: number): SqlValue[][] {
   const result = rows(db, `${QUERIES[table]} LIMIT ${maxRows + 1}`)
   if (result.length > maxRows) {
     throw new StatementError("too-large", `${table} holds more than ${maxRows} rows`)
   }
+  const keys = ORDER[table]
+  if (keys) result.sort((a, b) => keys.reduce((order, key) => order || compare(a[key], b[key]), 0))
   return result
+}
+
+/**
+ * SQLite's order of two values: null, then numbers, then text, then blobs, which keep their read
+ * order. Text is compared by UTF-16 code unit, which differs from SQLite's UTF-8 bytes only past
+ * U+FFFF; Actual's ids are ASCII.
+ */
+function compare(a: SqlValue, b: SqlValue): number {
+  if (typeof a === "number" && typeof b === "number") return a < b ? -1 : a > b ? 1 : 0
+  if (typeof a === "string" && typeof b === "string") return a < b ? -1 : a > b ? 1 : 0
+  const rank = (value: SqlValue) =>
+    value === null ? 0 : typeof value === "number" ? 1 : typeof value === "string" ? 2 : 3
+  return rank(a) - rank(b)
 }
 
 /** A cell as text: `""` for null, a number written out, and a blob as nothing. */

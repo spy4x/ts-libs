@@ -285,6 +285,34 @@ Deno.test("deleted rows are skipped: transactions, accounts, categories, payees 
   assertEquals(history.entries.at(-1)?.description, "")
 })
 
+Deno.test("accounts, categories and transactions come in Actual's order, not the order the file stores them in", async () => {
+  const history = await parseActualBudget(
+    await exportOf(
+      BUDGET + `
+      INSERT INTO accounts (id, name, sort_order) VALUES
+        ('a9', 'Wallet', NULL), ('a0', 'Cash', 1), ('a8', 'Card', 'last');
+      INSERT INTO categories (id, name, cat_group, sort_order) VALUES
+        ('c9', 'Tea', 'g1', NULL), ('c0', 'Bread', 'g1', 1);
+      INSERT INTO transactions (id, acct, amount, description, date) VALUES
+        ('t0', 'a1', -100, 'p1', 20240302), ('t00', 'a1', -100, 'p1', 20240229);
+    `,
+    ),
+  )
+  // Null first, then numbers, then text, as SQLite orders them; a tie goes to the lower id.
+  assertEquals(
+    history.accounts.map(({ name }) => name),
+    ["Wallet", "Cash", "Checking", "Savings", "Card"],
+  )
+  assertEquals(
+    history.categories.map(({ name }) => name),
+    ["Tea", "Bread", "Groceries", "Restaurants", "Rent"],
+  )
+  assertEquals(
+    history.entries.map(({ sourceId, line }) => [sourceId, line]),
+    [["t00", 1], ["t1", 2], ["t0", 3], ["t2/1", 5], ["t2/2", 6]],
+  )
+})
+
 Deno.test("a merged payee and a merged category read as the ones they were merged into", async () => {
   const history = await parseActualBudget(await exportOf(BUDGET))
   const merged = history.entries.find(({ sourceId }) => sourceId === "t2/2")
