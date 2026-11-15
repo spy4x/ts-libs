@@ -23,6 +23,7 @@ import {
   StatementError,
   type StatementLimits,
 } from "./statement.ts"
+import { checkSchemaSize } from "./sqlite-schema.ts"
 import { isZip, listZipEntries, readZipEntry } from "./zip.ts"
 
 /** Options of {@link parseActualBudget}. */
@@ -138,9 +139,10 @@ function loadSqlJs() {
  * indexes claim.
  *
  * Throws a {@link StatementError}: `"too-large"` over `maxBytes` or `maxDatabaseBytes`, checked
- * before the database opens, or over `maxRows` in any table, found when its read returns one row
- * past the limit; `"malformed"` when the file is not a zip, holds no `db.sqlite`, or that is not
- * SQLite, or lacks one of Actual's tables or defines one twice; `"unsupported"` for a zip it does not read (encrypted,
+ * before the database opens, or over 1,000 tables, indexes, views and triggers, counted in the
+ * file's bytes before SQLite loads them, or over `maxRows` in any table, found when its read returns
+ * one row past the limit; `"malformed"` when the file is not a zip, holds no `db.sqlite`, or that is
+ * not SQLite or has broken schema pages, or lacks one of Actual's tables or defines one twice; `"unsupported"` for a zip it does not read (encrypted,
  * zip64), a table that is a view or a virtual table or computes a column, or a budget without a
  * currency when `currency` is not given. A `currency` that is not an ISO 4217 code, or a `maxRows`
  * that is not a positive whole number, throws a `RangeError`.
@@ -172,6 +174,8 @@ export async function parseActualBudget(
   if (new TextDecoder().decode(file.subarray(0, SQLITE_MAGIC.length)) !== SQLITE_MAGIC) {
     throw new StatementError("malformed", "db.sqlite is not a SQLite database")
   }
+  // SQLite loads the whole schema on open, before any check below can run.
+  checkSchemaSize(file)
 
   const { Database } = await loadSqlJs()
   let db: SqlDatabase | undefined

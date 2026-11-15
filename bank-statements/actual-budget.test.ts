@@ -1,6 +1,7 @@
 import { assertEquals, assertRejects, assertThrows } from "@std/assert"
 import initSqlJs from "sql.js/dist/sql-wasm-inline.js"
 import { parseActualBudget } from "./app-exports.ts"
+import { MAX_SCHEMA_ENTRIES, MAX_SCHEMA_PAGES } from "./sqlite-schema.ts"
 import { StatementError } from "./statement.ts"
 
 /** Actual Budget's tables, cut to the columns the reader uses and a few it does not. */
@@ -64,6 +65,64 @@ function database(sql: string, schema = SCHEMA): Uint8Array {
   } finally {
     db.close()
   }
+}
+
+/** The page size sql.js writes. */
+const PAGE = 4096
+
+/** How many rows `sqlite_master` has once `schema` runs. */
+function schemaEntries(schema: string): number {
+  const db = new SQL.Database()
+  try {
+    db.run(schema)
+    return Number(db.exec("SELECT count(*) FROM sqlite_master")[0].values[0][0])
+  } finally {
+    db.close()
+  }
+}
+
+/**
+ * The budget, with 40 views of long SQL besides its tables, so `sqlite_master` spans several leaf
+ * pages under an interior page 1.
+ */
+function interiorSchema(): Uint8Array {
+  const views = Array.from(
+    { length: 40 },
+    (_, index) => `CREATE VIEW long${index} AS SELECT '${"x".repeat(400)}' AS x;`,
+  )
+  return database(BUDGET, SCHEMA + views.join(""))
+}
+
+/**
+ * A SQLite file of 512-byte pages, page 1 first: a number is a leaf page with that many entries, a
+ * list an interior page whose children are those pages, the last one right-most. Only what the
+ * schema walk reads is written.
+ */
+function schemaTree(pages: (number | number[])[]): Uint8Array {
+  const size = 512
+  const file = new Uint8Array(pages.length * size)
+  file.set(new TextEncoder().encode("SQLite format 3\0"))
+  const view = new DataView(file.buffer)
+  view.setUint16(16, size)
+  pages.forEach((page, index) => {
+    const start = index * size
+    const header = start + (index === 0 ? 100 : 0)
+    if (typeof page === "number") {
+      file[header] = 0x0d
+      view.setUint16(header + 3, page)
+      return
+    }
+    file[header] = 0x05
+    view.setUint16(header + 3, page.length - 1)
+    view.setUint32(header + 8, page[page.length - 1])
+    page.slice(0, -1).forEach((child, cell) => {
+      // Each cell is its child's number and a 1-byte key, packed from the page's end.
+      const offset = size - 5 * (cell + 1)
+      view.setUint32(start + offset, child)
+      view.setUint16(header + 12 + 2 * cell, offset)
+    })
+  })
+  return file
 }
 
 /** One file in a test zip, with what its records may claim about it. */
@@ -497,13 +556,94 @@ Deno.test("a db.sqlite that is not SQLite is refused whole", async () => {
   assertEquals((await refused(zip, "malformed")).message, "db.sqlite is not a SQLite database")
 })
 
-Deno.test("a db.sqlite with SQLite's header and broken pages is refused whole", async () => {
-  const data = new Uint8Array(4096).fill(0xff)
-  data.set(new TextEncoder().encode("SQLite format 3\0"))
+Deno.test("a db.sqlite whose table page is broken is refused whole", async () => {
+  const data = database(BUDGET)
+  // Page 2 is the root of the first table, accounts.
+  data.fill(0xff, PAGE, 2 * PAGE)
   const zip = zipOf([{ name: "db.sqlite", data }])
   assertEquals(
     (await refused(zip, "malformed")).message,
     "db.sqlite is not an Actual Budget database",
+  )
+})
+
+Deno.test("a schema of up to 1,000 entries reads, and one more is refused before SQLite loads it", async () => {
+  const entries = schemaEntries(SCHEMA)
+  const views = (count: number) =>
+    Array.from({ length: count }, (_, index) => `CREATE VIEW v${index} AS SELECT 1;`).join("")
+  const atCap = await exportOf(BUDGET, 8, SCHEMA + views(MAX_SCHEMA_ENTRIES - entries))
+  assertEquals((await parseActualBudget(atCap)).entries.length, 3)
+  const overCap = exportOf(BUDGET, 8, SCHEMA + views(MAX_SCHEMA_ENTRIES - entries + 1))
+  assertEquals(
+    (await refused(overCap, "too-large")).message,
+    "db.sqlite has more than 1000 tables, indexes, views and triggers",
+  )
+})
+
+Deno.test("a schema that spans interior pages reads like one on a single page", async () => {
+  const data = interiorSchema()
+  assertEquals(data[100], 0x05)
+  assertEquals(
+    await parseActualBudget(await zipOf([{ name: "db.sqlite", data }])),
+    await parseActualBudget(await exportOf(BUDGET)),
+  )
+})
+
+Deno.test("a schema page pointer that is 0, past the file or back to page 1, a bad page type or a cell outside its page is refused", async () => {
+  const data = interiorSchema()
+  const view = new DataView(data.buffer)
+  const pages = data.length / PAGE
+  const rightChild = view.getUint32(108)
+  const cases: [(file: DataView) => void, string][] = [
+    [(file) => file.setUint32(108, 0), "schema page 0 is not in the file"],
+    [(file) => file.setUint32(108, pages + 1), `schema page ${pages + 1} is not in the file`],
+    [(file) => file.setUint32(108, 1), "schema page 1 is reached twice"],
+    [
+      (file) => file.setUint8((rightChild - 1) * PAGE, 0x02),
+      `schema page ${rightChild} has type 2`,
+    ],
+    [(file) => file.setUint16(112, PAGE - 2), "a cell of schema page 1 is outside the page"],
+    [(file) => file.setUint16(16, 1000), "page size 1000 is not a power of two"],
+  ]
+  for (const [patch, reason] of cases) {
+    const broken = data.slice()
+    patch(new DataView(broken.buffer))
+    const error = await refused(zipOf([{ name: "db.sqlite", data: broken }]), "malformed")
+    assertEquals(
+      error.message.startsWith(`db.sqlite is not a valid SQLite database: ${reason}`),
+      true,
+      error.message,
+    )
+  }
+})
+
+Deno.test("a schema deeper than 20 pages is refused, and one 20 deep is walked", async () => {
+  // Page n points to page n + 1; the last page is an empty leaf.
+  const chain = (depth: number) =>
+    schemaTree([...Array.from({ length: depth - 1 }, (_, index) => [index + 2]), 0])
+  const deep = await refused(zipOf([{ name: "db.sqlite", data: chain(21) }]), "malformed")
+  assertEquals(
+    deep.message,
+    "db.sqlite is not a valid SQLite database: the schema is more than 20 pages deep",
+  )
+  const walked = await refused(zipOf([{ name: "db.sqlite", data: chain(20) }]), "malformed")
+  assertEquals(walked.message, "db.sqlite is not an Actual Budget database")
+})
+
+Deno.test("a schema spread over more than 2,000 pages is refused, even when they hold no entries", async () => {
+  // Page 1 points to 29 interior pages, each to 70 empty leaves.
+  const interior = Array.from(
+    { length: 29 },
+    (_, index) => Array.from({ length: 70 }, (_, leaf) => 31 + 70 * index + leaf),
+  )
+  const data = schemaTree([
+    Array.from({ length: 29 }, (_, index) => index + 2),
+    ...interior,
+    ...Array.from({ length: 29 * 70 }, () => 0),
+  ])
+  assertEquals(
+    (await refused(zipOf([{ name: "db.sqlite", data }]), "too-large")).message,
+    `db.sqlite's schema spans more than ${MAX_SCHEMA_PAGES} pages`,
   )
 })
 
