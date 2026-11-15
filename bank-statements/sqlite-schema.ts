@@ -39,10 +39,13 @@ const LEAF_TABLE = 0x0d
 const INTERIOR_TABLE = 0x05
 
 /**
- * Throws unless `file`'s schema has at most {@link MAX_SCHEMA_ENTRIES} entries: `"too-large"` past
- * that or past {@link MAX_SCHEMA_PAGES} pages, `"malformed"` when its pages are inconsistent. Only
- * page headers and the child pointers of interior pages are read, each page at most once, so the
- * walk reads at most {@link MAX_SCHEMA_PAGES} pages and one child pointer per page it visits.
+ * Throws unless `file`'s schema has at most {@link MAX_SCHEMA_ENTRIES} entries holding at most
+ * {@link MAX_SCHEMA_BYTES} together: `"too-large"` past either or past {@link MAX_SCHEMA_PAGES}
+ * pages, `"malformed"` when its pages are inconsistent. The walk reads page headers, the child
+ * pointers of interior pages and the payload-size field (at most 9 bytes) of each leaf cell, never
+ * a cell's content or an overflow page. Each page is read at most once, so it reads at most
+ * {@link MAX_SCHEMA_PAGES} pages, one child pointer per page it visits, and
+ * {@link MAX_SCHEMA_ENTRIES} size fields, since a leaf's cells are counted before they are read.
  * `file` starts with SQLite's 16-byte magic, checked by the caller.
  */
 export function checkSchemaSize(file: Uint8Array): void {
@@ -76,6 +79,14 @@ export function checkSchemaSize(file: Uint8Array): void {
     const pointers = header + (type === LEAF_TABLE ? 8 : 12)
     if (pointers + 2 * cells > start + usable) fail(`schema page ${page} lists too many cells`)
     if (type === LEAF_TABLE) {
+      // Counted before the cells are read, so the walk reads at most MAX_SCHEMA_ENTRIES cells.
+      entries += cells
+      if (entries > MAX_SCHEMA_ENTRIES) {
+        throw new StatementError(
+          "too-large",
+          `db.sqlite has more than ${MAX_SCHEMA_ENTRIES} tables, indexes, views and triggers`,
+        )
+      }
       // Each cell starts with its payload size, a varint of at most 9 bytes: one schema row's SQL.
       for (let cell = 0; cell < cells; cell++) {
         const offset = view.getUint16(pointers + 2 * cell)
@@ -94,13 +105,6 @@ export function checkSchemaSize(file: Uint8Array): void {
             `db.sqlite's schema holds more than ${MAX_SCHEMA_BYTES} bytes of SQL`,
           )
         }
-      }
-      entries += cells
-      if (entries > MAX_SCHEMA_ENTRIES) {
-        throw new StatementError(
-          "too-large",
-          `db.sqlite has more than ${MAX_SCHEMA_ENTRIES} tables, indexes, views and triggers`,
-        )
       }
       return
     }
