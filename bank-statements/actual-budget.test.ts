@@ -571,7 +571,10 @@ Deno.test("the main entry imports no sql.js and no Actual Budget reader, and app
     if (seen.has(url.href)) return
     seen.add(url.href)
     const source = await Deno.readTextFile(url)
-    for (const [, specifier] of source.matchAll(/^(?:import|export)\b[^"]*?\bfrom "([^"]+)"/gm)) {
+    // Static imports and re-exports, with or without names; a dynamic `import()` is not one.
+    const statements = /^(?:import|export)\b[^"]*?\bfrom "([^"]+)"|^import "([^"]+)"/gm
+    for (const [, named, bare] of source.matchAll(statements)) {
+      const specifier = named ?? bare
       if (specifier.startsWith(".")) await visit(new URL(specifier, url))
       else seen.add(specifier)
     }
