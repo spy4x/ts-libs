@@ -46,8 +46,8 @@ error with its line, and a statement with one never verifies. An app export has 
 and a cell over 10,000 characters is a row error. An Actual Budget zip may be 32 MiB and its
 database 128 MiB, checked against the zip's directory before inflating and enforced while
 inflating; an encrypted, zip64 or multi-disk zip is refused. The database is opened only after its
-SQLite header is checked, and read only by fixed queries, after the transaction count is checked
-against `maxRows` and every table read is checked to be a plain table without generated columns.
+SQLite header is checked, and read only by fixed queries, after every table read is checked to be a
+plain table without generated columns and to hold no more rows than `maxRows`.
 
 A PDF is checked against `maxBytes` before pdf.js opens it, and against `maxPages` (50) before any
 page's text is read; the text read and the lines are capped too. pdf.js loads with
