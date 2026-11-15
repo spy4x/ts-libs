@@ -9,6 +9,8 @@
  * layout; it is a separate entry so that pdf.js stays out of apps that do not read PDF.
  * When no profile reads a CSV or PDF file, the `@spy4x/bank-statements/infer` entry asks a
  * language model for one from a masked sample and accepts it only when the balances add up.
+ * A household's history from another money app, such as a Firefly III export, is read by the
+ * `@spy4x/bank-statements/app-exports` entry.
  * {@link readStatement} takes the uploaded bytes, checks the size limits, tells the format by
  * content ({@link detectFormat}) and calls the right parser. {@link verifyStatement} then checks
  * the result, and a failure names the lines that do not add up.
