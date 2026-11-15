@@ -277,6 +277,42 @@ Deno.test("a liability credit is an entry on the liability, and liabilities keep
   assertEquals(history.accounts, [{ name: "Car loan", kind: "liability", currency: "EUR" }])
 })
 
+Deno.test("accounts and categories are listed once, first seen first, an account per kind and name", () => {
+  const history = parseFireflyIii(exportOf([
+    withdrawal,
+    withdrawal,
+    {
+      type: "Deposit",
+      currency_code: "EUR",
+      amount: "5.00",
+      description: "Refund",
+      date: "2024-03-02T00:00:00+01:00",
+      source_name: "Cafe",
+      source_type: "Revenue account",
+      destination_name: "Checking",
+      destination_type: "Asset account",
+      category: "Food",
+    },
+  ]))
+  assertEquals(history.accounts.map(({ name, kind }) => ({ name, kind })), [
+    { name: "Checking", kind: "asset" },
+    { name: "Cafe", kind: "expense" },
+    { name: "Cafe", kind: "revenue" },
+  ])
+  assertEquals(history.categories, [{ name: "Food" }])
+})
+
+Deno.test("a zero withdrawal is 0, not -0", () => {
+  const history = parseFireflyIii(exportOf([{
+    ...withdrawal,
+    amount: "0.00",
+    foreign_amount: "0",
+    foreign_currency_code: "JPY",
+  }]))
+  assertEquals(Object.is(history.entries[0].amount, 0), true)
+  assertEquals(Object.is(history.entries[0].foreignAmount, 0), true)
+})
+
 Deno.test("an account in two currencies keeps no currency", () => {
   const history = parseFireflyIii(exportOf([
     withdrawal,
@@ -316,10 +352,11 @@ Deno.test("formula-escaped cells lose only the escape quote", () => {
   assertEquals(entry.amount, -1234)
 })
 
-Deno.test("columns in another order, and extra ones, read the same", () => {
+Deno.test("columns in another order, in another case, and extra ones, read the same", () => {
   const reordered = [...HEADER].reverse()
   reordered.push("internal_reference")
-  const history = parseFireflyIii(exportOf([withdrawal], reordered))
+  const text = exportOf([withdrawal], reordered).replace(",type,", ", Type ,")
+  const history = parseFireflyIii(text)
   assertEquals(history, parseFireflyIii(exportOf([withdrawal])))
 })
 
