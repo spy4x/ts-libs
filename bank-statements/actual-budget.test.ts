@@ -493,3 +493,32 @@ Deno.test("a db.sqlite that inflates past its declared size stops at that size",
     `zip entry "db.sqlite" inflates past its declared 1024 bytes`,
   )
 })
+
+Deno.test("more live transactions than maxRows are refused whole, and deleted ones do not count", async () => {
+  const zip = await exportOf(BUDGET)
+  // Six live transactions, the split's parent among them, and one deleted.
+  await refused(zip, "too-large", { maxRows: 5 })
+  assertEquals((await parseActualBudget(zip, { maxRows: 6 })).entries.length, 3)
+})
+
+Deno.test("the main entry imports no sql.js and no Actual Budget reader, and app-exports loads sql.js only when called", async () => {
+  const seen = new Set<string>()
+  const visit = async (url: URL) => {
+    if (seen.has(url.href)) return
+    seen.add(url.href)
+    const source = await Deno.readTextFile(url)
+    // Static imports and re-exports, with or without names; a dynamic `import()` is not one.
+    const statements = /^(?:import|export)\b[^"]*?\bfrom "([^"]+)"|^import "([^"]+)"/gm
+    for (const [, named, bare] of source.matchAll(statements)) {
+      const specifier = named ?? bare
+      if (specifier.startsWith(".")) await visit(new URL(specifier, url))
+      else seen.add(specifier)
+    }
+  }
+  await visit(new URL("./mod.ts", import.meta.url))
+  assertEquals([...seen].filter((name) => /sql\.js|actual-budget|zip\.ts/.test(name)), [])
+  seen.clear()
+  await visit(new URL("./app-exports.ts", import.meta.url))
+  assertEquals(seen.has(new URL("./actual-budget.ts", import.meta.url).href), true)
+  assertEquals([...seen].filter((name) => name.startsWith("sql.js")), [])
+})
