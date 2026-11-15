@@ -4,7 +4,8 @@ Bank statements read into dated, signed amounts in minor units, and checked agai
 balances. Standard formats need nothing else: OFX and QFX, QIF, CAMT.053 and MT940. A bank's own
 CSV, or its PDF statement's text, is read through a profile, which describes its format as data, so
 a household's mapping, a built-in profile and an AI proposal all go through the same tested parser. A check that fails
-names the lines that do not add up. No UI and no storage.
+names the lines that do not add up. A household's history from another money app (Firefly III)
+reads into accounts, categories, entries and transfers. No UI and no storage.
 
 ## Install
 
@@ -28,13 +29,17 @@ Usage is in the module doc, shown by `deno doc` and on JSR.
 - [`@spy4x/bank-statements/infer`](infer.ts): `inferProfile`, which asks a language model for a
   profile when no known one reads a file, `maskSample` and `profilePrompt`. The model is a port the
   app passes in, so this package sends nothing by itself.
+- [`@spy4x/bank-statements/app-exports`](app-exports.ts): `parseFireflyIii`, which reads
+  another money app's export into accounts, categories, entries and transfers (`ParsedHistory`).
+  Firefly III's transactions export today.
 
 ## Safety
 
 An uploaded statement comes from a stranger. `maxBytes` (10 MiB) is checked before decoding and
 `maxRows` (100,000) before any row is read; the XML formats refuse a DTD; OFX 1 is read by a
 linear tokenizer. A file refused whole throws `StatementError`; a row that does not read is a row
-error with its line, and a statement with one never verifies.
+error with its line, and a statement with one never verifies. An app export has the same limits,
+and a cell over 10,000 characters is a row error.
 
 A PDF is checked against `maxBytes` before pdf.js opens it, and against `maxPages` (50) before any
 page's text is read; the text read and the lines are capped too. pdf.js loads with

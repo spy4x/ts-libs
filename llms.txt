@@ -34,6 +34,14 @@ parseWithProfile	function	@spy4x/bank-statements	Read CSV text with a profile.
 readStatement	function	@spy4x/bank-statements	Read a statement file of any supported format.
 statementProfile	constant	@spy4x/bank-statements	The arktype schema of StatementProfile, for a profile read from storage or an AI.
 verifyStatement	function	@spy4x/bank-statements	Check a statement against its own balances.
+HistoryAccount	interface	@spy4x/bank-statements/app-exports	One account the file names.
+HistoryAccountKind	type	@spy4x/bank-statements/app-exports	What an account is for.
+HistoryCategory	interface	@spy4x/bank-statements/app-exports	One category the file names.
+HistoryEntry	interface	@spy4x/bank-statements/app-exports	Money in or out of one account.
+HistoryItem	interface	@spy4x/bank-statements/app-exports	What an entry and a transfer both carry.
+HistoryTransfer	interface	@spy4x/bank-statements/app-exports	Money moved between two of the household's accounts.
+ParsedHistory	interface	@spy4x/bank-statements/app-exports	What a reader got from one export file.
+parseFireflyIii	function	@spy4x/bank-statements/app-exports	Read Firefly III's transactions export.
 DEFAULT_SAMPLE_ROWS	constant	@spy4x/bank-statements/infer	How many lines a sample has by default.
 InferFailure	type	@spy4x/bank-statements/infer	Why no profile was found.
 InferredProfile	type	@spy4x/bank-statements/infer	A file that reads and verifies, and where the way to read it came from.
@@ -3263,4 +3271,4 @@ firstIssueMessage	function	@spy4x/validation/validate	First issue message in a v
 isArkErrors	function	@spy4x/validation/validate	Whether a value is an arktype rejection, without relying on `instanceof`.
 toValidationError	function	@spy4x/validation/validate	Build a ValidationError from arktype's issues.
 validate	function	@spy4x/validation/validate	Parse `value` with an arktype schema exactly once.
-# export surface: sha256 e82983462e7e85ea27a32f28360d20d4897e2d04dd71c832da2abc58a9931985
+# export surface: sha256 980bf9f4b8d90e1aac532d3121b30fe1223cf46ea569c8bbb2dec455fa0c150d
