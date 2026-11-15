@@ -340,9 +340,13 @@ Deno.test("hundredths become yen by dividing, and a yen fraction is a row error"
   }])
 })
 
-Deno.test("hundredths become fils of a three-decimal currency by multiplying", async () => {
-  const history = await parseActualBudget(await exportOf(BUDGET), { currency: "KWD" })
-  assertEquals(history.entries.map(({ amount }) => amount), [-1500000, -30000, -20000])
+Deno.test("hundredths become fils of a three-decimal currency by multiplying, unless that overflows", async () => {
+  const history = await parseActualBudget(
+    await exportOf(BUDGET + `UPDATE transactions SET amount = ${2 ** 53 - 1} WHERE id = 't1';`),
+    { currency: "KWD" },
+  )
+  assertEquals(history.entries.map(({ amount }) => amount), [-30000, -20000])
+  assertEquals(history.rowErrors, [{ line: 1, reason: `amount ${2 ** 53 - 1} is too large` }])
 })
 
 Deno.test("a bad date, a non-integer amount and an unknown account are row errors", async () => {
@@ -374,6 +378,22 @@ Deno.test("a note over 10,000 characters is a row error, and one at 10,000 reads
   )
   assertEquals(history.rowErrors, [{ line: 1, reason: "a name or note is over 10000 characters" }])
   assertEquals(history.entries[0].notes?.length, 10_000)
+})
+
+Deno.test("an account or category named with over 10,000 characters is left out, and its rows are row errors", async () => {
+  const long = "x".repeat(10_001)
+  const history = await parseActualBudget(
+    await exportOf(
+      BUDGET + `
+      UPDATE accounts SET name = '${long}' WHERE id = 'a2';
+      UPDATE categories SET name = '${long}' WHERE id = 'c3';
+    `,
+    ),
+  )
+  assertEquals(history.accounts.map(({ name }) => name), ["Checking"])
+  assertEquals(history.categories.map(({ name }) => name), ["Groceries", "Restaurants"])
+  assertEquals(history.transfers, [])
+  assertEquals(history.rowErrors.map(({ line }) => line), [1, 5, 6])
 })
 
 Deno.test("a file that is not a zip is refused whole", async () => {
@@ -438,11 +458,54 @@ Deno.test("a compression method other than stored and deflate is refused whole",
 Deno.test("a zip64 or multi-disk archive is refused whole", async () => {
   const zip = await exportOf(BUDGET)
   const zip64 = zip.slice()
+  new DataView(zip64.buffer).setUint16(zip64.length - 14, 0xffff, true)
   new DataView(zip64.buffer).setUint16(zip64.length - 12, 0xffff, true)
-  await refused(zip64, "unsupported")
+  assertEquals((await refused(zip64, "unsupported")).message, "zip: zip64 archives are not read")
+  const locator = zip.slice()
+  new DataView(locator.buffer).setUint32(locator.length - 42, 0x07064b50, true)
+  assertEquals((await refused(locator, "unsupported")).message, "zip: zip64 archives are not read")
   const disks = zip.slice()
   new DataView(disks.buffer).setUint16(disks.length - 18, 1, true)
-  await refused(disks, "unsupported")
+  assertEquals(
+    (await refused(disks, "unsupported")).message,
+    "zip: archives on several disks are not read",
+  )
+})
+
+Deno.test("a zip whose records point outside it or hold broken data is refused whole", async () => {
+  const data = database(BUDGET)
+  const stored = await zipOf([{ name: "db.sqlite", data, method: 0 }])
+  const deflated = await zipOf([{ name: "db.sqlite", data }])
+  /** `zip` with the 32-bit field at `at` set to `value`. */
+  const patched = (zip: Uint8Array, at: number, value: number) => {
+    const copy = zip.slice()
+    new DataView(copy.buffer).setUint32(at, value, true)
+    return copy
+  }
+  // Each zip holds one entry: its local header at 0, its data at 39, the directory after it.
+  const directory = (zip: Uint8Array) => new DataView(zip.buffer).getUint32(zip.length - 6, true)
+  const cases: [Uint8Array, string][] = [
+    [patched(stored, stored.length - 6, stored.length), "the central directory runs past its end"],
+    [patched(stored, directory(stored), 0), "a central directory entry is broken"],
+    [patched(stored, directory(stored) + 42, 1000), `the local header of "db.sqlite" is broken`],
+    [patched(deflated, directory(deflated) + 20, 1 << 30), `"db.sqlite" runs past its end`],
+    [
+      patched(stored, directory(stored) + 24, data.length - 1),
+      `"db.sqlite" is stored with two sizes`,
+    ],
+    [patched(deflated, 39, 0xffffffff), `"db.sqlite" does not inflate`],
+  ]
+  for (const [zip, message] of cases) {
+    assertEquals((await refused(zip, "malformed")).message, `not a zip archive: ${message}`)
+  }
+})
+
+Deno.test("a database whose tables lack a column Actual has is refused whole", async () => {
+  const schema = SCHEMA.replace("closed INTEGER DEFAULT 0, sort_order REAL,", "")
+  assertEquals(
+    (await refused(exportOf("", 8, schema), "malformed", { currency: "EUR" })).message,
+    "db.sqlite is not an Actual Budget database",
+  )
 })
 
 Deno.test("a zip over maxBytes is refused whole", async () => {
