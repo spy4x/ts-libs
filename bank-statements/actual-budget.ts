@@ -50,7 +50,10 @@ const MAX_TEXT = 10_000
 /** What every SQLite 3 file starts with. */
 const SQLITE_MAGIC = "SQLite format 3\0"
 
-/** The tables read, each by one fixed query. A table that is missing refuses the file. */
+/**
+ * The tables read, each by one fixed query that {@link readTable} ends with a `LIMIT`. A table that
+ * is missing refuses the file.
+ */
 const QUERIES = {
   accounts: "SELECT id, name, tombstone FROM accounts ORDER BY sort_order, id",
   payees: "SELECT id, name, transfer_acct, tombstone FROM payees",
@@ -73,20 +76,6 @@ const COLUMN_QUERIES = {
   category_mapping: "SELECT hidden FROM pragma_table_xinfo('category_mapping')",
   transactions: "SELECT hidden FROM pragma_table_xinfo('transactions')",
   preferences: "SELECT hidden FROM pragma_table_xinfo('preferences')",
-} as const
-
-/**
- * The rows each query in {@link QUERIES} loads, counted before any is read: every row of a lookup
- * table, deleted ones too, and the live transactions.
- */
-const COUNT_QUERIES = {
-  accounts: "SELECT COUNT(*) FROM accounts",
-  payees: "SELECT COUNT(*) FROM payees",
-  payee_mapping: "SELECT COUNT(*) FROM payee_mapping",
-  categories: "SELECT COUNT(*) FROM categories",
-  category_groups: "SELECT COUNT(*) FROM category_groups",
-  category_mapping: "SELECT COUNT(*) FROM category_mapping",
-  transactions: "SELECT COUNT(*) FROM transactions WHERE IFNULL(tombstone, 0) = 0",
 } as const
 
 const CURRENCY_QUERY = "SELECT value FROM preferences WHERE id = 'defaultCurrencyCode' LIMIT 1"
@@ -128,15 +117,17 @@ function loadSqlJs() {
  *
  * `maxRows` caps every table read, not only the live transactions: accounts, payees, categories,
  * category groups and the two merge tables may each hold at most that many rows, deleted ones
- * included (default 100,000; a real budget has a few thousand payees at most). Those tables are
- * read whole, so this bounds the memory a crafted file can take.
+ * included (default 100,000; a real budget has a few thousand payees at most). Each table is read
+ * with a `LIMIT` one past `maxRows`, so no read loads more rows than that, whatever the file's
+ * indexes claim.
  *
  * Throws a {@link StatementError}: `"too-large"` over `maxBytes` or `maxDatabaseBytes`, checked
- * before the database opens, or over `maxRows` in any table, checked before any row is read;
- * `"malformed"` when the file is not a zip, holds no `db.sqlite`, or that is not SQLite or lacks
- * one of Actual's tables; `"unsupported"` for a zip it does not read (encrypted, zip64), a table
- * that is a view or computes a column, or a budget without a currency when `currency` is not
- * given. A `currency` that is not an ISO 4217 code throws a `RangeError`.
+ * before the database opens, or over `maxRows` in any table, found when its read returns one row
+ * past the limit; `"malformed"` when the file is not a zip, holds no `db.sqlite`, or that is not
+ * SQLite or lacks one of Actual's tables; `"unsupported"` for a zip it does not read (encrypted,
+ * zip64), a table that is a view or computes a column, or a budget without a currency when
+ * `currency` is not given. A `currency` that is not an ISO 4217 code, or a `maxRows` that is not
+ * a positive whole number, throws a `RangeError`.
  */
 export async function parseActualBudget(
   zip: Uint8Array,
@@ -144,6 +135,11 @@ export async function parseActualBudget(
 ): Promise<ParsedHistory> {
   if (options.currency !== undefined && !isCurrencyCode(options.currency)) {
     throw new RangeError(`currency ${quote(options.currency)} is not an ISO 4217 code`)
+  }
+  // It is written into each query's LIMIT.
+  const maxRows = options.maxRows ?? DEFAULT_MAX_ROWS
+  if (!Number.isSafeInteger(maxRows) || maxRows < 1) {
+    throw new RangeError(`maxRows ${maxRows} is not a positive whole number`)
   }
   const maxBytes = options.maxBytes ?? DEFAULT_MAX_ACTUAL_BYTES
   if (zip.length > maxBytes) {
@@ -165,7 +161,7 @@ export async function parseActualBudget(
   let db: SqlDatabase | undefined
   try {
     db = new Database(file)
-    return readBudget(db, options)
+    return readBudget(db, options.currency, maxRows)
   } catch (error) {
     if (error instanceof StatementError) throw error
     throw new StatementError("malformed", "db.sqlite is not an Actual Budget database")
@@ -179,16 +175,33 @@ function rows(db: SqlDatabase, sql: string): SqlValue[][] {
   return db.exec(sql)[0]?.values ?? []
 }
 
+/**
+ * The rows of `table`, read by its query in {@link QUERIES} with a `LIMIT` one past `maxRows`. A
+ * count would not do: SQLite counts through an index, and the file brings its own, which may list
+ * none of the rows. Throws `"too-large"` when the read returns more than `maxRows` rows.
+ */
+function readTable(db: SqlDatabase, table: keyof typeof QUERIES, maxRows: number): SqlValue[][] {
+  const result = rows(db, `${QUERIES[table]} LIMIT ${maxRows + 1}`)
+  if (result.length > maxRows) {
+    throw new StatementError("too-large", `${table} holds more than ${maxRows} rows`)
+  }
+  return result
+}
+
 /** A cell as text: `""` for null, a number written out, and a blob as nothing. */
 function text(value: SqlValue): string {
   return typeof value === "string" ? value : typeof value === "number" ? String(value) : ""
 }
 
 /** The history in an open Actual Budget database. */
-function readBudget(db: SqlDatabase, options: ActualBudgetOptions): ParsedHistory {
+function readBudget(
+  db: SqlDatabase,
+  currencyOption: string | undefined,
+  maxRows: number,
+): ParsedHistory {
   const hasPreferences = checkSchema(db)
   const fromFile = hasPreferences ? rows(db, CURRENCY_QUERY)[0]?.[0] : undefined
-  const currency = options.currency ?? (isCurrencyCode(fromFile) ? fromFile : undefined)
+  const currency = currencyOption ?? (isCurrencyCode(fromFile) ? fromFile : undefined)
   if (!currency) {
     throw new StatementError(
       "unsupported",
@@ -197,16 +210,6 @@ function readBudget(db: SqlDatabase, options: ActualBudgetOptions): ParsedHistor
   }
   // Actual stores hundredths whatever the currency.
   const decimals = currencyDecimals(currency)
-  const maxRows = options.maxRows ?? DEFAULT_MAX_ROWS
-  for (const [table, sql] of Object.entries(COUNT_QUERIES)) {
-    const count = Number(rows(db, sql)[0]?.[0] ?? 0)
-    if (count > maxRows) {
-      throw new StatementError(
-        "too-large",
-        `${table} holds ${count} rows, over the limit of ${maxRows}`,
-      )
-    }
-  }
 
   const history: ParsedHistory = {
     accounts: [],
@@ -217,7 +220,7 @@ function readBudget(db: SqlDatabase, options: ActualBudgetOptions): ParsedHistor
   }
 
   const accounts = new Map<string, string>()
-  for (const [id, name, tombstone] of rows(db, QUERIES.accounts)) {
+  for (const [id, name, tombstone] of readTable(db, "accounts", maxRows)) {
     if (tombstone === 1) continue
     accounts.set(text(id), text(name))
     if (text(name).length > MAX_TEXT) continue
@@ -226,24 +229,24 @@ function readBudget(db: SqlDatabase, options: ActualBudgetOptions): ParsedHistor
   }
 
   const payeeTargets = new Map(
-    rows(db, QUERIES.payee_mapping).map(([id, to]) => [text(id), text(to)]),
+    readTable(db, "payee_mapping", maxRows).map(([id, to]) => [text(id), text(to)]),
   )
   const payees = new Map<string, { name: string; transferAccount: string }>()
-  for (const [id, name, transferAccount, tombstone] of rows(db, QUERIES.payees)) {
+  for (const [id, name, transferAccount, tombstone] of readTable(db, "payees", maxRows)) {
     if (tombstone !== 1) {
       payees.set(text(id), { name: text(name), transferAccount: text(transferAccount) })
     }
   }
 
   const groups = new Map<string, string>()
-  for (const [id, name, tombstone] of rows(db, QUERIES.category_groups)) {
+  for (const [id, name, tombstone] of readTable(db, "category_groups", maxRows)) {
     if (tombstone !== 1) groups.set(text(id), text(name))
   }
   const categoryTargets = new Map(
-    rows(db, QUERIES.category_mapping).map(([id, to]) => [text(id), text(to)]),
+    readTable(db, "category_mapping", maxRows).map(([id, to]) => [text(id), text(to)]),
   )
   const categories = new Map<string, HistoryCategory>()
-  for (const [id, name, group, tombstone] of rows(db, QUERIES.categories)) {
+  for (const [id, name, group, tombstone] of readTable(db, "categories", maxRows)) {
     if (tombstone === 1) continue
     const category: HistoryCategory = { name: text(name) }
     const groupName = groups.get(text(group))
@@ -254,7 +257,7 @@ function readBudget(db: SqlDatabase, options: ActualBudgetOptions): ParsedHistor
     }
   }
 
-  const transactions = rows(db, QUERIES.transactions).map((
+  const transactions = readTable(db, "transactions", maxRows).map((
     [id, isParent, isChild, account, category, amount, payee, notes, date, parent, transfer],
     index,
   ) => ({

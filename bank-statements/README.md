@@ -47,7 +47,8 @@ and a cell over 10,000 characters is a row error. An Actual Budget zip may be 32
 database 128 MiB, checked against the zip's directory before inflating and enforced while
 inflating; an encrypted, zip64 or multi-disk zip is refused. The database is opened only after its
 SQLite header is checked, and read only by fixed queries, after every table read is checked to be a
-plain table without generated columns and to hold no more rows than `maxRows`.
+plain table without generated columns. Each read stops one row past `maxRows`, and that extra row
+refuses the file.
 
 A PDF is checked against `maxBytes` before pdf.js opens it, and against `maxPages` (50) before any
 page's text is read; the text read and the lines are capped too. pdf.js loads with

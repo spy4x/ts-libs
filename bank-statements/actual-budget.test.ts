@@ -1,4 +1,4 @@
-import { assertEquals, assertRejects } from "@std/assert"
+import { assertEquals, assertRejects, assertThrows } from "@std/assert"
 import initSqlJs from "sql.js/dist/sql-wasm-inline.js"
 import { parseActualBudget } from "./app-exports.ts"
 import { StatementError } from "./statement.ts"
@@ -143,6 +143,37 @@ function exportOf(sql: string, method = 8, schema = SCHEMA): Promise<Uint8Array>
     { name: "db.sqlite", data: database(sql, schema), method },
   ])
 }
+
+/**
+ * `file` with every record broken whose two columns are stored as bytes starting with `text`: its
+ * header claims more bytes than the record holds, so SQLite fails reading any of its columns.
+ */
+function breakRecords(file: Uint8Array, text: string): Uint8Array {
+  const marker = new TextEncoder().encode(text)
+  const broken = file.slice()
+  let found = 0
+  for (let at = 3; at + marker.length <= broken.length; at++) {
+    if (marker.every((byte, index) => broken[at + index] === byte)) {
+      // A record starts with its header's size, 3 bytes before the values for two short columns.
+      broken[at - 3] = 0x7f
+      found++
+    }
+  }
+  if (found === 0) throw new Error(`no record holds ${text}`)
+  return broken
+}
+
+/**
+ * An index on payee_mapping that lists none of its rows: made on an empty table, then moved over by
+ * rewriting the schema, as a crafted file can. SQLite counts payee_mapping through it.
+ */
+const LYING_INDEX = `
+  CREATE TABLE empty (id TEXT);
+  CREATE INDEX lying ON empty (id);
+  PRAGMA writable_schema = ON;
+  UPDATE sqlite_master SET tbl_name = 'payee_mapping',
+    sql = 'CREATE INDEX lying ON payee_mapping (id)' WHERE name = 'lying';
+`
 
 /** Asserts that reading `zip` is refused with `code`, and returns the error. */
 async function refused(
@@ -520,8 +551,49 @@ Deno.test("each lookup table with more rows than maxRows is refused whole, delet
         SELECT ${values} FROM n;`,
     )
     const error = await refused(zip, "too-large", { maxRows: 6 })
-    assertEquals(error.message.split(" ")[0], table)
+    assertEquals(error.message, `${table} holds more than 6 rows`)
   }
+})
+
+Deno.test("a table whose index lists none of its rows is still refused over maxRows", async () => {
+  // payee_mapping's 5 rows and 2 more make 7.
+  const sql = BUDGET + "INSERT INTO payee_mapping VALUES ('x1', NULL), ('x2', NULL);" + LYING_INDEX
+  const db = new SQL.Database(database(sql))
+  try {
+    assertEquals(db.exec("SELECT COUNT(*) FROM payee_mapping")[0].values, [[0]])
+  } finally {
+    db.close()
+  }
+  const error = await refused(exportOf(sql), "too-large", { maxRows: 6 })
+  assertEquals(error.message, "payee_mapping holds more than 6 rows")
+})
+
+Deno.test("a table is read only one row past maxRows, so a broken row after that is never reached", async () => {
+  // payee_mapping's 5 rows, x1 and x2 make 7, one past maxRows 6; the broken row is the 8th.
+  const file = breakRecords(
+    database(
+      BUDGET + "INSERT INTO payee_mapping VALUES ('x1', NULL), ('x2', NULL), ('broken', NULL);",
+    ),
+    "broken",
+  )
+  const db = new SQL.Database(file)
+  try {
+    assertThrows(() => db.exec("SELECT id, targetId FROM payee_mapping"), Error, "malformed")
+  } finally {
+    db.close()
+  }
+  const zip = zipOf([{ name: "db.sqlite", data: file }])
+  const error = await refused(zip, "too-large", { maxRows: 6 })
+  assertEquals(error.message, "payee_mapping holds more than 6 rows")
+})
+
+Deno.test("a maxRows that is not a positive whole number throws a RangeError, and the largest safe one reads", async () => {
+  const zip = await exportOf(BUDGET)
+  for (const maxRows of [0, -1, 6.5, NaN, Infinity]) {
+    await assertRejects(() => parseActualBudget(zip, { maxRows }), RangeError)
+  }
+  const history = await parseActualBudget(zip, { maxRows: Number.MAX_SAFE_INTEGER })
+  assertEquals(history.entries.length, 3)
 })
 
 Deno.test("a transaction without an amount reads as 0, as Actual reads it", async () => {
