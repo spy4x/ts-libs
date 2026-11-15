@@ -42,9 +42,9 @@ linear tokenizer. A file refused whole throws `StatementError`; a row that does 
 error with its line, and a statement with one never verifies. An app export has the same limits,
 and a cell over 10,000 characters is a row error. A YNAB zip is read by a small reader of its own
 (stored and deflate entries only, at most 1,000 of them, no encryption or zip64): the zip is checked
-against `maxBytes`, its register's declared size too before it is inflated, and the inflated bytes
-are counted and the stream stopped the moment they pass the declared size, so a zip bomb or a header
-that lies costs at most `maxBytes` of memory.
+against `maxBytes`, its register's declared size too before it is inflated, and the register is
+inflated 1 KiB of input at a time, its output counted, and stopped the moment it passes the declared
+size, so a zip bomb or a header that lies is stopped about 1 MiB past that size at worst.
 
 A PDF is checked against `maxBytes` before pdf.js opens it, and against `maxPages` (50) before any
 page's text is read; the text read and the lines are capped too. pdf.js loads with
