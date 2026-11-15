@@ -589,7 +589,25 @@ Deno.test("a schema that spans interior pages reads like one on a single page", 
   )
 })
 
-Deno.test("a schema page pointer that is 0, past the file or back to page 1, a bad page type or a cell outside its page is refused", async () => {
+Deno.test("a db.sqlite cut short inside its header or its first page is refused", async () => {
+  const magic = new TextEncoder().encode("SQLite format 3\0")
+  const header = new Uint8Array(100)
+  header.set(magic)
+  new DataView(header.buffer).setUint16(16, 4096)
+  for (
+    const [data, reason] of [[magic, "its header is cut short"], [
+      header,
+      "its first page is cut short",
+    ]] as const
+  ) {
+    assertEquals(
+      (await refused(zipOf([{ name: "db.sqlite", data }]), "malformed")).message,
+      `db.sqlite is not a valid SQLite database: ${reason}`,
+    )
+  }
+})
+
+Deno.test("a bad page or usable size, a schema page pointer that is 0, past the file or back to page 1, a bad page type, too many cells or a cell outside its page is refused", async () => {
   const data = interiorSchema()
   const view = new DataView(data.buffer)
   const pages = data.length / PAGE
@@ -603,7 +621,13 @@ Deno.test("a schema page pointer that is 0, past the file or back to page 1, a b
       `schema page ${rightChild} has type 2`,
     ],
     [(file) => file.setUint16(112, PAGE - 2), "a cell of schema page 1 is outside the page"],
+    [(file) => file.setUint16(112, 0), "a cell of schema page 1 is outside the page"],
+    [(file) => file.setUint16(103, 0xffff), "schema page 1 lists too many cells"],
     [(file) => file.setUint16(16, 1000), "page size 1000 is not a power of two"],
+    [(file) => {
+      file.setUint16(16, 512)
+      file.setUint8(20, 40)
+    }, "only 472 bytes of each page are usable"],
   ]
   for (const [patch, reason] of cases) {
     const broken = data.slice()
