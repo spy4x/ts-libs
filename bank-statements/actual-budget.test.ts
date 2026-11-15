@@ -1,7 +1,7 @@
 import { assertEquals, assertRejects, assertThrows } from "@std/assert"
 import initSqlJs from "sql.js/dist/sql-wasm-inline.js"
 import { parseActualBudget } from "./app-exports.ts"
-import { MAX_SCHEMA_ENTRIES, MAX_SCHEMA_PAGES } from "./sqlite-schema.ts"
+import { MAX_SCHEMA_BYTES, MAX_SCHEMA_ENTRIES, MAX_SCHEMA_PAGES } from "./sqlite-schema.ts"
 import { StatementError } from "./statement.ts"
 
 /** Actual Budget's tables, cut to the columns the reader uses and a few it does not. */
@@ -577,6 +577,18 @@ Deno.test("a schema of up to 1,000 entries reads, and one more is refused before
   assertEquals(
     (await refused(overCap, "too-large")).message,
     "db.sqlite has more than 1000 tables, indexes, views and triggers",
+  )
+})
+
+Deno.test("a schema whose SQL passes 1 MiB is refused before SQLite parses it", async () => {
+  // The view's SQL is the size of its string literal; a real Actual schema is tens of KiB.
+  const view = (bytes: number) => `CREATE VIEW big AS SELECT '${"x".repeat(bytes)}';`
+  const small = await exportOf(BUDGET, 8, SCHEMA + view(100_000))
+  assertEquals((await parseActualBudget(small)).entries.length, 3)
+  const big = exportOf(BUDGET, 8, SCHEMA + view(MAX_SCHEMA_BYTES))
+  assertEquals(
+    (await refused(big, "too-large")).message,
+    `db.sqlite's schema holds more than ${MAX_SCHEMA_BYTES} bytes of SQL`,
   )
 })
 

@@ -46,12 +46,14 @@ linear tokenizer. A file refused whole throws `StatementError`; a row that does 
 error with its line, and a statement with one never verifies. An app export has the same limits,
 and a cell over 10,000 characters is a row error. A YNAB or Actual Budget zip is read by a small
 reader of its own (stored and deflate entries only, at most 1,000 of them, no encryption or zip64):
-the zip is checked against `maxBytes`, the entry's declared size too before it is inflated, and the
+the zip is checked against `maxBytes`, and the entry's declared size against its own limit before
+it is inflated (`maxBytes` for YNAB's register, `maxDatabaseBytes` for Actual's database). The
 entry is inflated 1 KiB of input at a time, its output counted, and stopped the moment it passes
 the declared size, so a zip bomb or a header that lies is stopped about 1 MiB past that size at
-worst. An Actual Budget zip may be 32 MiB and its database 128 MiB. The database is opened only after its
-SQLite header is checked and its schema is counted in the file's bytes: over 1,000 tables, indexes,
-views and triggers refuses it, since SQLite loads them all on open. It is read only by fixed
+worst. An Actual Budget zip may be 32 MiB and its database 128 MiB. The database is opened only
+after its SQLite header is checked and its schema is measured in the file's bytes: over 1,000
+tables, indexes, views and triggers, or over 1 MiB of schema SQL, refuses it, since SQLite parses
+the whole schema before any query runs. It is read only by fixed
 queries, after every table read is checked to be a plain table without generated columns. Each
 read stops one row past `maxRows`, and that extra row refuses the file.
 

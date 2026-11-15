@@ -23,6 +23,13 @@ export const MAX_SCHEMA_ENTRIES = 1_000
  */
 export const MAX_SCHEMA_PAGES = 2 * MAX_SCHEMA_ENTRIES
 
+/**
+ * The most bytes the schema's rows may hold together, their SQL text included. SQLite parses each
+ * view's SQL into memory on open: one view of 120 MB of `VALUES` fills sql.js's 2 GiB heap, which
+ * never shrinks. A real Actual schema is tens of KiB.
+ */
+export const MAX_SCHEMA_BYTES = 1 << 20
+
 /** The deepest b-tree SQLite itself walks (`BTCURSOR_MAX_DEPTH`). */
 const MAX_DEPTH = 20
 
@@ -55,6 +62,7 @@ export function checkSchemaSize(file: Uint8Array): void {
 
   const visited = new Set<number>([1])
   let entries = 0
+  let schemaBytes = 0
   const visit = (page: number, depth: number): void => {
     if (depth > MAX_DEPTH) fail(`the schema is more than ${MAX_DEPTH} pages deep`)
     const start = (page - 1) * pageSize
@@ -68,6 +76,25 @@ export function checkSchemaSize(file: Uint8Array): void {
     const pointers = header + (type === LEAF_TABLE ? 8 : 12)
     if (pointers + 2 * cells > start + usable) fail(`schema page ${page} lists too many cells`)
     if (type === LEAF_TABLE) {
+      // Each cell starts with its payload size, a varint of at most 9 bytes: one schema row's SQL.
+      for (let cell = 0; cell < cells; cell++) {
+        const offset = view.getUint16(pointers + 2 * cell)
+        if (offset < pointers + 2 * cells - start || offset + 9 > usable) {
+          fail(`a cell of schema page ${page} is outside the page`)
+        }
+        let size = 0
+        for (let at = start + offset, end = at + 9; at < end; at++) {
+          size = size * 128 + (file[at] & 0x7f)
+          if (file[at] < 0x80) break
+        }
+        schemaBytes += size
+        if (schemaBytes > MAX_SCHEMA_BYTES) {
+          throw new StatementError(
+            "too-large",
+            `db.sqlite's schema holds more than ${MAX_SCHEMA_BYTES} bytes of SQL`,
+          )
+        }
+      }
       entries += cells
       if (entries > MAX_SCHEMA_ENTRIES) {
         throw new StatementError(
