@@ -1,7 +1,8 @@
 /**
  * The reader of Actual Budget's `Export data` zip: `db.sqlite`, the budget's SQLite database, read
- * with sql.js (SQLite compiled to WebAssembly), which loads only when an export is read. Written
- * from the database's documented schema; no Actual Budget code is used.
+ * with sql.js (SQLite compiled to WebAssembly), which loads only when an export is read. Its build
+ * with the WebAssembly inlined is used, so nothing is read from disk or fetched, on a server or in
+ * a browser. Written from the database's documented schema; no Actual Budget code is used.
  *
  * @module
  */
@@ -91,7 +92,7 @@ let sqlJs: Promise<{ Database: new (data: Uint8Array) => SqlDatabase }> | undefi
 
 /** sql.js's module, loaded once. */
 function loadSqlJs() {
-  sqlJs ??= import("sql.js").then(({ default: init }) => init())
+  sqlJs ??= import("sql.js/dist/sql-wasm-inline.js").then(({ default: init }) => init())
   return sqlJs
 }
 

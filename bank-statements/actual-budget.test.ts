@@ -1,5 +1,5 @@
 import { assertEquals, assertRejects } from "@std/assert"
-import initSqlJs from "sql.js"
+import initSqlJs from "sql.js/dist/sql-wasm-inline.js"
 import { parseActualBudget } from "./app-exports.ts"
 import { StatementError } from "./statement.ts"
 
@@ -501,5 +501,5 @@ Deno.test("the main entry imports no sql.js and no Actual Budget reader, and app
   seen.clear()
   await visit(new URL("./app-exports.ts", import.meta.url))
   assertEquals(seen.has(new URL("./actual-budget.ts", import.meta.url).href), true)
-  assertEquals(seen.has("sql.js"), false)
+  assertEquals([...seen].filter((name) => name.startsWith("sql.js")), [])
 })
