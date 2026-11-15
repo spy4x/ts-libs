@@ -5,7 +5,7 @@ balances. Standard formats need nothing else: OFX and QFX, QIF, CAMT.053 and MT9
 CSV, or its PDF statement's text, is read through a profile, which describes its format as data, so
 a household's mapping, a built-in profile and an AI proposal all go through the same tested parser. A check that fails
 names the lines that do not add up. A household's history from another money app (Firefly III,
-Actual Budget) reads into accounts, categories, entries and transfers. No UI and no storage.
+YNAB, Actual Budget) reads into accounts, categories, entries and transfers. No UI and no storage.
 
 ## Install
 
@@ -32,10 +32,11 @@ Usage is in the module doc, shown by `deno doc` and on JSR.
 - [`@spy4x/bank-statements/infer`](infer.ts): `inferProfile`, which asks a language model for a
   profile when no known one reads a file, `maskSample` and `profilePrompt`. The model is a port the
   app passes in, so this package sends nothing by itself.
-- [`@spy4x/bank-statements/app-exports`](app-exports.ts): `parseFireflyIii` and
+- [`@spy4x/bank-statements/app-exports`](app-exports.ts): `parseFireflyIii`, `parseYnab` and
   `parseActualBudget`, which read another money app's export into accounts, categories, entries
-  and transfers (`ParsedHistory`): Firefly III's transactions export and Actual Budget's
-  `Export data` zip. sql.js loads only when an Actual Budget export is read.
+  and transfers (`ParsedHistory`): Firefly III's transactions export, YNAB's "Export budget" zip or
+  its register CSV, and Actual Budget's `Export data` zip. sql.js loads only when an Actual Budget
+  export is read.
 
 ## Safety
 
@@ -43,9 +44,12 @@ An uploaded statement comes from a stranger. `maxBytes` (10 MiB) is checked befo
 `maxRows` (100,000) before any row is read; the XML formats refuse a DTD; OFX 1 is read by a
 linear tokenizer. A file refused whole throws `StatementError`; a row that does not read is a row
 error with its line, and a statement with one never verifies. An app export has the same limits,
-and a cell over 10,000 characters is a row error. An Actual Budget zip may be 32 MiB and its
-database 128 MiB, checked against the zip's directory before inflating and enforced while
-inflating; an encrypted, zip64 or multi-disk zip is refused. The database is opened only after its
+and a cell over 10,000 characters is a row error. A YNAB or Actual Budget zip is read by a small
+reader of its own (stored and deflate entries only, at most 1,000 of them, no encryption or zip64):
+the zip is checked against `maxBytes`, the entry's declared size too before it is inflated, and the
+entry is inflated 1 KiB of input at a time, its output counted, and stopped the moment it passes
+the declared size, so a zip bomb or a header that lies is stopped about 1 MiB past that size at
+worst. An Actual Budget zip may be 32 MiB and its database 128 MiB. The database is opened only after its
 SQLite header is checked and its schema is counted in the file's bytes: over 1,000 tables, indexes,
 views and triggers refuses it, since SQLite loads them all on open. It is read only by fixed
 queries, after every table read is checked to be a plain table without generated columns. Each
