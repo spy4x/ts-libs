@@ -411,7 +411,7 @@ Deno.test("a row without a payee is described by its memo, and flags become tags
 Deno.test("the register alone reads as a string or as bytes with a byte-order mark", async () => {
   const csv = register([row("Checking", "2026-01-05", "Café", { Outflow: "$1.00" })])
   for (
-    const input of [csv, `﻿${csv}`, encoder.encode(`﻿${csv}`), encoder.encode(csv)]
+    const input of [csv, `\uFEFF${csv}`, encoder.encode(`\uFEFF${csv}`), encoder.encode(csv)]
   ) {
     const history = await parseYnab(input, { currency: "USD" })
     assertEquals(history.entries.map((entry) => [entry.payee, entry.amount]), [["Café", -100]])

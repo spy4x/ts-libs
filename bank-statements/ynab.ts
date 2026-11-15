@@ -99,7 +99,7 @@ export async function parseYnab(
   let text: string
   if (typeof input === "string") {
     checkTextSize(input, options.maxBytes)
-    text = input.startsWith("﻿") ? input.slice(1) : input
+    text = input.startsWith("\uFEFF") ? input.slice(1) : input
   } else text = await registerText(input, options.maxBytes ?? DEFAULT_MAX_BYTES)
   return readRegister(text, options)
 }
