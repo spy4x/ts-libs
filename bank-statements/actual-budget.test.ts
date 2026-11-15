@@ -346,6 +346,22 @@ Deno.test("the currency option is used when the budget names none, and wins over
   assertEquals((await parseActualBudget(eur, { currency: "GBP" })).accounts[0].currency, "GBP")
 })
 
+Deno.test("only the first currency preference is read, so a broken one after it is never reached", async () => {
+  const schema = SCHEMA.replace("preferences (id TEXT PRIMARY KEY,", "preferences (id TEXT,")
+  const file = breakRecords(
+    database(BUDGET + "INSERT INTO preferences VALUES ('defaultCurrencyCode', 'BROKEN');", schema),
+    "defaultCurrencyCodeBROKEN",
+  )
+  const db = new SQL.Database(file)
+  try {
+    assertThrows(() => db.exec("SELECT value FROM preferences"), Error, "malformed")
+  } finally {
+    db.close()
+  }
+  const history = await parseActualBudget(await zipOf([{ name: "db.sqlite", data: file }]))
+  assertEquals(history.accounts[0].currency, "EUR")
+})
+
 Deno.test("a budget made before the preferences table reads with the currency option", async () => {
   const schema = SCHEMA.replace("CREATE TABLE preferences (id TEXT PRIMARY KEY, value TEXT);", "")
   const zip = await exportOf(BUDGET.split("\n").slice(2).join("\n"), 8, schema)
