@@ -7,6 +7,12 @@ const PUNCTUATION = "#:.,;/-"
 /** A run with at least this many digits and mask characters is a card or reference number. */
 const MIN_NUMBER_LENGTH = 6
 
+/**
+ * The most UTF-16 code units of a payee that are read. Real payees are far shorter, and NFKC takes
+ * quadratic time on a long run of combining marks, so the rest of a longer one is ignored.
+ */
+const PAYEE_KEY_MAX_INPUT = 1_000
+
 /** Whether `char` can be part of a card or reference number: a digit, a mask or a dash. */
 function isNumberChar(char: string): boolean {
   return (char >= "0" && char <= "9") || char === "*" || char === "x" || char === "-"
@@ -149,8 +155,8 @@ class KeyBuilder {
  * `Shop 24`). Whitespace collapses to one space. A payee with nothing left gives `""`, which an app
  * should treat as "no key".
  *
- * The text comes from a stranger's file, so the work is one linear pass with no regular expression
- * that could backtrack.
+ * The text comes from a stranger's file, so only its first 1,000 UTF-16 code units are read, and
+ * the work is one linear pass with no regular expression that could backtrack.
  *
  * @example
  * ```ts
@@ -164,7 +170,10 @@ class KeyBuilder {
  */
 export function payeeKey(payee: string): string {
   const builder = new KeyBuilder()
-  for (const word of payee.normalize("NFKC").toLowerCase().split(/\s+/)) {
+  let text = payee.slice(0, PAYEE_KEY_MAX_INPUT)
+  // A cut through a surrogate pair would leave half a character.
+  if (/[\uD800-\uDBFF]$/.test(text)) text = text.slice(0, -1)
+  for (const word of text.normalize("NFKC").toLowerCase().split(/\s+/)) {
     if (word !== "") builder.add(word)
   }
   builder.flush()

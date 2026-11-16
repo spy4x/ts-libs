@@ -67,6 +67,8 @@ Deno.test("payeeKey reads a 1 MB payee in well under a second", () => {
     "#".repeat(1_000_000),
     // A long word that is no label, then many numbers removed behind it.
     "#".repeat(150_000) + "a" + "#".repeat(150_000) + " " + "123456/".repeat(100_000),
+    // NFKC orders a run of combining marks in quadratic time.
+    "a" + "̖́".repeat(500_000),
   ]
   for (const input of inputs) {
     const start = performance.now()
@@ -74,4 +76,10 @@ Deno.test("payeeKey reads a 1 MB payee in well under a second", () => {
     const elapsed = performance.now() - start
     assert(elapsed < 1_000, `${input.slice(0, 8)}… took ${elapsed} ms`)
   }
+})
+
+Deno.test("payeeKey reads only the first 1,000 code units of a payee", () => {
+  assertEquals(payeeKey("a".repeat(999) + " shop"), "a".repeat(999))
+  // A cut through an emoji's surrogate pair drops the half left behind.
+  assertEquals(payeeKey("a".repeat(999) + "😀"), "a".repeat(999))
 })
