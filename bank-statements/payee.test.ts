@@ -65,6 +65,8 @@ Deno.test("payeeKey reads a 1 MB payee in well under a second", () => {
     "a1x-".repeat(250_000),
     "ref 1 ".repeat(166_666),
     "#".repeat(1_000_000),
+    // A long word that is no label, then many numbers removed behind it.
+    "#".repeat(150_000) + "a" + "#".repeat(150_000) + " " + "123456/".repeat(100_000),
   ]
   for (const input of inputs) {
     const start = performance.now()

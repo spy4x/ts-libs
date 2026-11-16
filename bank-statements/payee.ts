@@ -52,6 +52,8 @@ function isLabel(word: string): boolean {
  */
 class KeyBuilder {
   readonly words: string[] = []
+  /** Whether each word of {@link words} is a label, judged once when it is added. */
+  #labels: boolean[] = []
   /** Whole words made only of number characters, waiting to be judged together. */
   #pending: string[] = []
   #weight: Weight = { length: 0, marked: false }
@@ -70,7 +72,7 @@ class KeyBuilder {
   flush(): void {
     if (this.#pending.length === 0) return
     if (isNumber(this.#weight)) this.#cut()
-    else this.words.push(...this.#pending)
+    else for (const word of this.#pending) this.#push(word)
     this.#pending = []
     this.#weight = { length: 0, marked: false }
   }
@@ -117,11 +119,20 @@ class KeyBuilder {
   /** Adds what is left of a word; after a cut, a piece of punctuation alone is dropped. */
   #pushPiece(text: string, cut: boolean): void {
     if (text === "" || (cut && bare(text) === "")) return
-    this.words.push(text)
+    this.#push(text)
   }
 
+  #push(word: string): void {
+    this.words.push(word)
+    this.#labels.push(isLabel(word))
+  }
+
+  /** Drops the labels right before a removed number; each word is judged once, so this is linear. */
   #cut(): void {
-    while (this.words.length > 0 && isLabel(this.words[this.words.length - 1])) this.words.pop()
+    while (this.#labels.length > 0 && this.#labels[this.#labels.length - 1]) {
+      this.words.pop()
+      this.#labels.pop()
+    }
   }
 }
 
