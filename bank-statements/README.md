@@ -25,7 +25,8 @@ not yet in a browser.
 Usage is in the module doc, shown by `deno doc` and on JSR.
 
 - [`@spy4x/bank-statements`](mod.ts): `readStatement`, the parsers, profiles and
-  `verifyStatement`.
+  `verifyStatement`, and `payeeKey`, which reduces a row's payee to a key that stays the same across
+  card numbers and references.
 - [`@spy4x/bank-statements/pdf`](pdf.ts): `extractPdfLines`, which reads a PDF's text into lines
   of positioned words, and `parsePdfStatement`, which reads those lines with a profile's `pdf`
   layout. A separate entry, so pdf.js stays out of apps that do not read PDF.

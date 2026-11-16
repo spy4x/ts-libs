@@ -31,6 +31,7 @@ parseMt940	function	@spy4x/bank-statements	Read an MT940 file.
 parseOfx	function	@spy4x/bank-statements	Read an OFX or QFX file: its transactions (`STMTTRN`), in the statement currency (`CURDEF`), and its closing balance (`LEDGERBAL`).
 parseQif	function	@spy4x/bank-statements	Read a QIF file's transactions.
 parseWithProfile	function	@spy4x/bank-statements	Read CSV text with a profile.
+payeeKey	function	@spy4x/bank-statements	Reduce the payee text of a statement row to a stable key, so rows from one payee on different days get the same key.
 readStatement	function	@spy4x/bank-statements	Read a statement file of any supported format.
 statementProfile	constant	@spy4x/bank-statements	The arktype schema of StatementProfile, for a profile read from storage or an AI.
 verifyStatement	function	@spy4x/bank-statements	Check a statement against its own balances.
@@ -3277,4 +3278,4 @@ firstIssueMessage	function	@spy4x/validation/validate	First issue message in a v
 isArkErrors	function	@spy4x/validation/validate	Whether a value is an arktype rejection, without relying on `instanceof`.
 toValidationError	function	@spy4x/validation/validate	Build a ValidationError from arktype's issues.
 validate	function	@spy4x/validation/validate	Parse `value` with an arktype schema exactly once.
-# export surface: sha256 a738320535996ab6f0143815d2058f203343c9c701c937c9e3db119cdabf4384
+# export surface: sha256 a75717f20e3d46ba6f6a06ae4c032f19b9eb0f44302d4a8e3dde3862d3477601
