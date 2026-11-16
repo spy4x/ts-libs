@@ -44,6 +44,7 @@ export { parseCamt053 } from "./camt053.ts"
 export { detectFormat, readStatement, type ReadStatementOptions } from "./detect.ts"
 export { parseMt940 } from "./mt940.ts"
 export { parseOfx } from "./ofx.ts"
+export { payeeKey } from "./payee.ts"
 export {
   foldHeader,
   parseWithProfile,
