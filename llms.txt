@@ -34,6 +34,9 @@ parseWithProfile	function	@spy4x/bank-statements	Read CSV text with a profile.
 readStatement	function	@spy4x/bank-statements	Read a statement file of any supported format.
 statementProfile	constant	@spy4x/bank-statements	The arktype schema of StatementProfile, for a profile read from storage or an AI.
 verifyStatement	function	@spy4x/bank-statements	Check a statement against its own balances.
+ActualBudgetOptions	interface	@spy4x/bank-statements/app-exports	Options of parseActualBudget.
+DEFAULT_MAX_ACTUAL_BYTES	constant	@spy4x/bank-statements/app-exports	The default `maxBytes` of an Actual Budget export: 32 MiB of zip.
+DEFAULT_MAX_DATABASE_BYTES	constant	@spy4x/bank-statements/app-exports	The default `maxDatabaseBytes`: 128 MiB, room for years of history and Actual's sync log.
 DateOrder	type	@spy4x/bank-statements/app-exports	The order of day, month and year in a date: `30.12.2026` is `"dmy"`, `12/30/2026` `"mdy"`.
 HistoryAccount	interface	@spy4x/bank-statements/app-exports	One account the file names.
 HistoryAccountKind	type	@spy4x/bank-statements/app-exports	What an account is for.
@@ -42,6 +45,7 @@ HistoryEntry	interface	@spy4x/bank-statements/app-exports	Money in or out of one
 HistoryItem	interface	@spy4x/bank-statements/app-exports	What an entry and a transfer both carry.
 HistoryTransfer	interface	@spy4x/bank-statements/app-exports	Money moved between two of the household's accounts.
 ParsedHistory	interface	@spy4x/bank-statements/app-exports	What a reader got from one export file.
+parseActualBudget	function	@spy4x/bank-statements/app-exports	Read Actual Budget's `Export data` zip.
 parseFireflyIii	function	@spy4x/bank-statements/app-exports	Read Firefly III's transactions export.
 parseYnab	function	@spy4x/bank-statements/app-exports	Read YNAB's "Export budget": the zip (only its register is read; the plan is not), or the register CSV alone, as text or bytes.
 DEFAULT_SAMPLE_ROWS	constant	@spy4x/bank-statements/infer	How many lines a sample has by default.
@@ -3273,4 +3277,4 @@ firstIssueMessage	function	@spy4x/validation/validate	First issue message in a v
 isArkErrors	function	@spy4x/validation/validate	Whether a value is an arktype rejection, without relying on `instanceof`.
 toValidationError	function	@spy4x/validation/validate	Build a ValidationError from arktype's issues.
 validate	function	@spy4x/validation/validate	Parse `value` with an arktype schema exactly once.
-# export surface: sha256 119063d1eab0b580a55036bae9df9d9df6d3d92003c0ba3fd9f5cab700f59fec
+# export surface: sha256 a738320535996ab6f0143815d2058f203343c9c701c937c9e3db119cdabf4384

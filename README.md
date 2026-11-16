@@ -48,21 +48,21 @@ Deno.serve(async (request) => {
 
 **server** means Deno on the back end, **browser** a front-end bundle, **shared** both.
 
-| Package                                                           | What it holds                                                                           | Runs on                |
-| ----------------------------------------------------------------- | --------------------------------------------------------------------------------------- | ---------------------- |
-| [`@spy4x/validation`](https://jsr.io/@spy4x/validation)           | arktype `validate` with one result shape, and form-validation state                     | shared                 |
-| [`@spy4x/platform`](https://jsr.io/@spy4x/platform)               | helpers, command and event bus, cache, API result, tokens, rate limiting                | shared, split by entry |
-| [`@spy4x/server`](https://jsr.io/@spy4x/server)                   | sign-in, passkeys, Postgres, SQLite, Redis, outbox, file storage, env encryption        | server                 |
-| [`@spy4x/net`](https://jsr.io/@spy4x/net)                         | SSRF guard, redirect-safe `fetch`, size-capped body readers, CIDR checks                | server                 |
-| [`@spy4x/integrations`](https://jsr.io/@spy4x/integrations)       | ntfy, Telegram, Umami, Cloudflare and other clients, Web Push, webhook signature check  | server                 |
-| [`@spy4x/time`](https://jsr.io/@spy4x/time)                       | IANA time zones on `Intl`, date math and formats, `.ics`, RRULE, cron                   | shared                 |
-| [`@spy4x/email`](https://jsr.io/@spy4x/email)                     | SMTP sender, address parsing, HTML mail wrapper, DKIM checker                           | server                 |
-| [`@spy4x/realtime`](https://jsr.io/@spy4x/realtime)               | WebSocket transport: calls, offline outbox, collections, read cache, cursor sync        | both halves            |
-| [`@spy4x/billing`](https://jsr.io/@spy4x/billing)                 | checkout, customer portal and verified webhook events; Stripe adapter                   | server                 |
-| [`@spy4x/caldav`](https://jsr.io/@spy4x/caldav)                   | CalDAV client, sync engine and write transport, WebDAV multistatus reader, URL rules    | shared                 |
-| [`@spy4x/tasks`](https://jsr.io/@spy4x/tasks)                     | the to-do model of the CalDAV task apps: task, list views, quick-add, reminder runner   | shared                 |
-| [`@spy4x/bank-statements`](https://jsr.io/@spy4x/bank-statements) | bank statements: OFX, QIF, CAMT.053, MT940, CSV, PDF, balance checks; Firefly III, YNAB | shared                 |
-| [`@spy4x/search`](https://jsr.io/@spy4x/search)                   | forgiving full-text search: aliases, typos, wrong keyboard layout, prebuilt index       | shared                 |
+| Package                                                           | What it holds                                                                          | Runs on                |
+| ----------------------------------------------------------------- | -------------------------------------------------------------------------------------- | ---------------------- |
+| [`@spy4x/validation`](https://jsr.io/@spy4x/validation)           | arktype `validate` with one result shape, and form-validation state                    | shared                 |
+| [`@spy4x/platform`](https://jsr.io/@spy4x/platform)               | helpers, command and event bus, cache, API result, tokens, rate limiting               | shared, split by entry |
+| [`@spy4x/server`](https://jsr.io/@spy4x/server)                   | sign-in, passkeys, Postgres, SQLite, Redis, outbox, file storage, env encryption       | server                 |
+| [`@spy4x/net`](https://jsr.io/@spy4x/net)                         | SSRF guard, redirect-safe `fetch`, size-capped body readers, CIDR checks               | server                 |
+| [`@spy4x/integrations`](https://jsr.io/@spy4x/integrations)       | ntfy, Telegram, Umami, Cloudflare and other clients, Web Push, webhook signature check | server                 |
+| [`@spy4x/time`](https://jsr.io/@spy4x/time)                       | IANA time zones on `Intl`, date math and formats, `.ics`, RRULE, cron                  | shared                 |
+| [`@spy4x/email`](https://jsr.io/@spy4x/email)                     | SMTP sender, address parsing, HTML mail wrapper, DKIM checker                          | server                 |
+| [`@spy4x/realtime`](https://jsr.io/@spy4x/realtime)               | WebSocket transport: calls, offline outbox, collections, read cache, cursor sync       | both halves            |
+| [`@spy4x/billing`](https://jsr.io/@spy4x/billing)                 | checkout, customer portal and verified webhook events; Stripe adapter                  | server                 |
+| [`@spy4x/caldav`](https://jsr.io/@spy4x/caldav)                   | CalDAV client, sync engine and write transport, WebDAV multistatus reader, URL rules   | shared                 |
+| [`@spy4x/tasks`](https://jsr.io/@spy4x/tasks)                     | the to-do model of the CalDAV task apps: task, list views, quick-add, reminder runner  | shared                 |
+| [`@spy4x/bank-statements`](https://jsr.io/@spy4x/bank-statements) | statements: OFX, QIF, CAMT.053, MT940, CSV, PDF, balances; Firefly III, YNAB, Actual   | shared                 |
+| [`@spy4x/search`](https://jsr.io/@spy4x/search)                   | forgiving full-text search: aliases, typos, wrong keyboard layout, prebuilt index      | shared                 |
 
 Each package's README, shown on its JSR page, has the install line, entry points and examples.
 
