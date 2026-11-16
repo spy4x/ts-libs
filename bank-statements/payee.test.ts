@@ -57,9 +57,10 @@ Deno.test("payeeKey gives full-width and extra whitespace variants the same key"
 
 Deno.test("payeeKey reads a 1 MB payee in well under a second", () => {
   // The shapes that cost most: one long word of number characters with no break, one long word
-  // that alternates number runs with letters, and a long list of short number words.
+  // that alternates number runs with letters, long lists of short number words and of labels.
   const inputs = [
     "1".repeat(1_000_000),
+    "1 ".repeat(500_000),
     "x-".repeat(500_000),
     "a1x-".repeat(250_000),
     "ref 1 ".repeat(166_666),
