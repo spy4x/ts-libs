@@ -80,12 +80,10 @@ in a log.
 
 ## The vips tier
 
-`@spy4x/server/images` runs the `vips` command line. CI's `vips` step installs the programs into
-the Deno image; locally, run the tier in the same image:
+`@spy4x/server/images` runs the `vips` command line. CI's `vips` step runs in the Deno image with
+the programs baked in (`infra/ci/vips.dockerfile`); locally, run the tier in the same image:
 
 ```bash
 podman run --rm --name ts-libs-vips --pids-limit=500 --memory=8g -v "$PWD:/w:Z" -w /w \
-  denoland/deno:2.9.7 sh -c 'apt-get update -qq && apt-get install -y -qq --no-install-recommends \
-  libvips-tools libheif-plugin-libde265 libheif-plugin-aomenc libheif-plugin-dav1d \
-  libheif-plugin-x265 libimage-exiftool-perl >/dev/null && deno task test:vips'
+  antonshubin/ts-libs-ci:vips-deno2.9.7-1 deno task test:vips
 ```

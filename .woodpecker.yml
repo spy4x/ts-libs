@@ -117,9 +117,11 @@ services:
           fi
           exec stalwart --config /etc/stalwart/config.json
 
-# Steps run in declaration order. Unit first, integration second, which is the order
-# issue #74 asks for: format, lint, types and the unit suite fail in seconds, the
-# integration tier takes a container start-up to fail.
+# Unit first, integration second, which is the order issue #74 asks for: format, lint, types
+# and the unit suite fail in seconds, the integration tier takes a container start-up to fail.
+# The three integration steps share no state, so they start together once `check` is green
+# (#962). Once one step has `depends_on`, a step without it starts at once, so every step
+# after `check` names what it waits for.
 steps:
   check:
     image: denoland/deno:2.9.7
@@ -134,6 +136,7 @@ steps:
 
   integration:
     image: denoland/deno:2.9.7
+    depends_on: [check]
     environment:
       TS_LIBS_IT_POSTGRES_URL: postgres://integration-test-only:integration-test-only@postgres:5432/integration-test-only
       TS_LIBS_IT_S3_ENDPOINT: http://minio:9000
@@ -154,6 +157,7 @@ steps:
   # test that talks to Postgres runs on both versions and no list of them has to be kept.
   integration-postgres-17:
     image: denoland/deno:2.9.7
+    depends_on: [check]
     environment:
       TS_LIBS_IT_POSTGRES_URL: postgres://integration-test-only:integration-test-only@postgres-17:5432/integration-test-only
       TS_LIBS_IT_S3_ENDPOINT: http://minio:9000
@@ -171,14 +175,12 @@ steps:
       - deno task test:integration
 
   # `@spy4x/server/images` against the real `vips` and `exiftool` (#762): `deno task test:vips`.
-  # Neither is in the Deno image, so the step installs them from Debian first: libvips with the
-  # HEIC decoder and AVIF codecs it reads and writes, the HEVC encoder the test makes its HEIC
-  # sample with, and exiftool, which checks that no metadata is left.
+  # Neither is in the Deno image, so the step runs the Deno image with them baked in (#962), built
+  # from `infra/ci/vips.dockerfile`, whose header says how to rebuild it and move this pin.
   vips:
-    image: denoland/deno:2.9.7@sha256:fa335acdf6b72106eda2cb6a8cb5f4187e7630e357467489db4b2e7352d5e432
+    image: antonshubin/ts-libs-ci:vips-deno2.9.7-1@sha256:99d79a322c6ee67665e6c6e1bade016cc096f63c0ce2711b41d20dc968a8600e
+    depends_on: [check]
     commands:
-      - apt-get update -qq
-      - apt-get install -y -qq --no-install-recommends libvips-tools libheif-plugin-libde265 libheif-plugin-aomenc libheif-plugin-dav1d libheif-plugin-x265 libimage-exiftool-perl
       - deno task test:vips
 
   # Guards against an accidental release: a `v*` tag publishes to JSR with the global token, so
@@ -188,6 +190,7 @@ steps:
   # clone is full but has no `main` ref, which is why the step fetches it.
   on-main:
     image: alpine/git:2.47.2
+    depends_on: [check, integration, integration-postgres-17, vips]
     when:
       event: tag
       ref: refs/tags/v*
@@ -196,12 +199,13 @@ steps:
       - git merge-base --is-ancestor "$${CI_COMMIT_SHA}" FETCH_HEAD || { echo "Refusing to publish, commit $${CI_COMMIT_SHA} is not on main"; exit 1; }
 
   # Publishes every workspace member to JSR (`jsr:@spy4x/*`), only on a `v*` tag and only after
-  # both check steps above passed. `AGENTS.md` ("Releasing") has the process: the tag goes on the
-  # merged version-bump commit on `main`, because JSR never deletes a version. A version already
+  # every test step above and `on-main` passed. `AGENTS.md` ("Releasing") has the process: the
+  # tag goes on the merged version-bump commit on `main`, because JSR never deletes a version. A version already
   # on JSR is skipped, so re-running a tag build that failed part-way publishes only what is missing.
   # `$$` stops Woodpecker substituting the variable itself; the shell reads the secret.
   publish:
     image: denoland/deno:2.9.7
+    depends_on: [on-main]
     when:
       event: tag
       ref: refs/tags/v*
