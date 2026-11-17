@@ -171,14 +171,11 @@ steps:
       - deno task test:integration
 
   # `@spy4x/server/images` against the real `vips` and `exiftool` (#762): `deno task test:vips`.
-  # Neither is in the Deno image, so the step installs them from Debian first: libvips with the
-  # HEIC decoder and AVIF codecs it reads and writes, the HEVC encoder the test makes its HEIC
-  # sample with, and exiftool, which checks that no metadata is left.
+  # Neither is in the Deno image, so the step runs the Deno image with them baked in (#962), built
+  # from `infra/ci/vips.dockerfile`, whose header says how to rebuild it and move this pin.
   vips:
-    image: denoland/deno:2.9.7@sha256:fa335acdf6b72106eda2cb6a8cb5f4187e7630e357467489db4b2e7352d5e432
+    image: antonshubin/ts-libs-ci:vips-deno2.9.7-1@sha256:99d79a322c6ee67665e6c6e1bade016cc096f63c0ce2711b41d20dc968a8600e
     commands:
-      - apt-get update -qq
-      - apt-get install -y -qq --no-install-recommends libvips-tools libheif-plugin-libde265 libheif-plugin-aomenc libheif-plugin-dav1d libheif-plugin-x265 libimage-exiftool-perl
       - deno task test:vips
 
   # Guards against an accidental release: a `v*` tag publishes to JSR with the global token, so
