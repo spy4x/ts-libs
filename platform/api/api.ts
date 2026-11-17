@@ -30,6 +30,11 @@ export interface ApiError {
   reason?: string
   /** `error.fields`: each failed field's code and rule, keyed by path, for a form to mark. */
   fields?: FieldErrors
+  /**
+   * `error.details`: any extra data the server sent, such as the current value after a 409. Typed
+   * `unknown`, so the caller validates its shape before reading it.
+   */
+  details?: unknown
 }
 
 /** Outcome of {@link apiFetch}: the parsed body on success, or a typed error on failure. */
@@ -54,7 +59,8 @@ export type ApiResult<T> =
  * `message` of an `error` object, the body's `message`, its `detail`, else the fallback
  * `"Request failed"`; `error.code` is the non-empty string `code` of an `error` object, else the
  * body's `code`, and is absent otherwise. `error.reason` and `error.fields` are the `reason` and
- * `fields` of an `error` object, when they have the right shape. So a server answering `{ error }`, `{ code, message }`,
+ * `fields` of an `error` object, when they have the right shape, and `error.details` is its
+ * `details`, of any type, when present. So a server answering `{ error }`, `{ code, message }`,
  * `{ error: { code, message } }` or `{ detail }` needs no wrapper of its own; non-string nested
  * fields are ignored. `responseError` from `@spy4x/platform/universal/errors` reads a body by the
  * same rule.
@@ -100,11 +106,12 @@ export async function apiFetch<T>(
   }
 
   if (!response.ok) {
-    const { message, code, reason, fields } = errorBodyFields(data)
+    const { message, code, reason, fields, details } = errorBodyFields(data)
     const error: ApiError = { status: response.status, message: message ?? "Request failed" }
     if (code !== undefined) error.code = code
     if (reason !== undefined) error.reason = reason
     if (fields !== undefined) error.fields = fields
+    if (details !== undefined) error.details = details
     return { ok: false, status: response.status, error }
   }
   return { ok: true, status: response.status, data: data as T }

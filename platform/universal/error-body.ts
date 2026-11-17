@@ -17,6 +17,8 @@ export interface ErrorBodyFields {
   reason?: string
   /** `error.fields`: each failed field's code and rule, keyed by path. */
   fields?: FieldErrors
+  /** `error.details`: any extra data the server sent, such as the current value after a conflict. */
+  details?: unknown
 }
 
 /** A non-empty string, or `undefined`. */
@@ -37,6 +39,7 @@ function fieldsOf(value: unknown): Record<string, unknown> {
  * So `{ error }`, `{ code, message }`, `{ error: { code, message } }` and a `{ detail }` body all
  * read alike; non-string fields are ignored. `error.reason` (a string) and `error.fields` (the
  * shape `fieldErrorsSchema` accepts) are read only from the nested object; another shape is left out.
+ * `error.details` is kept as it is, of any type, when present; the caller validates it.
  */
 export function errorBodyFields(body: unknown): ErrorBodyFields {
   const fields = fieldsOf(body)
@@ -52,5 +55,6 @@ export function errorBodyFields(body: unknown): ErrorBodyFields {
   if (nested.fields !== undefined && !(fieldErrorsSchema(nested.fields) instanceof type.errors)) {
     result.fields = nested.fields as FieldErrors
   }
+  if (nested.details !== undefined) result.details = nested.details
   return result
 }
