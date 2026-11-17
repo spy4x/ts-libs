@@ -117,9 +117,11 @@ services:
           fi
           exec stalwart --config /etc/stalwart/config.json
 
-# Steps run in declaration order. Unit first, integration second, which is the order
-# issue #74 asks for: format, lint, types and the unit suite fail in seconds, the
-# integration tier takes a container start-up to fail.
+# Unit first, integration second, which is the order issue #74 asks for: format, lint, types
+# and the unit suite fail in seconds, the integration tier takes a container start-up to fail.
+# The three integration steps share no state, so they start together once `check` is green
+# (#962). Once one step has `depends_on`, a step without it starts at once, so every step
+# after `check` names what it waits for.
 steps:
   check:
     image: denoland/deno:2.9.7
@@ -134,6 +136,7 @@ steps:
 
   integration:
     image: denoland/deno:2.9.7
+    depends_on: [check]
     environment:
       TS_LIBS_IT_POSTGRES_URL: postgres://integration-test-only:integration-test-only@postgres:5432/integration-test-only
       TS_LIBS_IT_S3_ENDPOINT: http://minio:9000
@@ -154,6 +157,7 @@ steps:
   # test that talks to Postgres runs on both versions and no list of them has to be kept.
   integration-postgres-17:
     image: denoland/deno:2.9.7
+    depends_on: [check]
     environment:
       TS_LIBS_IT_POSTGRES_URL: postgres://integration-test-only:integration-test-only@postgres-17:5432/integration-test-only
       TS_LIBS_IT_S3_ENDPOINT: http://minio:9000
@@ -175,6 +179,7 @@ steps:
   # from `infra/ci/vips.dockerfile`, whose header says how to rebuild it and move this pin.
   vips:
     image: antonshubin/ts-libs-ci:vips-deno2.9.7-1@sha256:99d79a322c6ee67665e6c6e1bade016cc096f63c0ce2711b41d20dc968a8600e
+    depends_on: [check]
     commands:
       - deno task test:vips
 
@@ -185,6 +190,7 @@ steps:
   # clone is full but has no `main` ref, which is why the step fetches it.
   on-main:
     image: alpine/git:2.47.2
+    depends_on: [check, integration, integration-postgres-17, vips]
     when:
       event: tag
       ref: refs/tags/v*
@@ -193,12 +199,13 @@ steps:
       - git merge-base --is-ancestor "$${CI_COMMIT_SHA}" FETCH_HEAD || { echo "Refusing to publish, commit $${CI_COMMIT_SHA} is not on main"; exit 1; }
 
   # Publishes every workspace member to JSR (`jsr:@spy4x/*`), only on a `v*` tag and only after
-  # both check steps above passed. `AGENTS.md` ("Releasing") has the process: the tag goes on the
-  # merged version-bump commit on `main`, because JSR never deletes a version. A version already
+  # every test step above and `on-main` passed. `AGENTS.md` ("Releasing") has the process: the
+  # tag goes on the merged version-bump commit on `main`, because JSR never deletes a version. A version already
   # on JSR is skipped, so re-running a tag build that failed part-way publishes only what is missing.
   # `$$` stops Woodpecker substituting the variable itself; the shell reads the secret.
   publish:
     image: denoland/deno:2.9.7
+    depends_on: [on-main]
     when:
       event: tag
       ref: refs/tags/v*
