@@ -4,7 +4,7 @@
 # its HEIC sample with, and exiftool, which checks that no metadata is left.
 #
 # Rebuild it when the Deno version or this list changes, from the repository root of a checkout
-# of `main`, with the Docker Hub login of `DOCKERHUB_USERNAME` (~/sync/code/homelab/.env.accounts),
+# of `main`, with a Docker Hub login for the account that owns `antonshubin/ts-libs-ci`,
 # then raise the `-N` suffix, pin the digest `docker push` prints in the `vips` step and move the
 # tag in `docs/testing.md`, "The vips tier":
 #
