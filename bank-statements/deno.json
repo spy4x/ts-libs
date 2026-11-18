@@ -1,6 +1,6 @@
 {
   "name": "@spy4x/bank-statements",
-  "version": "1.129.1",
+  "version": "1.130.0",
   "exports": {
     ".": "./mod.ts",
     "./pdf": "./pdf.ts",
