@@ -4,8 +4,11 @@ import {
   CSV_BYTE_ORDER_MARK,
   type CsvCellValue,
   type CsvColumn,
+  CsvDecimal,
+  csvDecimal,
   csvField,
   csvHeaderRow,
+  csvRow,
   toCsvBytes,
   toCsvText,
 } from "./csv.ts"
@@ -147,6 +150,77 @@ describe("csvField", () => {
     expect(csvField(NaN)).toBe("NaN")
     expect(csvField(-Infinity)).toBe("-Infinity")
     expect(csvField(-1e21)).toBe("-1e+21")
+  })
+})
+
+describe("csvDecimal", () => {
+  for (const text of ["-12.50", "-0.00000001", "1500", "0.00012345"]) {
+    it(`writes ${text} exactly as given`, () => {
+      expect(csvField(csvDecimal(text))).toBe(text)
+    })
+  }
+
+  it("writes a decimal returned by a column's format", () => {
+    const columns: CsvColumn<{ balance: string }>[] = [
+      { key: "balance", header: "Balance", format: (value) => csvDecimal(value as string) },
+    ]
+    expect(csvRow(columns, { balance: "-12.50" })).toBe("-12.50")
+  })
+
+  it("writes a decimal held directly in the row field", () => {
+    const columns: CsvColumn<{ balance: CsvDecimal }>[] = [{ key: "balance", header: "Balance" }]
+    expect(csvRow(columns, { balance: csvDecimal("-12.50") })).toBe("-12.50")
+  })
+
+  const rejected = [
+    "=1+1",
+    "-1+2",
+    "1e5",
+    "1,5",
+    ".5",
+    "5.",
+    "",
+    "-",
+    "+5",
+    " 5",
+    "5\n",
+    "-12.50\r\n",
+    "١٢",
+  ]
+  for (const text of rejected) {
+    it(`throws RangeError for ${JSON.stringify(text)}`, () => {
+      expect(() => csvDecimal(text)).toThrow(RangeError)
+    })
+  }
+
+  it("throws RangeError for a line before or after a valid decimal", () => {
+    expect(() => csvDecimal("=1+1\n5")).toThrow(RangeError)
+    expect(() => csvDecimal("5\n=1+1")).toThrow(RangeError)
+  })
+
+  it("throws RangeError for a non-string whose text would pass the pattern", () => {
+    expect(() => csvDecimal(["5"] as unknown as string)).toThrow(RangeError)
+    expect(() => csvDecimal(5 as unknown as string)).toThrow(RangeError)
+  })
+
+  it("guards an object that only claims to be a decimal", () => {
+    const forged = Object.create(CsvDecimal.prototype, {
+      toString: { value: () => "=1+1" },
+    }) as CsvDecimal
+    expect(csvField(forged)).toBe("'=1+1")
+  })
+
+  it("writes a subclass's checked text, ignoring its own string conversion", () => {
+    class Overriding extends CsvDecimal {
+      override toString(): string {
+        return "=1+1"
+      }
+    }
+    expect(csvField(new Overriding("5"))).toBe("5")
+  })
+
+  it("still guards the same amount given as a string", () => {
+    expect(csvField("-12.50")).toBe("'-12.50")
   })
 })
 
