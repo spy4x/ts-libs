@@ -1592,6 +1592,7 @@ CSV_DEFAULT_LIMITS	constant	@spy4x/platform/universal/csv	The default CsvLimits,
 CSV_DELIMITERS	constant	@spy4x/platform/universal/csv	The delimiters sniffCsv considers, in the order it prefers them on a tie.
 CsvCellValue	type	@spy4x/platform/universal/csv	What a `format` function, or an unformatted field, may hand back for one cell.
 CsvColumn	interface	@spy4x/platform/universal/csv	One column of a CSV export: the row field to read, its header text, and how to render a value.
+CsvDecimal	class	@spy4x/platform/universal/csv	A decimal cell written exactly as given, for an amount a `number` would reshape (`-1e-8`, `-12.5`) and a `string` would guard (`'-12.50`).
 CsvDelimiter	type	@spy4x/platform/universal/csv	A delimiter sniffCsv can find.
 CsvLimits	interface	@spy4x/platform/universal/csv	Size limits for parseCsv.
 CsvParseError	type	@spy4x/platform/universal/csv	Why parseCsv refused a file.
@@ -1600,6 +1601,7 @@ DecodedTextFile	interface	@spy4x/platform/universal/csv	What decodeTextFile read
 SINGLE_BYTE_ENCODINGS	constant	@spy4x/platform/universal/csv	Every single-byte encoding decodeTextFile can fall back to.
 SingleByteEncoding	type	@spy4x/platform/universal/csv	A single-byte encoding a file without a byte-order mark and not valid UTF-8 may be in.
 TextFileEncoding	type	@spy4x/platform/universal/csv	An encoding decodeTextFile reads, as a `TextDecoder` label.
+csvDecimal	function	@spy4x/platform/universal/csv	Mark `text` as an exact decimal cell, which csvField writes with no guard and no quotes.
 csvField	function	@spy4x/platform/universal/csv	Render one value as an RFC 4180 CSV cell.
 csvHeaderRow	function	@spy4x/platform/universal/csv	The header row, escaped the same way a data row is.
 csvRow	function	@spy4x/platform/universal/csv	One data row, rendered and escaped, comma-joined.
@@ -3278,4 +3280,4 @@ firstIssueMessage	function	@spy4x/validation/validate	First issue message in a v
 isArkErrors	function	@spy4x/validation/validate	Whether a value is an arktype rejection, without relying on `instanceof`.
 toValidationError	function	@spy4x/validation/validate	Build a ValidationError from arktype's issues.
 validate	function	@spy4x/validation/validate	Parse `value` with an arktype schema exactly once.
-# export surface: sha256 6edf7d769f35d8b7c6f23b3309711514c66156085ff737eca550a83e88ac7efe
+# export surface: sha256 2340bc59222ca9dc1d0803b300987a5963957edb5e9a1370c1b39bc7795950ec

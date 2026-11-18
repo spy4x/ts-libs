@@ -24,6 +24,48 @@ export {
   type TextFileEncoding,
 } from "./csv-read.ts"
 
+/** An optional leading `-`, ASCII digits, and an optional `.` followed by digits. */
+const CSV_DECIMAL_PATTERN = /^-?\d+(\.\d+)?$/
+
+/** The checked text of a real {@link CsvDecimal}; `undefined` for anything else. */
+let csvDecimalText: (cell: unknown) => string | undefined
+
+/**
+ * A decimal cell written exactly as given, for an amount a `number` would reshape (`-1e-8`,
+ * `-12.5`) and a `string` would guard (`'-12.50`). Build one with {@link csvDecimal}.
+ *
+ * The text lives in a private field that only the constructor sets, so an object merely shaped
+ * like this class, or inheriting from it, cannot put unchecked text in a cell unguarded.
+ */
+export class CsvDecimal {
+  readonly #text: string
+
+  /** @throws {RangeError} When `text` is not a plain decimal; see {@link csvDecimal}. */
+  constructor(text: string) {
+    if (typeof text !== "string" || !CSV_DECIMAL_PATTERN.test(text)) {
+      throw new RangeError(
+        "A CSV decimal is an optional leading -, digits, and an optional . followed by digits",
+      )
+    }
+    this.#text = text
+  }
+
+  static {
+    csvDecimalText = (cell) => cell instanceof CsvDecimal && #text in cell ? cell.#text : undefined
+  }
+}
+
+/**
+ * Mark `text` as an exact decimal cell, which {@link csvField} writes with no guard and no quotes.
+ *
+ * @throws {RangeError} Unless `text` is an optional leading `-`, ASCII digits, and an optional `.`
+ * followed by digits. That check is what makes skipping the guard safe: an accepted value holds no
+ * formula, separator, exponent or line break.
+ */
+export function csvDecimal(text: string): CsvDecimal {
+  return new CsvDecimal(text)
+}
+
 /**
  * What a `format` function, or an unformatted field, may hand back for one cell.
  *
@@ -31,11 +73,12 @@ export {
  * a separator or a formula body: `String()` of either produces digits, at most one `.`, an
  * `e`/`E` exponent marker, or one of the literal words `Infinity`/`-Infinity`/`NaN`. None of it is
  * formula syntax a spreadsheet acts on by itself, checked in LibreOffice 26.2: `NaN` and
- * `-Infinity` open as text, `-1e+21` opens as a number, and none opens as a formula. A `string` is
- * guarded regardless of what it contains, because a string is exactly the type a
+ * `-Infinity` open as text, `-1e+21` opens as a number, and none opens as a formula. A
+ * {@link CsvDecimal} is written unguarded too, because its text was checked when it was built. A
+ * `string` is guarded regardless of what it contains, because a string is exactly the type a
  * spreadsheet-formula payload arrives as.
  */
-export type CsvCellValue = string | number | bigint
+export type CsvCellValue = string | number | bigint | CsvDecimal
 
 /**
  * One column of a CSV export: the row field to read, its header text, and how to render a value.
@@ -50,7 +93,8 @@ export interface CsvColumn<T> {
    *
    * Returning a `number` or a `bigint` — rather than a string built from one, `` `${amount}` `` —
    * is what keeps a formatted numeric column live in the opened file instead of guarded text; see
-   * {@link CsvCellValue}. Anything else this callback hands back — an array, an object, a
+   * {@link CsvCellValue}. Returning a {@link CsvDecimal} keeps an exact decimal as written.
+   * Anything else this callback hands back — an array, another object, a
    * `boolean` — is not `CsvCellValue` by the type this callback declares, but {@link csvField}
    * still guards and quotes it exactly like a `string`: see its own doc for why that is not a
    * loophole, only a caller's type violation being handled safely instead of trusted blindly.
@@ -160,8 +204,8 @@ function whitespaceRunEnd(
  * The guard has no exception for a value that only looks safe: a `string` cell reading `-5` is
  * guarded exactly like `-2+3+cmd|' /C calc'!A1`, since content alone cannot tell a real negative
  * number from a payload shaped like one — {@link csvField} is what lets a caller skip the guard
- * entirely, by handing back an actual `number` or `bigint` instead of a string. The one visible
- * cost of the string path: LibreOffice (26.2, measured) shows the leading `'` on screen rather
+ * entirely, by handing back an actual `number`, `bigint` or {@link CsvDecimal} instead of a
+ * string. The one visible cost of the string path: LibreOffice (26.2, measured) shows the leading `'` on screen rather
  * than hiding it, so a cell such as `a;-5` — a string whose only fault is a `-` right after a
  * separator — reads as `a;'-5` in the opened file. This repository has not verified whether Excel
  * shows the mark too.
@@ -198,9 +242,9 @@ const NEEDS_QUOTING = /[",\r\n]/
  * Render one value as an RFC 4180 CSV cell.
  *
  * A `number` or a `bigint` is written with a plain `String()` conversion, unguarded — see
- * {@link CsvCellValue}. Everything else — a `string`, or a value a `format` callback hands back
- * that is neither a `number` nor a `bigint` — is converted with `String()` and guarded against
- * formula injection, then quoted when it holds a comma, a double quote or a line break, doubling
+ * {@link CsvCellValue} — and a {@link CsvDecimal} is written as its checked text. Everything else —
+ * a `string`, or any other value a `format` callback hands back — is converted with `String()`
+ * and guarded against formula injection, then quoted when it holds a comma, a double quote or a line break, doubling
  * every embedded double quote. Guarding an array or an object this way, rather than trusting the
  * `CsvCellValue` type a `format` callback is declared to return, is what stops
  * `["=HYPERLINK(...)", "x"]` from opening as a live formula in one cell and a bare `x` leaking
@@ -213,6 +257,8 @@ const NEEDS_QUOTING = /[",\r\n]/
  */
 export function csvField(raw: CsvCellValue): string {
   if (typeof raw === "number" || typeof raw === "bigint") return String(raw)
+  const decimal = csvDecimalText(raw)
+  if (decimal !== undefined) return decimal
   const guarded = guardFormulaInjection(String(raw))
   return NEEDS_QUOTING.test(guarded) ? `"${guarded.replaceAll('"', '""')}"` : guarded
 }
@@ -223,6 +269,7 @@ function fieldValue<T>(column: CsvColumn<T>, row: T): CsvCellValue {
   if (column.format) return column.format(value, row)
   if (value === null || value === undefined) return ""
   if (typeof value === "number" || typeof value === "bigint") return value
+  if (value instanceof CsvDecimal) return value
   return String(value)
 }
 
